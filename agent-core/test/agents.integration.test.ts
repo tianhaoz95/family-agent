@@ -51,6 +51,29 @@ maybe("family agent (live model: " + config.model + ")", () => {
   );
 
   it(
+    "creates a task from a bare action phrase instead of refusing it",
+    async () => {
+      // Regression test: this exact phrasing previously made task-agent
+      // refuse ("I cannot help you with buying stamps") because the
+      // planner's delegation description dropped the "create a task"
+      // framing, leaving task-agent a bare action phrase it read literally.
+      const res = await app.inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "Add a task to buy stamps" },
+      });
+      expect(res.statusCode).toBe(200);
+      const reply = res.json().reply.toLowerCase();
+      expect(reply).not.toContain("cannot");
+      expect(reply).not.toContain("i'm sorry");
+
+      const stampTask = store.listTasks().find((t) => t.title.toLowerCase().includes("stamp"));
+      expect(stampTask).toBeDefined();
+    },
+    240000
+  );
+
+  it(
     "extracts fields from an ingested document",
     async () => {
       const ingest = await app.inject({
@@ -102,7 +125,11 @@ maybe("family agent (live model: " + config.model + ")", () => {
         payload: { message: "What documents do I have?" },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().reply.toLowerCase()).toContain("insurance-note");
+      // The model is free to cite the document by filename, id, or category —
+      // any of those confirms it actually found it via list_documents rather
+      // than claiming ignorance (the bug this test guards against).
+      const reply = res.json().reply.toLowerCase();
+      expect(reply).toMatch(/insurance-note|insurance/);
     },
     240000
   );

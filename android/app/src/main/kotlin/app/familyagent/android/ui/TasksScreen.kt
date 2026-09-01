@@ -40,8 +40,8 @@ fun TasksScreen(
             OutlinedTextField(
                 value = due,
                 onValueChange = { due = it },
-                modifier = Modifier.width(120.dp),
-                placeholder = { Text("YYYY-MM-DD") },
+                modifier = Modifier.width(150.dp),
+                placeholder = { Text("Due date") },
                 singleLine = true,
             )
             Button(onClick = {

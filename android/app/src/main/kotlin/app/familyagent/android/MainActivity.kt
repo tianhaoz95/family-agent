@@ -85,11 +85,22 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
+            // Material3's default NavigationBar container is a tonal-elevation
+            // surface derived from the color scheme's primary, which reads as
+            // an off-palette lavender against this app's ledger tones — pin it
+            // to the same surface token the rest of the app uses instead.
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                 val backStackEntry by navController.currentBackStackEntryAsState()
                 val currentDestination = backStackEntry?.destination
                 Destination.entries.forEach { dest ->
                     NavigationBarItem(
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
                         selected = currentDestination?.hierarchy?.any { it.route == dest.route } == true,
                         onClick = {
                             navController.navigate(dest.route) {

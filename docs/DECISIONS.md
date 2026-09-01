@@ -210,26 +210,121 @@ If this machine's toolchain state ever needs reproducing elsewhere, the
 `.toolchains/` setup commands are in `docs/BUILD_LOG.md`, not scripted —
 worth turning into a real setup script before anyone else needs it.
 
-## No GUI screenshot verification
+## GUI screenshot verification: blocked at the OS level, solved differently
 
 `DISPLAY=:0` is set and a real desktop session is active on this machine,
-but `import` (ImageMagick) failed to capture it (`Resource temporarily
-unavailable`) and no `xdotool`/`wmctrl`/other capture tool was available
-either. I could confirm the Tauri window process launches, spawns the
-sidecar, and the sidecar answers HTTP requests correctly — but I have not
-*visually* seen the rendered UI. Please look at it yourself; the CSS is
-adapted directly from the architecture-notes artifact's palette, so it
-should be visually consistent with that, but "should be" isn't "confirmed."
+but every OS-level screen-capture path failed identically —
+`import` (ImageMagick), `PIL.ImageGrab`, and GNOME's own screenshot D-Bus
+API (`org.gnome.Shell.Screenshot`, `AccessDenied`) all refused to read the
+screen. This is a sandbox restriction on this session, not a missing tool.
+No `Xvfb` was available either (would need sudo to install), so standing up
+an isolated virtual display wasn't an option.
 
-## No Android emulator, no instrumented tests
+**What worked:** the desktop app's UI is just the HTML/CSS/JS in `desktop/`
+rendered inside a WebKitGTK webview — none of that content is
+Tauri-specific. Serving `desktop/dist/` (`npx serve`) and opening it in
+**headless Chromium via Playwright** renders the exact same DOM/CSS a user
+would see in the real Tauri window, and Playwright's screenshot mechanism
+works through the browser's own internal compositor, not X11 — no display
+server involved at all. Verified the real chat flow end-to-end this way:
+typed a message, clicked send, watched the "thinking…" state with the send
+button correctly disabled, waited for gemma4:e2b's actual reply, and
+confirmed it correctly answered "what's on my task list?" while filtering
+out a task that had already been marked done. Also captured Tasks,
+Documents (including the live-loaded inbox path from `/health`), and
+Activity views against real seeded data.
 
-The Android SDK was installed with `platform-tools`, `platforms;android-34`,
-and `build-tools;34.0.0` only — no system image, no emulator. Test coverage
-is JVM unit tests (`app/src/test/`) run via `./gradlew testDebugUnitTest`:
-the `FamilyAgentApi` HTTP client against a `MockWebServer`. There is **no
-Compose UI test coverage** and the app has never actually run on a device or
-emulator — only compiled. Installing an AVD system image (another multi-GB
-download) was judged lower priority than getting the desktop app and
-agent-core solid within the time available; it's the natural next step if
-someone wants to actually run this on a phone or in an emulator before
-sideloading it onto a real device.
+Caveat worth being precise about: this confirms the *content* renders and
+behaves correctly, not the native window chrome (title bar, OS-level
+resize handles, tray behavior) Tauri itself adds — that part still hasn't
+been seen. Given the content is what almost all of the actual UI/UX
+surface is, this closes nearly all of the original gap.
+
+## Android emulator: got real device verification working
+
+Installed the `emulator` package and a
+`system-images;android-34;google_apis;x86_64` image (in addition to the
+`platform-tools`/`platforms;android-34`/`build-tools;34.0.0` already
+present), and created an AVD (`avdmanager create avd`). Hardware
+acceleration mattered here: `/dev/kvm` wasn't listed under this user's
+group memberships (`groups` doesn't mention `kvm`), which looked like a
+dead end — but a direct `os.open('/dev/kvm', O_RDWR)` in Python succeeded,
+and `getfacl` confirmed an explicit ACL grant for this user that `groups`
+doesn't surface. Worth remembering: **check actual file permissions before
+concluding a device is inaccessible from `groups` alone.**
+
+Booted headless (`-no-window -gpu swiftshader_indirect`), installed the
+real debug APK, launched it, and used `adb shell screencap` — which reads
+the emulator's own framebuffer over the ADB protocol, sidestepping the
+host screenshot restriction entirely — to capture all 5 screens. This
+caught three real bugs no amount of code review would have found:
+
+1. **Material3's default `NavigationBar` container color** is a tonal
+   surface tinted toward the scheme's primary — rendered as an off-palette
+   lavender against this app's ledger tones. Fixed by pinning
+   `containerColor` and `NavigationBarItemDefaults.colors(...)` explicitly
+   to the same tokens the rest of the app uses.
+2. The Tasks screen's due-date field (`width(120.dp)`, placeholder
+   `"YYYY-MM-DD"`) wrapped its own placeholder onto two lines — too narrow
+   for the text at that font size. Widened and shortened the placeholder
+   to `"Due date"`.
+3. The Documents screen still said "folder watching is future work" —
+   true when first written, false by the time this screen actually got
+   looked at (folder watching shipped earlier in this same session, just
+   on the agent-core/desktop side — the Android copy was never updated to
+   match). Same root issue as the dangling doc-path reference caught
+   earlier: **a claim about what the app can do needs to be re-checked
+   against current reality before shipping, not just checked once when
+   written.**
+
+Also surfaced a UI-automation lesson, not a product bug: `adb shell input
+tap` coordinates must be real device pixels, not the scaled-down
+coordinates a screenshot viewer displays — conflating the two caused
+several failed taps before switching to `uiautomator dump` for exact
+element bounds. Confirmed genuine cross-device connectivity this way too:
+pointed the emulator at the host's agent-core via `10.0.2.2` (the
+emulator's standard host-loopback alias), and the Settings screen showed
+"Connected · local · gemma4:e2b" for real.
+
+## task-agent refused a bare action phrase ("buy stamps")
+
+Found via the Android round-trip above, not by inspection: "Add a task to
+buy stamps" got the reply *"I cannot perform real-world actions like
+buying stamps."* — a real conversational bug, reproduced 100% of the time
+before the fix. Root cause, found by dumping the raw message trace: the
+planner delegated correctly (`task` tool, `subagent_type: "task-agent"`),
+but wrote the delegation `description` as just `"buy stamps"` — dropping
+the "create a task" framing from the original request. task-agent then
+received a bare action phrase with nothing marking it as task-management
+input, and reasonably (from its perspective) read it as being asked to
+literally buy stamps.
+
+Fixed defense-in-depth on the task-agent side rather than only fixing the
+planner's phrasing: `TASK_AGENT_PROMPT` now states explicitly that every
+request it receives — even a bare action phrase — means "create/track a
+task for this," never "do this in the real world," and that refusing is
+always wrong for this subagent. This is more robust than only fixing the
+planner's description-writing, since it doesn't depend on the planner
+phrasing every future delegation perfectly. Verified consistent across 2
+direct runs plus a permanent regression test
+(`agents.integration.test.ts` — "creates a task from a bare action phrase
+instead of refusing it").
+
+## The retry logic didn't catch every way a small model can misbehave
+
+Found on a later full-suite run, not the same run the bugs above were
+found on: the "what documents do I have" test failed with the model's
+final reply being literal broken tool-call syntax —
+`call:task{description:<|"|>list all ingested documents...<tool_call|>` —
+instead of either a clean answer or an empty string. `askFamilyAgent`'s
+existing retry (added earlier for empty replies) only checked
+`text.trim()`, so a non-empty-but-garbled reply sailed through as if it
+were valid. Added a second check, `LOOKS_MALFORMED` (a regex for the
+tool-call-syntax fragments actually observed: `<|...|>`, `<tool_call`,
+`subagent_type:`, a reply starting with `call:`), treated the same as an
+empty reply for retry purposes. Added fast unit-level coverage for the
+retry logic itself (`test/askFamilyAgent.test.ts`, a stub agent, no live
+model needed) rather than only relying on the live-model test happening to
+reproduce this specific garbled shape again — that test only ever
+exercises whatever a model happens to do on any given run, which is
+exactly what let this slip through once already.

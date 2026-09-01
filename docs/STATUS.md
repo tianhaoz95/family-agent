@@ -27,9 +27,9 @@ docs/         This file, DECISIONS.md, BUILD_LOG.md.
               see "Reproducing the toolchain" below if this matters to you).
 ```
 
-## What actually works, verified by hand
+## What actually works, verified by hand — including visually, on both platforms
 
-- **agent-core**: 25/25 tests pass (mix of unit tests and live-model
+- **agent-core**: 30/30 tests pass (mix of unit tests and live-model
   integration tests against the real local model). Full HTTP flow
   smoke-tested manually: create a task via `/chat` in natural language,
   drop a `.txt` file in the watched inbox folder and watch it get
@@ -39,16 +39,28 @@ docs/         This file, DECISIONS.md, BUILD_LOG.md.
   running locally, nothing leaves the machine. It's slow — a full planner
   turn can take up to ~110s on this machine's CPU — see DECISIONS.md.
 - **desktop**: builds clean, launches, spawns agent-core correctly, survives
-  a hard-kill of the parent process without orphaning the Node sidecar
-  (this was a real bug, found and fixed — see BUILD_LOG). The UI has *not*
-  been visually confirmed — this environment couldn't screenshot the actual
-  window (see DECISIONS.md). Please look at it.
-- **android**: builds clean, 5/5 unit tests pass, produces a real installable
-  APK. Has never been run on a device or emulator — no emulator was set up
-  in the time available. If you want to actually try it, you'll need to
-  sideload `android/app/build/outputs/apk/debug/app-debug.apk` onto a real
-  device (or set up an AVD) and, in Settings, point it at your desktop's LAN
-  IP and port 4173.
+  a hard-kill of the parent process without orphaning the Node sidecar.
+  UI visually confirmed via headless Chromium (same HTML/CSS/JS the Tauri
+  webview renders — host-level screenshot tools were sandbox-blocked, see
+  DECISIONS.md for how this was worked around): a full live chat round
+  trip, Tasks, Documents, and Activity all screenshotted against real data
+  and a live backend, sent to the user during the session. Native window
+  chrome itself (title bar, OS resize handles) still hasn't been seen —
+  everything inside the window has.
+- **android**: builds clean, 5/5 unit tests pass, real APK, **now verified
+  running on an actual emulator** (KVM-accelerated) — installed, launched,
+  all 5 screens screenshotted via `adb shell screencap`, connected to a
+  real agent-core instance over the network and got a live "Connected ·
+  local · gemma4:e2b." Found and fixed 3 real UI bugs this way (an
+  off-palette nav-bar color, a too-narrow date field, stale copy) — detail
+  in DECISIONS.md. To try it yourself: sideload
+  `android/app/build/outputs/apk/debug/app-debug.apk` onto a real device
+  (or set up your own AVD) and, in Settings, point it at your desktop's
+  LAN IP and port 4173.
+- **A real conversational bug was found and fixed along the way**: "Add a
+  task to buy stamps" got refused by the agent before a prompt fix — see
+  DECISIONS.md. Caught by actually using the app through its UI, not by
+  reading code.
 
 ## What's deliberately not built
 
@@ -90,7 +102,7 @@ export ANDROID_HOME=$(pwd)/../.toolchains/android-sdk
 Tests:
 
 ```bash
-npm test    # from repo root: runs agent-core (25 tests, ~1-3 min, needs Ollama+gemma4:e2b) then desktop (6 tests)
+npm test    # from repo root: runs agent-core (30 tests, ~3-5 min, needs Ollama+gemma4:e2b) then desktop (6 tests)
 cd android && ./gradlew testDebugUnitTest   # 5 tests, no device needed
 ```
 
@@ -110,7 +122,10 @@ second machine.
    is acceptable for real use, or whether a faster model is worth trading
    away "uses exactly the requested model" for. Both are one env var
    (`FAMILY_AGENT_MODEL`) apart — no code change needed either way.
-2. Pick up the deferred pieces in whatever order matters most: Tailscale
+2. Actually run the Android app on a real phone at least once — it's been
+   verified on an emulator, but a real device (real touch input, real
+   network conditions) is still a step removed from that.
+3. Pick up the deferred pieces in whatever order matters most: Tailscale
    transport, the sandboxed builder/scratch-tool agent (this one deserves a
    supervised build, not an autonomous one, given what it can do), the
    compute mesh, per-family-member access control, OCR for non-text

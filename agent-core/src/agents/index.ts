@@ -32,8 +32,16 @@ Keep replies short and concrete. If a request needs no tool at all (a plain
 question with nothing to look up, like "what can you help with?"), answer
 directly.`;
 
-const TASK_AGENT_PROMPT = `You manage the family's task list. Use create_task,
-list_tasks, and complete_task as needed. Confirm what you did in one sentence.`;
+const TASK_AGENT_PROMPT = `You manage the family's task list — you never do
+anything in the real world yourself, only track that it needs doing. Every
+request you receive is asking you to create, list, or complete a to-do item,
+even if it's phrased as a bare action ("buy stamps," "call the dentist," with
+no other words). That phrasing describes what the task is called, not
+something you are being asked to physically do. When in doubt,
+call create_task with that phrase as the title — never refuse a request for
+sounding like a real-world action; refusing is always wrong here. Use
+create_task, list_tasks, and complete_task as needed. Confirm what you did in
+one sentence.`;
 
 const DOCUMENT_AGENT_PROMPT = `You read family documents and extract structured
 fields from them. Use list_documents to see what's been ingested (id,
@@ -85,11 +93,19 @@ export function buildFamilyAgent(store: Store) {
 
 export type FamilyAgent = ReturnType<typeof buildFamilyAgent>;
 
-// Small local models occasionally return an empty final message with no
-// tool call on the first try (observed in testing — see docs/BUILD_LOG.md
-// and docs/DECISIONS.md). One retry clears most of those. Kept even after
-// switching to gemma4:e2b, since the failure mode is about small-model
-// reliability in general, not specific to the model that first surfaced it.
+// A malformed final message that never resolved into clean prose — the
+// model tried to emit a tool call but the generation broke down into raw
+// syntax fragments instead of going through an actual tool_calls field.
+// Observed directly: `call:task{description:<|"|>...<tool_call|>` as the
+// literal final-message content. Treated the same as an empty response.
+const LOOKS_MALFORMED = /<\|.*?\|>|<tool_call|subagent_type\s*:|^call:/i;
+
+// Small local models occasionally return an empty, or garbled, final
+// message with no clean tool call on the first try (both observed in
+// testing — see docs/BUILD_LOG.md and docs/DECISIONS.md). One retry clears
+// most of those. Kept even after switching to gemma4:e2b, since the
+// failure mode is about small-model reliability in general, not specific
+// to the model that first surfaced it.
 export async function askFamilyAgent(agent: FamilyAgent, message: string): Promise<string> {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const result = await agent.invoke({
@@ -97,7 +113,7 @@ export async function askFamilyAgent(agent: FamilyAgent, message: string): Promi
     });
     const last = result.messages.at(-1);
     const text = last ? (typeof last.content === "string" ? last.content : JSON.stringify(last.content)) : "";
-    if (text.trim()) return text;
+    if (text.trim() && !LOOKS_MALFORMED.test(text)) return text;
   }
-  return "(the local model didn't return a response — try rephrasing, or check /activity for what it attempted)";
+  return "(the local model didn't return a clean response — try rephrasing, or check /activity for what it attempted)";
 }

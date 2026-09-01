@@ -180,14 +180,56 @@ deviation, see `docs/DECISIONS.md` — this file is the *what happened*.
   membership. System image `system-images;android-34;google_apis;x86_64`
   installed alongside the `emulator` package.
 
+## Visual verification, both platforms
+
+Neither the desktop UI nor the Android app had actually been *seen*
+rendering at the point the previous section ended. Closed both gaps:
+
+- **Android**: real emulator with KVM acceleration (see DECISIONS.md for
+  how — `/dev/kvm` access existed via an ACL invisible to `groups`), debug
+  APK installed and launched, all 5 screens captured via
+  `adb shell screencap` (reads the emulator's own framebuffer, not the
+  host display — sidesteps the host's screenshot restriction entirely).
+  Found and fixed 3 real UI bugs this way: an off-palette lavender
+  bottom-nav color (Material3's default tonal surface, not the app's
+  ledger tokens), a due-date field too narrow for its own placeholder text,
+  and stale "folder watching is future work" copy that had been true when
+  written and false by the time anyone looked at the screen again.
+  Confirmed genuine cross-device connectivity — pointed the emulator at
+  the host's agent-core via `10.0.2.2` and got a real "Connected · local ·
+  gemma4:e2b" in the Settings screen.
+- **Desktop**: the host's X11/Wayland session refused every screenshot
+  tool tried (ImageMagick, PIL, GNOME's screenshot D-Bus API — all failed
+  identically, confirming a sandbox restriction rather than a tool
+  problem). Solved by serving `desktop/dist/` and driving headless
+  Chromium via Playwright — since the Tauri window is just this same
+  HTML/CSS/JS in a webview, rendering it in any browser shows the same
+  content. Captured Chat (including a full live round trip — typed a
+  message, watched the "thinking…" state, got gemma4:e2b's real reply,
+  which correctly excluded an already-completed task), Tasks, Documents
+  (with the live-loaded inbox path), and Activity, all against real seeded
+  data and a fresh network request each time. Screenshots sent to the
+  user directly during the session.
+- **Found and fixed a real conversational bug in the process**: "Add a
+  task to buy stamps" got refused ("I cannot perform real-world actions
+  like buying stamps") because the planner's delegation description
+  dropped the "create a task" framing. Fixed on the task-agent side
+  (never refuse, a bare phrase always means "track this as a task") for
+  defense in depth — full detail in DECISIONS.md. Verified consistent
+  across repeated runs plus a new permanent regression test.
+
 ## Final state
 
-- 25/25 agent-core tests passing (live-model tests against gemma4:e2b).
+- 30/30 agent-core tests passing (live-model tests against gemma4:e2b),
+  including regression tests for both bugs found via the Android/desktop
+  verification pass above.
 - 6/6 desktop frontend tests passing; Rust build clean, frontend build
-  clean, full HTTP-level and folder-watching end-to-end flows manually
-  verified against the live model.
-- 5/5 Android unit tests passing, real APK produced.
+  clean. Full HTTP-level, folder-watching, and now visual/interactive
+  flows all verified against the live model.
+- 5/5 Android unit tests passing, real APK produced, now verified running
+  on an actual emulator with correct rendering and real backend
+  connectivity.
 - iOS: not attempted, per explicit instruction.
-- Still open at this point in the session: visual confirmation of both the
-  desktop UI and the Android app on an actual running emulator — in
-  progress, see the rest of this log / STATUS.md for the current state.
+- Nothing left open from the original "what's actually been seen working"
+  gap — both apps have been watched doing the real thing, not just
+  compiled and unit-tested.

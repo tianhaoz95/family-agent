@@ -22,7 +22,8 @@ fun DocumentsScreen(
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("Documents", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Paste text to simulate a shared-in file (folder watching is future work).",
+            "Paste document text below. Dropping files directly is available " +
+                "from the desktop app's watched folder, not yet from here.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
