@@ -41,6 +41,7 @@ const chatForm = document.getElementById("chat-form") as HTMLFormElement;
 const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement;
 
 function appendBubble(role: "user" | "assistant" | "system", text: string) {
+  document.getElementById("chat-empty")?.remove();
   const el = document.createElement("div");
   el.className = `bubble bubble-${role}`;
   el.textContent = text;
@@ -49,13 +50,34 @@ function appendBubble(role: "user" | "assistant" | "system", text: string) {
   return el;
 }
 
+function appendTypingIndicator() {
+  const el = document.createElement("div");
+  el.className = "bubble-typing";
+  el.setAttribute("aria-label", "Assistant is thinking");
+  el.innerHTML = "<span></span><span></span><span></span>";
+  chatLog.appendChild(el);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return el;
+}
+
+// Small inline icons for empty states — keeps them from reading as an error.
+const EMPTY_ICONS: Record<string, string> = {
+  tasks: '<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  documents: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+};
+
+function emptyState(kind: keyof typeof EMPTY_ICONS, text: string) {
+  return `<li class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${EMPTY_ICONS[kind]}</svg><span>${text}</span></li>`;
+}
+
 chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const message = chatInput.value.trim();
   if (!message) return;
   chatInput.value = "";
   appendBubble("user", message);
-  const pending = appendBubble("system", "thinking…");
+  const pending = appendTypingIndicator();
   const submitBtn = chatForm.querySelector("button")!;
   submitBtn.disabled = true;
   try {
@@ -79,7 +101,7 @@ const taskList = document.getElementById("task-list")!;
 function renderTasks(tasks: Task[]) {
   taskList.innerHTML = "";
   if (tasks.length === 0) {
-    taskList.innerHTML = '<li class="empty-state">No tasks yet.</li>';
+    taskList.innerHTML = emptyState("tasks", "No tasks yet. Add one above or ask in Chat.");
     return;
   }
   for (const task of tasks) {
@@ -137,7 +159,7 @@ const documentList = document.getElementById("document-list")!;
 function renderDocuments(docs: Document[]) {
   documentList.innerHTML = "";
   if (docs.length === 0) {
-    documentList.innerHTML = '<li class="empty-state">No documents ingested yet.</li>';
+    documentList.innerHTML = emptyState("documents", "No documents yet. Upload one above or drop a file in the watched folder.");
     return;
   }
   for (const doc of docs) {
@@ -163,17 +185,62 @@ function renderDocuments(docs: Document[]) {
       chip.textContent = doc.extracted.category;
       head.appendChild(chip);
     }
+
+    const del = document.createElement("button");
+    del.className = "doc-delete";
+    del.type = "button";
+    del.title = "Delete document";
+    del.setAttribute("aria-label", `Delete ${doc.filename}`);
+    del.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+    del.addEventListener("click", async () => {
+      del.disabled = true;
+      try {
+        await api.deleteDocument(doc.id);
+        void refreshDocuments();
+        void refreshActivity();
+      } catch (err) {
+        del.disabled = false;
+        documentUploadStatus.textContent = `Could not delete: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    });
+    head.appendChild(del);
     li.appendChild(head);
 
-    const detail = document.createElement("p");
     if (doc.extracted?.summary) {
+      const detail = document.createElement("p");
       detail.className = "document-summary";
       detail.textContent = doc.extracted.summary;
+      li.appendChild(detail);
+    } else if (doc.extractionStatus === "failed") {
+      const failed = document.createElement("div");
+      failed.className = "document-failed";
+      const msg = document.createElement("span");
+      msg.textContent = "Couldn't read this document.";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "doc-retry";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        retry.textContent = "Retrying…";
+        try {
+          await api.retryExtraction(doc.id);
+          void pollForExtraction();
+        } catch (err) {
+          retry.disabled = false;
+          retry.textContent = "Retry";
+          documentUploadStatus.textContent = `Retry failed: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      });
+      failed.append(msg, retry);
+      li.appendChild(failed);
     } else {
+      const detail = document.createElement("p");
       detail.className = "document-pending";
       detail.textContent = "Extracting…";
+      li.appendChild(detail);
     }
-    li.appendChild(detail);
 
     documentList.appendChild(li);
   }
@@ -232,7 +299,7 @@ const activityList = document.getElementById("activity-list")!;
 function renderActivity(entries: ActivityEntry[]) {
   activityList.innerHTML = "";
   if (entries.length === 0) {
-    activityList.innerHTML = '<li class="empty-state">Nothing has happened yet.</li>';
+    activityList.innerHTML = emptyState("activity", "Nothing has happened yet.");
     return;
   }
   for (const entry of entries) {

@@ -50,6 +50,15 @@ class FamilyAgentApi(
         execute(request)
     }
 
+    private suspend fun sendNoBody(method: String, path: String): String = withContext(Dispatchers.IO) {
+        // OkHttp requires a non-null body for POST but allows null for DELETE.
+        // Send an empty body with NO content-type — Fastify 400s a request that
+        // declares application/json but has an empty body.
+        val body = if (method == "DELETE") null else ByteArray(0).toRequestBody(null)
+        val request = Request.Builder().url("$baseUrl$path").method(method, body).build()
+        execute(request)
+    }
+
     private fun execute(request: Request): String {
         try {
             client.newCall(request).execute().use { response ->
@@ -89,6 +98,13 @@ class FamilyAgentApi(
         json.decodeFromString<DocumentResponse>(
             send("POST", "/documents/ingest", json.encodeToString(IngestDocumentRequest(filename, text)))
         ).document
+
+    suspend fun deleteDocument(id: String) {
+        sendNoBody("DELETE", "/documents/$id")
+    }
+
+    suspend fun retryExtraction(id: String): Document =
+        json.decodeFromString<DocumentResponse>(sendNoBody("POST", "/documents/$id/retry-extraction")).document
 
     suspend fun listActivity(): List<ActivityEntry> = json.decodeFromString<ActivityResponse>(get("/activity")).activity
 

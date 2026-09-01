@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { unlinkSync } from "node:fs";
 import { Store } from "../src/db.js";
 
 describe("Store", () => {
@@ -57,6 +59,66 @@ describe("Store", () => {
     const activity = store.listActivity();
     expect(activity.length).toBeGreaterThanOrEqual(1);
     expect(activity[0].action).toBe("task.created");
+  });
+
+  it("upgrades a pre-source_path database instead of failing every document insert", () => {
+    // A database as created by a build before the source_path column existed.
+    const path = `/tmp/family-agent-legacy-${Date.now()}.db`;
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE documents (
+        id TEXT PRIMARY KEY,
+        filename TEXT NOT NULL,
+        raw_text TEXT NOT NULL,
+        extracted TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE activity (
+        id TEXT PRIMARY KEY, ts TEXT NOT NULL, actor TEXT NOT NULL,
+        action TEXT NOT NULL, detail TEXT NOT NULL
+      );
+    `);
+    legacy.close();
+
+    const legacyDoc = { id: "OLD12345", filename: "old.pdf" };
+    const reopen = new DatabaseSync(path);
+    reopen.prepare(
+      "INSERT INTO documents (id, filename, raw_text, extracted, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(legacyDoc.id, legacyDoc.filename, "text", null, new Date().toISOString());
+    reopen.close();
+
+    const store = new Store(path);
+    const doc = store.createDocument({ filename: "bill.pdf", rawText: "Due Oct 3" });
+    expect(doc.sourcePath).toBeNull();
+    expect(doc.extractionStatus).toBe("pending");
+    expect(store.getDocument(doc.id)?.filename).toBe("bill.pdf");
+    // A pre-existing row with no fields is treated as a failed extraction,
+    // not left as an eternal "Extracting…".
+    expect(store.getDocument(legacyDoc.id)?.extractionStatus).toBe("failed");
+    store.close();
+    unlinkSync(path);
+  });
+
+  it("deletes a document and logs it", () => {
+    const doc = store.createDocument({ filename: "junk.txt", rawText: "x" });
+    expect(store.deleteDocument(doc.id)?.id).toBe(doc.id);
+    expect(store.getDocument(doc.id)).toBeUndefined();
+    expect(store.deleteDocument(doc.id)).toBeUndefined();
+    expect(store.listActivity().some((a) => a.action === "document.deleted")).toBe(true);
+  });
+
+  it("fails stale pending extractions on startup", () => {
+    const path = `/tmp/family-agent-pending-${Date.now()}.db`;
+    const s1 = new Store(path);
+    s1.createDocument({ filename: "a.txt", rawText: "x" }); // left pending
+    s1.close();
+
+    const s2 = new Store(path);
+    // Reopening does not itself reset (that's the server's job) — call it.
+    expect(s2.failStalePendingExtractions()).toBe(1);
+    expect(s2.listDocuments()[0].extractionStatus).toBe("failed");
+    s2.close();
+    unlinkSync(path);
   });
 
   it("persists to disk and reopens", () => {

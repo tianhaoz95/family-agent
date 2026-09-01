@@ -21,6 +21,20 @@ function makeTestPdf(text: string): Promise<Buffer> {
   });
 }
 
+// A PDF whose only content is an image — no selectable text layer, i.e. what
+// a phone-scanned or photographed document looks like.
+function makeScannedPdf(imagePng: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument();
+    const chunks: Buffer[] = [];
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+    doc.image(imagePng, 40, 40, { width: 480 });
+    doc.end();
+  });
+}
+
 describe("extractText", () => {
   it("reads .txt files as plain utf8", async () => {
     const text = await extractText("note.txt", Buffer.from("hello family"));
@@ -42,6 +56,13 @@ describe("extractText", () => {
     expect(text).toContain("Electric bill");
     expect(text).toContain("86.40");
     expect(text).not.toMatch(/--\s*\d+\s+of\s+\d+\s*--/);
+  }, SLOW);
+
+  it("falls back to OCR for a scanned PDF with no text layer", async () => {
+    const png = Buffer.from(FIXTURE_PNG_BASE64, "base64");
+    const pdfBuffer = await makeScannedPdf(png);
+    const text = await extractText("scan.pdf", pdfBuffer);
+    expect(text.toUpperCase()).toContain("TEST");
   }, SLOW);
 
   it("rejects a file with a .png name that isn't actually a PNG, without crashing", async () => {

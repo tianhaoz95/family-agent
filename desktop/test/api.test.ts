@@ -68,4 +68,23 @@ describe("api client", () => {
     expect((init as RequestInit).method).toBe("PATCH");
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ status: "done" });
   });
+
+  it("deleteDocument() DELETEs by id with no JSON content-type (Fastify 400s an empty JSON body)", async () => {
+    const fetchMock = mockFetchOnce(200, { document: { id: "DOC1" } });
+    await api.deleteDocument("DOC1");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/documents/DOC1");
+    expect((init as RequestInit).method).toBe("DELETE");
+    expect((init as RequestInit).body).toBeUndefined();
+    expect((init as RequestInit).headers).toBeUndefined();
+  });
+
+  it("retryExtraction() POSTs the retry path with no body or content-type", async () => {
+    const fetchMock = mockFetchOnce(200, { document: { id: "DOC1", extractionStatus: "pending" } });
+    await api.retryExtraction("DOC1");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/documents/DOC1/retry-extraction");
+    expect((init as RequestInit).method).toBe("POST");
+    expect((init as RequestInit).headers).toBeUndefined();
+  });
 });

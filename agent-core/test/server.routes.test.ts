@@ -10,9 +10,11 @@ import { config } from "../src/config.js";
 // agents.integration.test.ts against the real local model.
 describe("HTTP API", () => {
   let app: FastifyInstance;
+  let store: Store;
 
   beforeEach(() => {
-    app = buildServer(new Store(":memory:"));
+    store = new Store(":memory:");
+    app = buildServer(store);
   });
 
   afterEach(async () => {
@@ -72,6 +74,42 @@ describe("HTTP API", () => {
 
     const list = await app.inject({ method: "GET", url: "/documents" });
     expect(list.json().documents).toHaveLength(1);
+    expect(doc.extractionStatus).toBe("pending");
+  });
+
+  it("DELETE /documents/:id removes a document, 404s when it's gone", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/documents/ingest",
+      payload: { filename: "junk.txt", text: "junk" },
+    });
+    const id = created.json().document.id;
+
+    const del = await app.inject({ method: "DELETE", url: `/documents/${id}` });
+    expect(del.statusCode).toBe(200);
+
+    const list = await app.inject({ method: "GET", url: "/documents" });
+    expect(list.json().documents).toHaveLength(0);
+
+    const again = await app.inject({ method: "DELETE", url: `/documents/${id}` });
+    expect(again.statusCode).toBe(404);
+  });
+
+  it("POST /documents/:id/retry-extraction resets a failed document to pending", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/documents/ingest",
+      payload: { filename: "bill.txt", text: "amount due" },
+    });
+    const id = created.json().document.id;
+    store.setDocumentExtractionStatus(id, "failed");
+
+    const retry = await app.inject({ method: "POST", url: `/documents/${id}/retry-extraction` });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().document.extractionStatus).toBe("pending");
+
+    const missing = await app.inject({ method: "POST", url: "/documents/nope/retry-extraction" });
+    expect(missing.statusCode).toBe(404);
   });
 
   // FormData + Response is the standard-library way to build a real,

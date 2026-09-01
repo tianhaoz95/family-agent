@@ -3,7 +3,12 @@ package app.familyagent.android.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -13,31 +18,47 @@ import app.familyagent.android.data.ActivityEntry
 
 @Composable
 fun ActivityScreen(entries: List<ActivityEntry>) {
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Activity", style = MaterialTheme.typography.titleLarge)
-        Text(
-            "Everything the agent has read or changed, newest first.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(12.dp))
-
+    ScreenScaffold(
+        title = "Activity",
+        subtitle = "Everything the agent has read or changed, newest first.",
+    ) {
         if (entries.isEmpty()) {
-            EmptyState("Nothing has happened yet.")
+            EmptyState(
+                text = "Nothing has happened yet.",
+                icon = {
+                    Icon(
+                        Icons.Outlined.History,
+                        contentDescription = null,
+                        modifier = Modifier.size(30.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                },
+            )
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 items(entries, key = { it.id }) { entry ->
-                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
                         Text(
                             entry.ts.substringAfter('T').substringBefore('.'),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp),
                         )
-                        Text(
-                            entry.actor,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(999.dp),
+                        ) {
+                            Text(
+                                entry.actor,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
                         Text(
                             entry.detail,
                             style = MaterialTheme.typography.bodyMedium,

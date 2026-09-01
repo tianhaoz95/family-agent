@@ -15,18 +15,23 @@
         </div>
         <nav class="nav" aria-label="Views">
           <button class="nav-item is-active" data-view="chat" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 17 0Z"/></svg>
             <span class="nav-label">Chat</span>
           </button>
           <button class="nav-item" data-view="tasks" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
             <span class="nav-label">Tasks</span>
           </button>
           <button class="nav-item" data-view="documents" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg>
             <span class="nav-label">Documents</span>
           </button>
           <button class="nav-item" data-view="activity" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
             <span class="nav-label">Activity</span>
           </button>
           <button class="nav-item" data-view="settings" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.2.63.77 1.05 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
             <span class="nav-label">Settings</span>
           </button>
         </nav>
@@ -44,7 +49,13 @@
             <h1>Chat</h1>
             <p class="view-sub">Ask about tasks, documents, or anything else — routed locally.</p>
           </div>
-          <div id="chat-log" class="chat-log" role="log" aria-live="polite"></div>
+          <div id="chat-log" class="chat-log" role="log" aria-live="polite">
+            <div class="chat-empty" id="chat-empty">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 17 0Z"/></svg>
+              <p>Start a conversation.</p>
+              <p class="chat-empty-hint">Try “Remind me to renew the car registration by Nov 1” or “What documents do I have?”</p>
+            </div>
+          </div>
           <form id="chat-form" class="chat-form">
             <textarea
               id="chat-input"
@@ -78,12 +89,15 @@
             </p>
           </div>
 
-          <form id="document-upload-form" class="inline-form">
-            <input
-              id="document-file-input"
-              type="file"
-              accept=".pdf,.txt,.md,.jpg,.jpeg,.png,.webp,image/*"
-            />
+          <form id="document-upload-form" class="upload-zone">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+            <span class="upload-zone-text">Add a PDF, photo, or scan to the family archive. Accepts <code>.pdf</code>, <code>.txt</code>, <code>.md</code>, <code>.jpg</code>, <code>.png</code>, <code>.webp</code>.</span>
+            <!-- No `accept` filter: the Linux webview's file picker silently hides
+                 valid files (e.g. .pdf) when accept mixes extensions and MIME
+                 wildcards. agent-core validates the type on upload and returns a
+                 clear "Supported types: …" message, so the filter only cost us
+                 working PDF selection. -->
+            <input id="document-file-input" type="file" />
             <button type="submit">Upload</button>
           </form>
           <p id="document-upload-status" class="settings-hint"></p>
@@ -114,24 +128,26 @@
             <p class="view-sub">This machine's local configuration.</p>
           </div>
 
-          <h3>Model</h3>
-          <p class="settings-readonly" id="settings-model">—</p>
-          <p class="settings-hint">Set via <code>FAMILY_AGENT_MODEL</code>; restart the app to change.</p>
+          <div class="settings-section">
+            <h3>Model</h3>
+            <p class="settings-readonly" id="settings-model">—</p>
+            <p class="settings-hint">Set via <code>FAMILY_AGENT_MODEL</code>; restart the app to change.</p>
 
-          <h3>Ollama address</h3>
-          <p class="settings-readonly" id="settings-ollama-url">—</p>
-          <p class="settings-hint">Set via <code>OLLAMA_BASE_URL</code>; restart the app to change.</p>
+            <h3>Ollama address</h3>
+            <p class="settings-readonly" id="settings-ollama-url">—</p>
+            <p class="settings-hint">Set via <code>OLLAMA_BASE_URL</code>; restart the app to change.</p>
 
-          <h3>Watched folder</h3>
-          <p class="settings-hint">
-            Documents dropped here are picked up automatically. Point this at a NAS or
-            cloud-synced folder if you want the family archive to live somewhere durable.
-          </p>
-          <form id="settings-form" class="inline-form">
-            <input id="settings-inbox-dir" type="text" placeholder="/path/to/watched-folder" required />
-            <button type="submit">Save</button>
-          </form>
-          <p id="settings-status" class="settings-hint" role="status"></p>
+            <h3>Watched folder</h3>
+            <p class="settings-hint">
+              Documents dropped here are picked up automatically. Point this at a NAS or
+              cloud-synced folder if you want the family archive to live somewhere durable.
+            </p>
+            <form id="settings-form" class="inline-form">
+              <input id="settings-inbox-dir" type="text" placeholder="/path/to/watched-folder" required />
+              <button type="submit">Save</button>
+            </form>
+            <p id="settings-status" class="settings-hint" role="status"></p>
+          </div>
         </section>
       </main>
     </div>

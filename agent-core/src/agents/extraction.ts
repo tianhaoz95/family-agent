@@ -88,6 +88,7 @@ export async function extractDocument(
       );
     }
   }
+  store.setDocumentExtractionStatus(doc.id, "failed");
   store.logActivity(
     "document-agent",
     "document.extract_failed",

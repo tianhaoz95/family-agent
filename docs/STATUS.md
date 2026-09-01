@@ -143,5 +143,15 @@ second machine.
 3. Pick up the deferred pieces in whatever order matters most: Tailscale
    transport, the sandboxed builder/scratch-tool agent (this one deserves a
    supervised build, not an autonomous one, given what it can do), the
-   compute mesh, per-family-member access control, OCR for non-text
-   documents dropped in the inbox folder.
+   compute mesh, per-family-member access control.
+
+Later changes (not part of the original autonomous session):
+- UI redesign of the desktop and Android apps ("Clean & calm" design system,
+  shared tokens — `desktop/src/style.css` and `android/.../ui/theme/Theme.kt`).
+- `db.ts` now runs column migrations on startup (an older DB missing a newer
+  column no longer breaks every write).
+- Documents can be deleted, and a failed field-extraction shows a retry
+  instead of a permanent "Extracting…" (`extraction_status` column).
+- Scanned PDFs (no text layer) are now OCR'd page-by-page via the same
+  tesseract.js path as a photo, capped at `PDF_OCR_MAX_PAGES`
+  (`fileExtract.ts`). Text-layer PDFs still use the text layer.

@@ -122,14 +122,42 @@ class AppViewModel(
     fun ingestDocument(filename: String, text: String) {
         viewModelScope.launch {
             runCatching { api.ingestDocument(filename, text) }.onSuccess {
-                refreshDocuments()
                 refreshActivity()
-                // Extraction lands a few seconds after ingest; poll briefly.
-                repeat(6) {
-                    kotlinx.coroutines.delay(3000)
-                    refreshDocuments()
-                }
+                pollDocuments()
             }
+        }
+    }
+
+    fun deleteDocument(id: String) {
+        viewModelScope.launch {
+            runCatching { api.deleteDocument(id) }
+                .onSuccess {
+                    refreshDocuments()
+                    refreshActivity()
+                }
+                .onFailure { err ->
+                    _state.value = _state.value.copy(documentUploadStatus = "Could not delete: ${err.message}")
+                }
+        }
+    }
+
+    fun retryExtraction(id: String) {
+        viewModelScope.launch {
+            runCatching { api.retryExtraction(id) }
+                .onSuccess { pollDocuments() }
+                .onFailure { err ->
+                    _state.value = _state.value.copy(documentUploadStatus = "Retry failed: ${err.message}")
+                }
+        }
+    }
+
+    // Extraction lands a few seconds after ingest/retry; poll briefly so the
+    // result (or a failure) shows without the user leaving the screen.
+    private suspend fun pollDocuments() {
+        refreshDocuments()
+        repeat(6) {
+            kotlinx.coroutines.delay(3000)
+            refreshDocuments()
         }
     }
 
@@ -140,12 +168,8 @@ class AppViewModel(
             runCatching { api.uploadDocument(filename, bytes, mimeType) }
                 .onSuccess {
                     _state.value = _state.value.copy(documentUploadStatus = "Uploaded \"${it.filename}\" — extracting…")
-                    refreshDocuments()
                     refreshActivity()
-                    repeat(6) {
-                        kotlinx.coroutines.delay(3000)
-                        refreshDocuments()
-                    }
+                    pollDocuments()
                     _state.value = _state.value.copy(documentUploadStatus = null)
                 }
                 .onFailure { err ->

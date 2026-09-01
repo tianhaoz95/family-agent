@@ -28,10 +28,15 @@ export function buildServer(
   // every test and every curl check while being completely broken from the
   // desktop webview the whole time. See the CORS preflight tests below for
   // the regression coverage this bug should have had from the start.
-  void app.register(cors, { origin: true, methods: ["GET", "POST", "PATCH", "PUT"] });
+  void app.register(cors, { origin: true, methods: ["GET", "POST", "PATCH", "PUT", "DELETE"] });
   void app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
   const agent = buildFamilyAgent(store);
   const extractionModel = createLocalModel();
+
+  // Documents left mid-extraction by a previous run will never finish on
+  // their own — mark them failed so the UI offers a retry instead of a
+  // spinner that never resolves.
+  store.failStalePendingExtractions();
 
   app.get("/health", async () => ({
     ok: true,
@@ -135,6 +140,25 @@ export function buildServer(
     const doc = store.createDocument({ filename, rawText });
     void extractDocument(extractionModel, store, doc);
     return { document: doc };
+  });
+
+  app.delete("/documents/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const deleted = store.deleteDocument(id);
+    if (!deleted) return reply.code(404).send({ error: "document not found" });
+    return { document: deleted };
+  });
+
+  // Re-run field extraction for a document whose first attempt failed (a
+  // transient model outage, say). Resets it to "pending" and fires the same
+  // fire-and-forget path as ingest.
+  app.post("/documents/:id/retry-extraction", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const doc = store.getDocument(id);
+    if (!doc) return reply.code(404).send({ error: "document not found" });
+    store.setDocumentExtractionStatus(id, "pending");
+    void extractDocument(extractionModel, store, { id: doc.id, filename: doc.filename, rawText: doc.rawText });
+    return { document: store.getDocument(id) };
   });
 
   app.get("/activity", async () => ({ activity: store.listActivity() }));

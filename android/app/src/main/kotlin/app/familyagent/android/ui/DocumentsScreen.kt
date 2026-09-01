@@ -5,18 +5,23 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import app.familyagent.android.data.Document
@@ -31,10 +36,13 @@ fun DocumentsScreen(
     uploadStatus: String?,
     onIngest: (filename: String, text: String) -> Unit,
     onUpload: (filename: String, bytes: ByteArray, mimeType: String?) -> Unit,
+    onDelete: (id: String) -> Unit,
+    onRetry: (id: String) -> Unit,
 ) {
     val context = LocalContext.current
     var pasteFilename by remember { mutableStateOf("") }
     var pasteText by remember { mutableStateOf("") }
+    var pasteExpanded by remember { mutableStateOf(false) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
 
     val pickFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -47,105 +55,165 @@ fun DocumentsScreen(
         pendingCameraUri = null
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Documents", style = MaterialTheme.typography.titleLarge)
-        Text(
-            "Upload a PDF, photo, or scan a document with the camera.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(12.dp))
-
+    ScreenScaffold(
+        title = "Documents",
+        subtitle = "Upload a PDF or photo, or scan a document with the camera.",
+    ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { pickFileLauncher.launch("*/*") }) {
+            OutlinedButton(
+                onClick = { pickFileLauncher.launch("*/*") },
+                modifier = Modifier.weight(1f),
+                shape = MaterialTheme.shapes.medium,
+                contentPadding = PaddingValues(vertical = 14.dp),
+            ) {
                 Icon(Icons.Filled.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
                 Text("Upload")
             }
-            OutlinedButton(onClick = {
-                val uri = createScanUri(context)
-                pendingCameraUri = uri
-                takePictureLauncher.launch(uri)
-            }) {
+            OutlinedButton(
+                onClick = {
+                    val uri = createScanUri(context)
+                    pendingCameraUri = uri
+                    takePictureLauncher.launch(uri)
+                },
+                modifier = Modifier.weight(1f),
+                shape = MaterialTheme.shapes.medium,
+                contentPadding = PaddingValues(vertical = 14.dp),
+            ) {
                 Icon(Icons.Filled.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
                 Text("Scan")
             }
         }
         uploadStatus?.let {
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(8.dp))
             Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        Spacer(Modifier.height(12.dp))
-
-        var pasteExpanded by remember { mutableStateOf(false) }
-        TextButton(onClick = { pasteExpanded = !pasteExpanded }) {
-            Text(if (pasteExpanded) "Hide paste-text option" else "Or paste text directly")
-        }
-        if (pasteExpanded) {
-            OutlinedTextField(
-                value = pasteFilename,
-                onValueChange = { pasteFilename = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Filename, e.g. electric-bill.txt") },
-                singleLine = true,
+        Spacer(Modifier.height(10.dp))
+        TextButton(
+            onClick = { pasteExpanded = !pasteExpanded },
+            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
+        ) {
+            Icon(
+                if (pasteExpanded) Icons.Outlined.KeyboardArrowDown else Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
             )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = pasteText,
-                onValueChange = { pasteText = it },
-                modifier = Modifier.fillMaxWidth().height(96.dp),
-                placeholder = { Text("Paste the document text here") },
-            )
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    if (pasteFilename.isNotBlank() && pasteText.isNotBlank()) {
-                        onIngest(pasteFilename, pasteText)
-                        pasteFilename = ""
-                        pasteText = ""
-                    }
-                },
-                modifier = Modifier.align(Alignment.End),
-            ) { Text("Ingest") }
+            Spacer(Modifier.width(4.dp))
+            Text("Paste text directly")
+        }
+        AnimatedVisibility(pasteExpanded) {
+            Column {
+                OutlinedTextField(
+                    value = pasteFilename,
+                    onValueChange = { pasteFilename = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Filename, e.g. electric-bill.txt") },
+                    singleLine = true,
+                    shape = MaterialTheme.shapes.medium,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = pasteText,
+                    onValueChange = { pasteText = it },
+                    modifier = Modifier.fillMaxWidth().height(110.dp),
+                    placeholder = { Text("Paste the document text here") },
+                    shape = MaterialTheme.shapes.medium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        if (pasteFilename.isNotBlank() && pasteText.isNotBlank()) {
+                            onIngest(pasteFilename, pasteText)
+                            pasteFilename = ""
+                            pasteText = ""
+                            pasteExpanded = false
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.End),
+                    shape = MaterialTheme.shapes.medium,
+                ) { Text("Ingest") }
+            }
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
 
         if (documents.isEmpty()) {
-            EmptyState("No documents ingested yet.")
+            EmptyState(
+                text = "No documents yet. Upload or scan one to get started.",
+                icon = {
+                    Icon(
+                        Icons.Outlined.FolderOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(30.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                },
+            )
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(documents, key = { it.id }) { doc ->
-                    ElevatedCard {
-                        Column(Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    doc.filename,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                doc.extracted?.category?.let { category ->
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.14f),
-                                        shape = RoundedCornerShape(999.dp),
-                                    ) {
-                                        Text(
-                                            category.uppercase(),
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.secondary,
-                                        )
-                                    }
-                                }
-                            }
-                            Spacer(Modifier.height(4.dp))
+                    AppCard {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                doc.extracted?.summary ?: "Extracting…",
+                                doc.filename,
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            doc.extracted?.category?.let { category ->
+                                Spacer(Modifier.width(8.dp))
+                                Chip(category)
+                            }
+                            IconButton(
+                                onClick = { onDelete(doc.id) },
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Delete,
+                                    contentDescription = "Delete ${doc.filename}",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        val summary = doc.extracted?.summary
+                        when {
+                            summary != null -> Text(
+                                summary,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            doc.extractionStatus == "failed" -> Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    "Couldn't read this document.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                TextButton(
+                                    onClick = { onRetry(doc.id) },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                ) { Text("Retry") }
+                            }
+                            else -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "Extracting…",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 }

@@ -17,16 +17,23 @@ export class UnsupportedFileTypeError extends Error {
   }
 }
 
+// A scanned PDF has a text layer of only pdf-parse's page separators, which
+// strip to nothing. Anything under this many non-whitespace characters is
+// treated as "no real text layer" and sent down the OCR path instead.
+const PDF_TEXT_LAYER_MIN_CHARS = 24;
+
+// Cap how many pages of a scanned PDF get OCR'd in one upload. OCR is ~5–15s
+// per page on CPU; without a cap a 40-page scan would hang the request for
+// minutes. Family documents are near-always a handful of pages.
+const PDF_OCR_MAX_PAGES = 10;
+
 /**
  * Extracts plain text from a file's raw bytes, dispatching on extension.
  * Throws UnsupportedFileTypeError for anything outside SUPPORTED_EXTENSIONS.
  *
- * PDF support is text-layer only — a scanned PDF with no embedded text
- * layer will extract as empty/near-empty text, not OCR'd. Photos taken with
- * a phone camera or picked from a gallery go through OCR instead (that's
- * the actual "scan" path); a scanned-PDF-to-OCR pipeline would mean
- * rasterizing pages to images first, which is real future work, not
- * something silently half-done here.
+ * PDFs: the embedded text layer is used when there is one; a scanned PDF with
+ * no text layer falls back to OCR'ing its page images (same tesseract.js path
+ * as a photo), capped at PDF_OCR_MAX_PAGES.
  */
 export async function extractText(filename: string, buffer: Buffer): Promise<string> {
   const ext = extname(filename).toLowerCase();
@@ -52,7 +59,29 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
     // pdf-parse inserts "-- N of M --" page-separator lines into the text;
     // pure noise for what this app does with the text (a small model
     // extracting fields), so strip them rather than pass them through.
-    return result.text.replace(/^--\s*\d+\s+of\s+\d+\s*--$/gm, "").trim();
+    const text = result.text.replace(/^--\s*\d+\s+of\s+\d+\s*--$/gm, "").trim();
+    if (text.replace(/\s+/g, "").length >= PDF_TEXT_LAYER_MIN_CHARS) return text;
+
+    // No usable text layer — this is a scan. pdf-parse hands back each page's
+    // embedded image already PNG-encoded, so it can go straight to the same
+    // OCR path a photo upload uses. imageThreshold:0 disables pdf-parse's
+    // default "skip images <=80px" filter — a scanned page is always large,
+    // but the filter also drops legitimately small scans, and we only reach
+    // this branch when there's no text layer to lose anyway.
+    const extracted = await parser.getImage({
+      imageBuffer: true,
+      imageDataUrl: false,
+      imageThreshold: 0,
+    });
+    const pageImages: Buffer[] = [];
+    for (const page of extracted.pages) {
+      for (const img of page.images) {
+        if (img.data?.length) pageImages.push(Buffer.from(img.data));
+      }
+      if (pageImages.length >= PDF_OCR_MAX_PAGES) break;
+    }
+    const ocrText = await ocrImages(pageImages.slice(0, PDF_OCR_MAX_PAGES));
+    return ocrText || text;
   } finally {
     await parser.destroy();
   }
@@ -81,6 +110,14 @@ function looksLikeImage(buffer: Buffer, ext: string): boolean {
 // is the one deliberate exception to "nothing leaves the machine" in this
 // codebase — flagged here and in docs/DECISIONS.md, not hidden.
 async function extractImageText(buffer: Buffer): Promise<string> {
+  return ocrImages([buffer]);
+}
+
+// OCR one or more encoded (PNG/JPEG) images with a single shared worker —
+// creating a worker loads the ~4MB language model, so a multi-page scan
+// reuses one rather than paying that per page.
+async function ocrImages(images: Buffer[]): Promise<string> {
+  if (images.length === 0) return "";
   const cachePath = `${config.dataDir}/tessdata`;
   // tesseract.js's Node cache writer is a plain fs.writeFile — it doesn't
   // create the directory itself, and fails (silently swallowed upstream)
@@ -89,10 +126,14 @@ async function extractImageText(buffer: Buffer): Promise<string> {
   mkdirSync(cachePath, { recursive: true });
   const worker = await createWorker("eng", undefined, { cachePath });
   try {
-    const {
-      data: { text },
-    } = await worker.recognize(buffer);
-    return text;
+    const parts: string[] = [];
+    for (const image of images) {
+      const {
+        data: { text },
+      } = await worker.recognize(image);
+      parts.push(text);
+    }
+    return parts.join("\n\n").trim();
   } finally {
     await worker.terminate();
   }

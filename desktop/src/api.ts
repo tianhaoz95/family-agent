@@ -20,6 +20,7 @@ export interface Document {
   extracted: { category?: string; summary?: string; importantDates?: string[] } | null;
   createdAt: string;
   sourcePath: string | null;
+  extractionStatus: "pending" | "done" | "failed";
 }
 
 export interface ActivityEntry {
@@ -31,9 +32,14 @@ export interface ActivityEntry {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Only send Content-Type: application/json when there's actually a JSON body.
+  // Fastify rejects a bodyless request that still declares a JSON content-type
+  // with 400 "Body cannot be empty" — which is every DELETE and the bodyless
+  // retry POST.
+  const headers = init?.body != null ? { "Content-Type": "application/json" } : undefined;
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -77,5 +83,8 @@ export const api = {
   ingestDocument: (filename: string, text: string) =>
     request<{ document: Document }>("/documents/ingest", { method: "POST", body: JSON.stringify({ filename, text }) }),
   uploadDocument: (file: File) => upload<{ document: Document }>("/documents/upload", file),
+  deleteDocument: (id: string) => request<{ document: Document }>(`/documents/${id}`, { method: "DELETE" }),
+  retryExtraction: (id: string) =>
+    request<{ document: Document }>(`/documents/${id}/retry-extraction`, { method: "POST" }),
   listActivity: () => request<{ activity: ActivityEntry[] }>("/activity"),
 };

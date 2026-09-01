@@ -1,12 +1,11 @@
 package app.familyagent.android.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.ConnectionStatus
 
@@ -18,38 +17,50 @@ fun SettingsScreen(
 ) {
     var draft by remember(serverUrl) { mutableStateOf(serverUrl) }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Settings", style = MaterialTheme.typography.titleLarge)
-        Text(
-            "Point this at the Family Agent desktop app on your home network.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(16.dp))
+    ScreenScaffold(
+        title = "Settings",
+        subtitle = "Point this at the Family Agent desktop app on your home network.",
+    ) {
+        AppCard {
+            ConnectionStatusRow(connection)
+        }
 
-        Text("Desktop server address", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(18.dp))
+        SectionLabel("Desktop server address")
+        Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("http://192.168.1.2:4173") },
             singleLine = true,
+            shape = MaterialTheme.shapes.medium,
         )
-        Spacer(Modifier.height(8.dp))
-        Button(onClick = { onSave(draft) }, enabled = draft.isNotBlank()) { Text("Save & reconnect") }
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = { onSave(draft) },
+            enabled = draft.isNotBlank(),
+            shape = MaterialTheme.shapes.medium,
+        ) { Text("Save & reconnect") }
 
-        Spacer(Modifier.height(20.dp))
-        ConnectionStatusRow(connection)
-
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(24.dp))
         Text(
-            "Direct LAN address only for now — Tailscale/relay discovery is future work " +
+            "Direct LAN address only for now — Tailscale / relay discovery is future work " +
                 "(see docs/DECISIONS.md).",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -60,8 +71,8 @@ private fun ConnectionStatusRow(connection: ConnectionStatus) {
         is ConnectionStatus.Unreachable -> "Unreachable: ${connection.message}" to MaterialTheme.colorScheme.error
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).background(color, shape = CircleShape))
-        Spacer(Modifier.width(8.dp))
+        StatusDot(color)
+        Spacer(Modifier.width(10.dp))
         Text(label, style = MaterialTheme.typography.bodyMedium, color = color)
     }
 }

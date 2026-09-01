@@ -4,8 +4,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
@@ -84,20 +86,25 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
     val navController = rememberNavController()
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            // Material3's default NavigationBar container is a tonal-elevation
-            // surface derived from the color scheme's primary, which reads as
-            // an off-palette lavender against this app's ledger tones — pin it
-            // to the same surface token the rest of the app uses instead.
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+            // Flat nav bar: same canvas as the rest of the app, a hairline
+            // divider on top, and a soft indigo pill behind the active item —
+            // matches the desktop rail's active-item treatment.
+            Column {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    tonalElevation = 0.dp,
+                ) {
                 val backStackEntry by navController.currentBackStackEntryAsState()
                 val currentDestination = backStackEntry?.destination
                 Destination.entries.forEach { dest ->
                     NavigationBarItem(
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onPrimary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            indicatorColor = MaterialTheme.colorScheme.primary,
+                            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
                             unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         ),
@@ -119,6 +126,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         label = { Text(dest.label) },
                     )
                 }
+                }
             }
         }
     ) { padding ->
@@ -139,6 +147,8 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                     uploadStatus = state.documentUploadStatus,
                     onIngest = viewModel::ingestDocument,
                     onUpload = viewModel::uploadDocument,
+                    onDelete = viewModel::deleteDocument,
+                    onRetry = viewModel::retryExtraction,
                 )
             }
             composable(Destination.Activity.route) {

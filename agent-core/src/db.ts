@@ -26,6 +26,8 @@ export interface TaskRecord {
   updatedAt: string;
 }
 
+export type ExtractionStatus = "pending" | "done" | "failed";
+
 export interface DocumentRecord {
   id: string;
   filename: string;
@@ -34,6 +36,13 @@ export interface DocumentRecord {
   createdAt: string;
   /** Absolute path if this came from the watched inbox folder; null for API-pasted documents. */
   sourcePath: string | null;
+  /**
+   * Where field extraction got to. "pending" while the model is working (or
+   * queued), "done" once fields are saved, "failed" once retries are
+   * exhausted. Without this the UI can only tell "has fields" from "no
+   * fields yet" and shows a failed extraction as "Extracting…" forever.
+   */
+  extractionStatus: ExtractionStatus;
 }
 
 export interface ActivityRecord {
@@ -61,7 +70,8 @@ CREATE TABLE IF NOT EXISTS documents (
   raw_text TEXT NOT NULL,
   extracted TEXT,
   created_at TEXT NOT NULL,
-  source_path TEXT UNIQUE
+  source_path TEXT,
+  extraction_status TEXT NOT NULL DEFAULT 'pending'
 );
 
 CREATE TABLE IF NOT EXISTS activity (
@@ -73,6 +83,27 @@ CREATE TABLE IF NOT EXISTS activity (
 );
 `;
 
+// Columns added after the first release. `CREATE TABLE IF NOT EXISTS` is a
+// no-op against a database that already has the table, so a DB created by an
+// older build keeps its old shape and every INSERT that names a newer column
+// fails at runtime (observed: "table documents has no column named
+// source_path" on every document upload). Bring such a DB forward by adding
+// any missing column. SQLite's ALTER TABLE ADD COLUMN can't carry a UNIQUE
+// constraint, so uniqueness for source_path lives in the index above instead.
+const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
+  { table: "documents", column: "source_path", ddl: "ALTER TABLE documents ADD COLUMN source_path TEXT" },
+  {
+    table: "documents",
+    column: "extraction_status",
+    // Existing rows have already had their one extraction attempt; treat a
+    // row that has fields as done and one that doesn't as failed, so nothing
+    // is left showing "Extracting…" after the upgrade.
+    ddl:
+      "ALTER TABLE documents ADD COLUMN extraction_status TEXT NOT NULL DEFAULT 'pending'; " +
+      "UPDATE documents SET extraction_status = CASE WHEN extracted IS NULL THEN 'failed' ELSE 'done' END",
+  },
+];
+
 export class Store {
   private db: DatabaseSync;
 
@@ -83,6 +114,21 @@ export class Store {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  // Add columns that post-date a database's creation, then (re)create the
+  // indexes that depend on them. Idempotent: safe to run on every startup.
+  private migrate() {
+    for (const { table, column, ddl } of COLUMN_MIGRATIONS) {
+      const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (!cols.some((c) => c.name === column)) {
+        this.db.exec(ddl);
+      }
+    }
+    this.db.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_source_path ON documents(source_path)",
+    );
   }
 
   close() {
@@ -176,10 +222,11 @@ export class Store {
       extracted: input.extracted ?? null,
       createdAt: new Date().toISOString(),
       sourcePath: input.sourcePath ?? null,
+      extractionStatus: input.extracted ? "done" : "pending",
     };
     this.db
       .prepare(
-        "INSERT INTO documents (id, filename, raw_text, extracted, created_at, source_path) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO documents (id, filename, raw_text, extracted, created_at, source_path, extraction_status) VALUES (?, ?, ?, ?, ?, ?, ?)"
       )
       .run(
         rec.id,
@@ -187,7 +234,8 @@ export class Store {
         rec.rawText,
         rec.extracted ? JSON.stringify(rec.extracted) : null,
         rec.createdAt,
-        rec.sourcePath
+        rec.sourcePath,
+        rec.extractionStatus
       );
     this.logActivity(
       "document-agent",
@@ -203,12 +251,38 @@ export class Store {
   }
 
   updateDocumentExtraction(id: string, extracted: Record<string, unknown>): DocumentRecord | undefined {
-    this.db.prepare("UPDATE documents SET extracted = ? WHERE id = ?").run(JSON.stringify(extracted), id);
+    this.db
+      .prepare("UPDATE documents SET extracted = ?, extraction_status = 'done' WHERE id = ?")
+      .run(JSON.stringify(extracted), id);
     const doc = this.getDocument(id);
     if (doc) {
       this.logActivity("document-agent", "document.extracted", `Extracted fields from "${doc.filename}"`);
     }
     return doc;
+  }
+
+  setDocumentExtractionStatus(id: string, status: ExtractionStatus): DocumentRecord | undefined {
+    this.db.prepare("UPDATE documents SET extraction_status = ? WHERE id = ?").run(status, id);
+    return this.getDocument(id);
+  }
+
+  deleteDocument(id: string): DocumentRecord | undefined {
+    const doc = this.getDocument(id);
+    if (!doc) return undefined;
+    this.db.prepare("DELETE FROM documents WHERE id = ?").run(id);
+    this.logActivity("user", "document.deleted", `Deleted "${doc.filename}"`);
+    return doc;
+  }
+
+  // Any document still "pending" when the server starts belongs to a process
+  // that is no longer running — its extraction will never resume on its own.
+  // Flip those to "failed" so the UI stops showing "Extracting…" and offers a
+  // retry instead. Returns how many were reset.
+  failStalePendingExtractions(): number {
+    const info = this.db
+      .prepare("UPDATE documents SET extraction_status = 'failed' WHERE extraction_status = 'pending'")
+      .run();
+    return Number(info.changes ?? 0);
   }
 
   getDocument(id: string): DocumentRecord | undefined {
@@ -242,5 +316,6 @@ function rowToDocument(r: any): DocumentRecord {
     extracted: r.extracted ? JSON.parse(r.extracted) : null,
     createdAt: r.created_at,
     sourcePath: r.source_path ?? null,
+    extractionStatus: (r.extraction_status as ExtractionStatus) ?? "pending",
   };
 }

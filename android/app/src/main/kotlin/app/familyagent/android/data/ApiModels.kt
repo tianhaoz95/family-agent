@@ -27,6 +27,9 @@ data class Document(
     val rawText: String,
     val extracted: Extracted? = null,
     val createdAt: String,
+    val sourcePath: String? = null,
+    /** "pending" while extraction runs, "done" once fields are saved, "failed" after retries are exhausted. */
+    val extractionStatus: String = "pending",
 )
 
 @Serializable
