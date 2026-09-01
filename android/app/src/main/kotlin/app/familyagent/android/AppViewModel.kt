@@ -31,6 +31,7 @@ data class AppUiState(
     val tasks: List<Task> = emptyList(),
     val documents: List<Document> = emptyList(),
     val activity: List<ActivityEntry> = emptyList(),
+    val documentUploadStatus: String? = null,
 )
 
 class AppViewModel(
@@ -129,6 +130,27 @@ class AppViewModel(
                     refreshDocuments()
                 }
             }
+        }
+    }
+
+    /** Uploads a picked file or camera scan — the actual "scan a document" path. */
+    fun uploadDocument(filename: String, bytes: ByteArray, mimeType: String?) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(documentUploadStatus = "Uploading \"$filename\"…")
+            runCatching { api.uploadDocument(filename, bytes, mimeType) }
+                .onSuccess {
+                    _state.value = _state.value.copy(documentUploadStatus = "Uploaded \"${it.filename}\" — extracting…")
+                    refreshDocuments()
+                    refreshActivity()
+                    repeat(6) {
+                        kotlinx.coroutines.delay(3000)
+                        refreshDocuments()
+                    }
+                    _state.value = _state.value.copy(documentUploadStatus = null)
+                }
+                .onFailure { err ->
+                    _state.value = _state.value.copy(documentUploadStatus = "Error: ${err.message}")
+                }
         }
     }
 

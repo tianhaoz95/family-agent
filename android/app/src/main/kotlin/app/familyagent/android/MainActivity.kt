@@ -134,7 +134,12 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                 TasksScreen(state.tasks, onAdd = viewModel::addTask, onComplete = viewModel::completeTask)
             }
             composable(Destination.Documents.route) {
-                DocumentsScreen(state.documents, onIngest = viewModel::ingestDocument)
+                DocumentsScreen(
+                    documents = state.documents,
+                    uploadStatus = state.documentUploadStatus,
+                    onIngest = viewModel::ingestDocument,
+                    onUpload = viewModel::uploadDocument,
+                )
             }
             composable(Destination.Activity.route) {
                 ActivityScreen(state.activity)

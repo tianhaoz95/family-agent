@@ -4,19 +4,14 @@ import { basename, extname } from "node:path";
 import type { Store } from "./db.js";
 import type { ChatOllama } from "@langchain/ollama";
 import { extractDocument } from "./agents/extraction.js";
-
-// Text-only for now — real document capture (photos, scanned PDFs) needs an
-// OCR step this build doesn't have. Anything else dropped in the folder is
-// logged and skipped rather than silently ignored, so it's visible in
-// Activity that the app saw the file and chose not to touch it.
-const SUPPORTED_EXTENSIONS = new Set([".txt", ".md"]);
+import { extractText, SUPPORTED_EXTENSIONS, UnsupportedFileTypeError } from "./fileExtract.js";
 
 /**
- * Watches config.inboxDir and ingests any new text file it finds, the same
- * way §01 of the architecture notes describes: drop a file in, the agent
- * picks it up. Runs alongside the HTTP ingest path (POST /documents/ingest)
- * rather than replacing it — the API path is still how the desktop/Android
- * "paste text" flow and any future direct-upload UI feed the pipeline.
+ * Watches config.inboxDir and ingests any new supported file it finds, the
+ * same way §01 of the architecture notes describes: drop a file in, the
+ * agent picks it up. Runs alongside the HTTP ingest paths
+ * (POST /documents/ingest for pasted text, POST /documents/upload for
+ * uploaded files) rather than replacing them.
  */
 export async function startInboxWatcher(store: Store, model: ChatOllama, inboxDir: string): Promise<FSWatcher> {
   await mkdir(inboxDir, { recursive: true });
@@ -42,23 +37,32 @@ async function handleNewFile(store: Store, model: ChatOllama, path: string): Pro
   }
 
   if (!SUPPORTED_EXTENSIONS.has(extname(path).toLowerCase())) {
-    store.logActivity(
-      "document-agent",
-      "document.skipped",
-      `Skipped "${filename}" — only .txt/.md are supported right now (no OCR pipeline yet).`
-    );
+    const supported = [...SUPPORTED_EXTENSIONS].join(", ");
+    store.logActivity("document-agent", "document.skipped", `Skipped "${filename}" — supported types: ${supported}.`);
     return;
   }
 
-  let rawText: string;
+  let buffer: Buffer;
   try {
-    rawText = await readFile(path, "utf8");
+    buffer = await readFile(path);
   } catch (err) {
     store.logActivity(
       "document-agent",
       "document.read_error",
       `Could not read "${filename}": ${err instanceof Error ? err.message : String(err)}`
     );
+    return;
+  }
+
+  let rawText: string;
+  try {
+    rawText = await extractText(filename, buffer);
+  } catch (err) {
+    // SUPPORTED_EXTENSIONS was already checked above, so UnsupportedFileTypeError
+    // shouldn't happen here — this catch is for real extraction failures
+    // (a corrupt PDF, an OCR engine error), not the "wrong type" case.
+    const detail = err instanceof UnsupportedFileTypeError ? err.message : `extraction failed: ${err}`;
+    store.logActivity("document-agent", "document.read_error", `Could not read "${filename}": ${detail}`);
     return;
   }
 

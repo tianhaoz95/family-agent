@@ -26,6 +26,9 @@
           <button class="nav-item" data-view="activity" type="button">
             <span class="nav-label">Activity</span>
           </button>
+          <button class="nav-item" data-view="settings" type="button">
+            <span class="nav-label">Settings</span>
+          </button>
         </nav>
         <div class="rail-footer">
           <div id="status-pill" class="status-pill status-pending">
@@ -70,15 +73,30 @@
           <div class="view-header">
             <h1>Documents</h1>
             <p class="view-sub">
-              Drop a <code>.txt</code> or <code>.md</code> file into
-              <code id="inbox-path">the watched folder</code>, or paste text below.
+              Upload a PDF, photo, or scan below, or drop a <code>.txt</code>/<code>.md</code>
+              file into <code id="inbox-path">the watched folder</code>.
             </p>
           </div>
-          <form id="document-form" class="inline-form inline-form-stacked">
-            <input id="document-filename" type="text" placeholder="Filename, e.g. electric-bill.txt" required />
-            <textarea id="document-text" placeholder="Paste the document text here" rows="4" required></textarea>
-            <button type="submit">Ingest</button>
+
+          <form id="document-upload-form" class="inline-form">
+            <input
+              id="document-file-input"
+              type="file"
+              accept=".pdf,.txt,.md,.jpg,.jpeg,.png,.webp,image/*"
+            />
+            <button type="submit">Upload</button>
           </form>
+          <p id="document-upload-status" class="settings-hint"></p>
+
+          <details class="paste-details">
+            <summary>Or paste text directly</summary>
+            <form id="document-form" class="inline-form inline-form-stacked">
+              <input id="document-filename" type="text" placeholder="Filename, e.g. electric-bill.txt" required />
+              <textarea id="document-text" placeholder="Paste the document text here" rows="4" required></textarea>
+              <button type="submit">Ingest</button>
+            </form>
+          </details>
+
           <ul id="document-list" class="document-list"></ul>
         </section>
 
@@ -88,6 +106,32 @@
             <p class="view-sub">Everything the agent has read or changed, newest first.</p>
           </div>
           <ul id="activity-list" class="activity-list"></ul>
+        </section>
+
+        <section id="view-settings" class="view" aria-label="Settings">
+          <div class="view-header">
+            <h1>Settings</h1>
+            <p class="view-sub">This machine's local configuration.</p>
+          </div>
+
+          <h3>Model</h3>
+          <p class="settings-readonly" id="settings-model">—</p>
+          <p class="settings-hint">Set via <code>FAMILY_AGENT_MODEL</code>; restart the app to change.</p>
+
+          <h3>Ollama address</h3>
+          <p class="settings-readonly" id="settings-ollama-url">—</p>
+          <p class="settings-hint">Set via <code>OLLAMA_BASE_URL</code>; restart the app to change.</p>
+
+          <h3>Watched folder</h3>
+          <p class="settings-hint">
+            Documents dropped here are picked up automatically. Point this at a NAS or
+            cloud-synced folder if you want the family archive to live somewhere durable.
+          </p>
+          <form id="settings-form" class="inline-form">
+            <input id="settings-inbox-dir" type="text" placeholder="/path/to/watched-folder" required />
+            <button type="submit">Save</button>
+          </form>
+          <p id="settings-status" class="settings-hint" role="status"></p>
         </section>
       </main>
     </div>

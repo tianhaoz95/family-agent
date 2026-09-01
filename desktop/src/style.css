@@ -455,3 +455,72 @@ button[type="submit"]:disabled {
   font-style: italic;
   padding: 0.5rem 0;
 }
+
+/* ---------- Settings ---------- */
+#view-settings h3:first-of-type {
+  margin-top: 0;
+}
+
+#view-settings h3 {
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  margin: 1.4rem 0 0.4rem;
+}
+
+.settings-readonly {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--ink);
+  margin: 0;
+}
+
+.settings-hint {
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+  margin: 0.3rem 0 0;
+}
+
+.paste-details {
+  margin: 0.9rem 0 1.1rem;
+}
+
+.paste-details summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  user-select: none;
+}
+
+.paste-details summary:hover {
+  color: var(--ink);
+}
+
+.paste-details .inline-form {
+  margin-top: 0.7rem;
+}
+
+input[type="file"] {
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+input[type="file"]::file-selector-button {
+  font-family: inherit;
+  font-size: 0.82rem;
+  padding: 0.4rem 0.8rem;
+  margin-right: 0.7rem;
+  border-radius: 7px;
+  border: 1px solid var(--rule);
+  background: var(--paper-raised);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+input[type="file"]::file-selector-button:hover {
+  background: var(--paper-sunken);
+}

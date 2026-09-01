@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import { z } from "zod";
 import { Store } from "./db.js";
 import { config, dbPath } from "./config.js";
@@ -7,14 +8,28 @@ import { buildFamilyAgent, askFamilyAgent } from "./agents/index.js";
 import { extractDocument } from "./agents/extraction.js";
 import { createLocalModel } from "./model.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
+import { persistInboxDir } from "./settingsFile.js";
+import { extractText, SUPPORTED_EXTENSIONS, UnsupportedFileTypeError } from "./fileExtract.js";
 
-export function buildServer(store: Store = new Store(dbPath())) {
+export function buildServer(
+  store: Store = new Store(dbPath()),
+  onInboxDirChange?: (newDir: string) => Promise<void>
+) {
   const app = Fastify({ logger: false });
   // Local-only server (see docs/DECISIONS.md) — the Tauri webview and any
   // future tailnet-connected companion app are different origins from this
   // server's perspective, so CORS is opened rather than restricted; there is
   // no cross-origin data to protect since nothing here is reachable off-box.
-  void app.register(cors, { origin: true });
+  //
+  // methods must be listed explicitly: @fastify/cors defaults to
+  // "GET,HEAD,POST" only. Found by actually clicking things in a browser,
+  // not by the test suite — `app.inject()` and curl both bypass real CORS
+  // preflight, so PATCH /tasks/:id and PUT /settings silently "worked" in
+  // every test and every curl check while being completely broken from the
+  // desktop webview the whole time. See the CORS preflight tests below for
+  // the regression coverage this bug should have had from the start.
+  void app.register(cors, { origin: true, methods: ["GET", "POST", "PATCH", "PUT"] });
+  void app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
   const agent = buildFamilyAgent(store);
   const extractionModel = createLocalModel();
 
@@ -83,14 +98,84 @@ export function buildServer(store: Store = new Store(dbPath())) {
     return { document: doc };
   });
 
+  // File upload: PDFs (text-layer only — see fileExtract.ts), photos/scans
+  // (OCR via tesseract.js), or plain text/markdown. This is the actual
+  // "upload a PDF, a photo, or a camera scan" path; /documents/ingest above
+  // stays as the paste-text path both UIs also offer.
+  app.post("/documents/upload", async (req, reply) => {
+    const data = await req.file();
+    if (!data) return reply.code(400).send({ error: "No file uploaded." });
+
+    const filename = data.filename || "upload";
+    const buffer = await data.toBuffer();
+    if (buffer.length === 0) return reply.code(400).send({ error: "Uploaded file is empty." });
+
+    let rawText: string;
+    try {
+      rawText = await extractText(filename, buffer);
+    } catch (err) {
+      if (err instanceof UnsupportedFileTypeError) {
+        return reply.code(400).send({
+          error: `${err.message}. Supported types: ${[...SUPPORTED_EXTENSIONS].join(", ")}.`,
+        });
+      }
+      req.log?.error?.(err);
+      return reply.code(422).send({
+        error: "Could not extract text from this file.",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    if (!rawText.trim()) {
+      return reply
+        .code(422)
+        .send({ error: "No readable text found in this file (a blank page, or an image OCR couldn't read)." });
+    }
+
+    const doc = store.createDocument({ filename, rawText });
+    void extractDocument(extractionModel, store, doc);
+    return { document: doc };
+  });
+
   app.get("/activity", async () => ({ activity: store.listActivity() }));
+
+  app.get("/settings", async () => ({
+    inboxDir: config.inboxDir,
+    model: config.model,
+    ollamaBaseUrl: config.ollamaBaseUrl,
+  }));
+
+  // Model and Ollama URL are env-var-only (a running model client can't be
+  // safely hot-swapped mid-request) — inboxDir is the one setting this app
+  // lets you change live, since restarting a filesystem watcher is cheap
+  // and safe. Persisted to disk so it survives the next restart too.
+  const UpdateSettingsBody = z.object({ inboxDir: z.string().min(1) });
+  app.put("/settings", async (req, reply) => {
+    const parsed = UpdateSettingsBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
+    const newDir = parsed.data.inboxDir;
+    persistInboxDir(config.dataDir, newDir);
+    config.inboxDir = newDir;
+    if (onInboxDirChange) await onInboxDirChange(newDir);
+    store.logActivity("system", "settings.updated", `Watched folder changed to "${newDir}"`);
+    return { inboxDir: config.inboxDir, model: config.model, ollamaBaseUrl: config.ollamaBaseUrl };
+  });
 
   return app;
 }
 
 async function main() {
   const store = new Store(dbPath());
-  const app = buildServer(store);
+  const watcherModel = createLocalModel();
+  let watcher: Awaited<ReturnType<typeof startInboxWatcher>> | undefined;
+
+  const onInboxDirChange = async (newDir: string) => {
+    await watcher?.close();
+    watcher = await startInboxWatcher(store, watcherModel, newDir);
+    console.log(`now watching ${newDir} for new documents`);
+  };
+
+  const app = buildServer(store, onInboxDirChange);
   try {
     await app.listen({ port: config.port, host: "127.0.0.1" });
     console.log(`agent-core listening on http://127.0.0.1:${config.port}`);
@@ -99,11 +184,11 @@ async function main() {
     process.exit(1);
   }
 
-  const watcher = await startInboxWatcher(store, createLocalModel(), config.inboxDir);
+  watcher = await startInboxWatcher(store, watcherModel, config.inboxDir);
   console.log(`watching ${config.inboxDir} for new documents`);
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, async () => {
-      await watcher.close();
+      await watcher?.close();
       process.exit(0);
     });
   }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Camera captures land in cache/scans/, get uploaded, then are the
+         app's own temp files to clean up — never the shared gallery. -->
+    <cache-path name="scans" path="scans/" />
+</paths>

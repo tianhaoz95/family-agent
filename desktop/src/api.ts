@@ -42,8 +42,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface Settings {
+  inboxDir: string;
+  model: string;
+  ollamaBaseUrl: string;
+}
+
+// Separate from request() because a file upload must NOT set
+// Content-Type: application/json — the browser needs to set
+// multipart/form-data with its own boundary when given a FormData body.
+async function upload<T>(path: string, file: File): Promise<T> {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+  const res = await fetch(`${BASE_URL}${path}`, { method: "POST", body: formData });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `${res.status} ${res.statusText}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export const api = {
   health: () => request<{ ok: boolean; model: string; inboxDir: string }>("/health"),
+  getSettings: () => request<Settings>("/settings"),
+  updateSettings: (inboxDir: string) =>
+    request<Settings>("/settings", { method: "PUT", body: JSON.stringify({ inboxDir }) }),
   chat: (message: string) => request<{ reply: string }>("/chat", { method: "POST", body: JSON.stringify({ message }) }),
   listTasks: () => request<{ tasks: Task[] }>("/tasks"),
   createTask: (title: string, dueDate?: string) =>
@@ -53,5 +76,6 @@ export const api = {
   listDocuments: () => request<{ documents: Document[] }>("/documents"),
   ingestDocument: (filename: string, text: string) =>
     request<{ document: Document }>("/documents/ingest", { method: "POST", body: JSON.stringify({ filename, text }) }),
+  uploadDocument: (file: File) => upload<{ document: Document }>("/documents/upload", file),
   listActivity: () => request<{ activity: ActivityEntry[] }>("/activity"),
 };

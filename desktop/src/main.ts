@@ -10,6 +10,7 @@ function showView(name: string) {
   if (name === "tasks") void refreshTasks();
   if (name === "documents") void refreshDocuments();
   if (name === "activity") void refreshActivity();
+  if (name === "settings") void refreshSettings();
 }
 
 for (const btn of navButtons) {
@@ -125,6 +126,9 @@ taskForm.addEventListener("submit", async (e) => {
 });
 
 // ---------- documents ----------
+const documentUploadForm = document.getElementById("document-upload-form") as HTMLFormElement;
+const documentFileInput = document.getElementById("document-file-input") as HTMLInputElement;
+const documentUploadStatus = document.getElementById("document-upload-status")!;
 const documentForm = document.getElementById("document-form") as HTMLFormElement;
 const documentFilenameInput = document.getElementById("document-filename") as HTMLInputElement;
 const documentTextInput = document.getElementById("document-text") as HTMLTextAreaElement;
@@ -180,6 +184,17 @@ async function refreshDocuments() {
   renderDocuments(documents);
 }
 
+// Extraction runs asynchronously server-side; poll a few times afterward so
+// the summary/category chip appears without the user needing to switch tabs.
+async function pollForExtraction() {
+  void refreshDocuments();
+  void refreshActivity();
+  for (let i = 0; i < 6; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    await refreshDocuments();
+  }
+}
+
 documentForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const filename = documentFilenameInput.value.trim();
@@ -188,13 +203,26 @@ documentForm.addEventListener("submit", async (e) => {
   await api.ingestDocument(filename, text);
   documentFilenameInput.value = "";
   documentTextInput.value = "";
-  void refreshDocuments();
-  void refreshActivity();
-  // Extraction runs asynchronously server-side; poll a few times so the
-  // summary/category chip appears without the user needing to switch tabs.
-  for (let i = 0; i < 6; i++) {
-    await new Promise((r) => setTimeout(r, 3000));
-    await refreshDocuments();
+  void pollForExtraction();
+});
+
+documentUploadForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const file = documentFileInput.files?.[0];
+  if (!file) return;
+  const submitBtn = documentUploadForm.querySelector("button")!;
+  submitBtn.disabled = true;
+  documentUploadStatus.textContent = `Uploading "${file.name}"…`;
+  try {
+    const { document: doc } = await api.uploadDocument(file);
+    documentUploadStatus.textContent = `Uploaded "${doc.filename}" — extracting…`;
+    documentFileInput.value = "";
+    await pollForExtraction();
+    documentUploadStatus.textContent = "";
+  } catch (err) {
+    documentUploadStatus.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    submitBtn.disabled = false;
   }
 });
 
@@ -228,6 +256,41 @@ async function refreshActivity() {
   const { activity } = await api.listActivity();
   renderActivity(activity);
 }
+
+// ---------- settings ----------
+const settingsModelEl = document.getElementById("settings-model")!;
+const settingsOllamaUrlEl = document.getElementById("settings-ollama-url")!;
+const settingsInboxDirInput = document.getElementById("settings-inbox-dir") as HTMLInputElement;
+const settingsForm = document.getElementById("settings-form") as HTMLFormElement;
+const settingsStatusEl = document.getElementById("settings-status")!;
+
+async function refreshSettings() {
+  try {
+    const settings = await api.getSettings();
+    settingsModelEl.textContent = settings.model;
+    settingsOllamaUrlEl.textContent = settings.ollamaBaseUrl;
+    // Don't clobber text the user is mid-typing.
+    if (document.activeElement !== settingsInboxDirInput) {
+      settingsInboxDirInput.value = settings.inboxDir;
+    }
+  } catch (err) {
+    settingsStatusEl.textContent = `Could not load settings: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+settingsForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const newDir = settingsInboxDirInput.value.trim();
+  if (!newDir) return;
+  settingsStatusEl.textContent = "Saving…";
+  try {
+    const updated = await api.updateSettings(newDir);
+    settingsStatusEl.textContent = `Saved — now watching ${updated.inboxDir}`;
+    void refreshStatus();
+  } catch (err) {
+    settingsStatusEl.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
 
 // ---------- boot ----------
 void refreshStatus();

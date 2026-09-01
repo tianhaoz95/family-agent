@@ -5,7 +5,46 @@
 # the app on it. Mirrors the manual steps used to verify this app during
 # development — see docs/DECISIONS.md ("Android emulator: got real device
 # verification working") for why KVM access mattered here.
+#
+# Usage: ./scripts/start-android.sh [--memory MB]
+#   --memory, -m   RAM (in MB) given to a newly-booted emulator. Ignored if
+#                  an emulator is already running (its memory was fixed at
+#                  its own boot time). Default 2048; also settable via
+#                  FAMILY_AGENT_EMULATOR_MEMORY.
 set -euo pipefail
+
+MEMORY_MB="${FAMILY_AGENT_EMULATOR_MEMORY:-2048}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m|--memory)
+      MEMORY_MB="${2:-}"
+      shift 2
+      ;;
+    --memory=*)
+      MEMORY_MB="${1#*=}"
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: $0 [--memory MB]"
+      echo "  --memory, -m   RAM in MB for a newly-booted emulator (default 2048)."
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      echo "Usage: $0 [--memory MB]" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if ! [[ "$MEMORY_MB" =~ ^[0-9]+$ ]]; then
+  echo "!! --memory must be a plain number of MB, got: '$MEMORY_MB'" >&2
+  exit 1
+fi
+if [ "$MEMORY_MB" -lt 1024 ]; then
+  echo "==> Warning: ${MEMORY_MB}MB is very low for an emulator — it may fail to boot or run poorly." >&2
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -42,7 +81,7 @@ echo "==> Checking for a running emulator ..."
 SERIAL="$(running_emulator || true)"
 
 if [ -n "$SERIAL" ]; then
-  echo "==> Using already-running emulator: $SERIAL"
+  echo "==> Using already-running emulator: $SERIAL (--memory is ignored for an already-running emulator)"
 else
   echo "==> No emulator running."
 
@@ -64,12 +103,12 @@ else
   # what this script was verified against during development, since the dev
   # sandbox had no display of its own (see docs/DECISIONS.md).
   if [ "${FAMILY_AGENT_EMULATOR_HEADLESS:-0}" = "1" ]; then
-    echo "==> Booting emulator '$AVD_NAME' (headless, FAMILY_AGENT_EMULATOR_HEADLESS=1) ..."
-    nohup emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
+    echo "==> Booting emulator '$AVD_NAME' (headless, FAMILY_AGENT_EMULATOR_HEADLESS=1, ${MEMORY_MB}MB RAM) ..."
+    nohup emulator -avd "$AVD_NAME" -memory "$MEMORY_MB" -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
       >/tmp/family-agent-emulator.log 2>&1 &
   else
-    echo "==> Booting emulator '$AVD_NAME' (window should appear shortly) ..."
-    nohup emulator -avd "$AVD_NAME" -no-boot-anim -gpu auto \
+    echo "==> Booting emulator '$AVD_NAME' (${MEMORY_MB}MB RAM, window should appear shortly) ..."
+    nohup emulator -avd "$AVD_NAME" -memory "$MEMORY_MB" -no-boot-anim -gpu auto \
       >/tmp/family-agent-emulator.log 2>&1 &
   fi
   disown

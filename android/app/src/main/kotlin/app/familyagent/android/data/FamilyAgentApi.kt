@@ -6,6 +6,8 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -89,4 +91,15 @@ class FamilyAgentApi(
         ).document
 
     suspend fun listActivity(): List<ActivityEntry> = json.decodeFromString<ActivityResponse>(get("/activity")).activity
+
+    /** Uploads a PDF, photo, or camera scan — the actual "scan a document" path. */
+    suspend fun uploadDocument(filename: String, bytes: ByteArray, mimeType: String?): Document =
+        withContext(Dispatchers.IO) {
+            val body = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", filename, bytes.toRequestBody(mimeType?.toMediaTypeOrNull()))
+                .build()
+            val request = Request.Builder().url("$baseUrl/documents/upload").post(body).build()
+            json.decodeFromString<DocumentResponse>(execute(request)).document
+        }
 }
