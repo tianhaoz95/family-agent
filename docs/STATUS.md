@@ -77,6 +77,21 @@ unattended. Full reasoning for every cut is in `docs/DECISIONS.md`.
 
 ## Running it yourself
 
+**Easiest path** — two scripts, run from the repo root, each does its own
+readiness checks and prints a clear error instead of failing halfway
+through:
+
+```bash
+./scripts/start-desktop.sh   # checks Ollama/model, then launches the Tauri app
+./scripts/start-android.sh   # detects a running emulator or boots+creates one,
+                              # then builds, installs, and launches the app on it
+```
+
+`start-android.sh` leaves the emulator running afterward — safe to re-run,
+it reuses whatever's already up rather than starting a second one.
+
+**Manual path**, if you'd rather run each piece yourself:
+
 ```bash
 # 1. Ollama must be running locally with gemma4:e2b pulled
 ollama serve &
