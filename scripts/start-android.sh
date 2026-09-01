@@ -58,9 +58,20 @@ else
     echo "no" | avdmanager create avd -n "$AVD_NAME" -k "$SYSTEM_IMAGE" -d pixel_6
   fi
 
-  echo "==> Booting emulator '$AVD_NAME' (headless) ..."
-  nohup emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
-    >/tmp/family-agent-emulator.log 2>&1 &
+  # Visible window by default — you're running this to use the app, not just
+  # to verify it boots. Set FAMILY_AGENT_EMULATOR_HEADLESS=1 for a headless
+  # instance instead (e.g. CI, or a machine with no display) — that mode is
+  # what this script was verified against during development, since the dev
+  # sandbox had no display of its own (see docs/DECISIONS.md).
+  if [ "${FAMILY_AGENT_EMULATOR_HEADLESS:-0}" = "1" ]; then
+    echo "==> Booting emulator '$AVD_NAME' (headless, FAMILY_AGENT_EMULATOR_HEADLESS=1) ..."
+    nohup emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
+      >/tmp/family-agent-emulator.log 2>&1 &
+  else
+    echo "==> Booting emulator '$AVD_NAME' (window should appear shortly) ..."
+    nohup emulator -avd "$AVD_NAME" -no-boot-anim -gpu auto \
+      >/tmp/family-agent-emulator.log 2>&1 &
+  fi
   disown
 
   adb wait-for-device
