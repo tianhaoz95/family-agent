@@ -371,13 +371,13 @@ button[type="submit"]:disabled {
 .document-row-head {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 0.6rem;
+  gap: 0.5rem;
 }
 
 .document-filename {
   font-weight: 600;
   font-size: 0.92rem;
+  flex: 1;
 }
 
 .category-chip {
@@ -390,6 +390,24 @@ button[type="submit"]:disabled {
   padding: 0.15rem 0.5rem;
   border-radius: 999px;
   white-space: nowrap;
+}
+
+/* Reuses the on-device/networked signal language from the architecture
+   notes — a document tagged "watched folder" came in through the local
+   filesystem, not something typed into the app. */
+.tag {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.tag-local {
+  color: var(--local);
+  background: var(--local-soft);
 }
 
 .document-summary {

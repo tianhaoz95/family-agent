@@ -3,11 +3,15 @@
 Built autonomously in one unsupervised session per instruction ("act
 autonomously, don't ask me anything, I'll be back in 6 hours"). This is the
 entry point for reviewing it — human or AI. Read `docs/DECISIONS.md` next for
-every judgment call made along the way (most importantly: the requested test
-model, gemma3n:e2b, doesn't work for this architecture and was swapped —
-that's not a silent substitution, it's explained there with the exact error).
-`docs/BUILD_LOG.md` has the blow-by-blow of what broke and how it was fixed,
-in case anything below looks surprising.
+every judgment call made along the way — most importantly the model story,
+which took two passes: I initially misread "gemma 4 e2b" as a model I
+recognized from before my January 2026 knowledge cutoff (gemma3n:e2b) rather
+than the real, newer Gemma 4 (released April 2026, after my cutoff), tested
+against the wrong model, and drew the wrong conclusion from that. Corrected
+after the user pushed back: the actual default is now `gemma4:e2b`, verified
+by hand to support tool-calling correctly. Full story, not glossed over, in
+DECISIONS.md. `docs/BUILD_LOG.md` has the blow-by-blow of everything else
+that broke and how it was fixed.
 
 ## What's here
 
@@ -25,12 +29,15 @@ docs/         This file, DECISIONS.md, BUILD_LOG.md.
 
 ## What actually works, verified by hand
 
-- **agent-core**: 15/15 tests pass (13 unit, 2 against the real local
-  model). Full HTTP flow smoke-tested manually: create a task via `/chat`
-  in natural language, ingest a document and watch it get classified with a
-  category/summary/dates within a few seconds, list activity and see the
-  real audit trail. `qwen2.5:3b` via Ollama, running locally, nothing
-  leaves the machine.
+- **agent-core**: 25/25 tests pass (mix of unit tests and live-model
+  integration tests against the real local model). Full HTTP flow
+  smoke-tested manually: create a task via `/chat` in natural language,
+  drop a `.txt` file in the watched inbox folder and watch it get
+  classified with a category/summary/dates within seconds, ask "what
+  documents do I have?" and get a correct answer citing the real file,
+  list activity and see the real audit trail. `gemma4:e2b` via Ollama,
+  running locally, nothing leaves the machine. It's slow — a full planner
+  turn can take up to ~110s on this machine's CPU — see DECISIONS.md.
 - **desktop**: builds clean, launches, spawns agent-core correctly, survives
   a hard-kill of the parent process without orphaning the Node sidecar
   (this was a real bug, found and fixed — see BUILD_LOG). The UI has *not*
@@ -59,9 +66,9 @@ unattended. Full reasoning for every cut is in `docs/DECISIONS.md`.
 ## Running it yourself
 
 ```bash
-# 1. Ollama must be running locally with qwen2.5:3b pulled
+# 1. Ollama must be running locally with gemma4:e2b pulled
 ollama serve &
-ollama pull qwen2.5:3b
+ollama pull gemma4:e2b
 
 # 2. agent-core (build once, or `npm run dev` for live reload)
 cd agent-core && npm install && npm run build
@@ -83,7 +90,7 @@ export ANDROID_HOME=$(pwd)/../.toolchains/android-sdk
 Tests:
 
 ```bash
-cd agent-core && npm test          # 15 tests, ~20-25s, needs Ollama+qwen2.5:3b running
+npm test    # from repo root: runs agent-core (25 tests, ~1-3 min, needs Ollama+gemma4:e2b) then desktop (6 tests)
 cd android && ./gradlew testDebugUnitTest   # 5 tests, no device needed
 ```
 
@@ -99,15 +106,12 @@ second machine.
 
 ## Suggested next steps, roughly in order
 
-1. **Look at the desktop UI** — this is the one thing that was built but
-   never actually seen.
-2. **Set up an Android emulator** (or sideload the APK to a real phone) and
-   confirm the app actually renders and talks to a desktop instance over
-   the LAN.
-3. Decide whether `qwen2.5:3b` is the right permanent default, or whether
-   it's worth trying a tool-calling-capable Gemma variant if/when one
-   exists, or a different small model entirely.
-4. Pick up the deferred pieces in whatever order matters most: Tailscale
+1. Decide whether `gemma4:e2b`'s latency (~110s/turn on this machine's CPU)
+   is acceptable for real use, or whether a faster model is worth trading
+   away "uses exactly the requested model" for. Both are one env var
+   (`FAMILY_AGENT_MODEL`) apart — no code change needed either way.
+2. Pick up the deferred pieces in whatever order matters most: Tailscale
    transport, the sandboxed builder/scratch-tool agent (this one deserves a
    supervised build, not an autonomous one, given what it can do), the
-   compute mesh, per-family-member access control.
+   compute mesh, per-family-member access control, OCR for non-text
+   documents dropped in the inbox folder.

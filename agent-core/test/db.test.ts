@@ -34,6 +34,7 @@ describe("Store", () => {
   it("creates a document and later attaches an extraction", () => {
     const doc = store.createDocument({ filename: "bill.txt", rawText: "Due $120 on 2026-09-15" });
     expect(doc.extracted).toBeNull();
+    expect(doc.sourcePath).toBeNull();
 
     const updated = store.updateDocumentExtraction(doc.id, {
       category: "bill",
@@ -43,6 +44,12 @@ describe("Store", () => {
 
     expect(updated?.extracted).toMatchObject({ category: "bill" });
     expect(store.getDocument(doc.id)?.extracted).toMatchObject({ category: "bill" });
+  });
+
+  it("finds a document by its watched-folder source path, dedupes on it", () => {
+    const doc = store.createDocument({ filename: "a.txt", rawText: "x", sourcePath: "/inbox/a.txt" });
+    expect(store.findDocumentBySourcePath("/inbox/a.txt")?.id).toBe(doc.id);
+    expect(store.findDocumentBySourcePath("/inbox/missing.txt")).toBeUndefined();
   });
 
   it("logs activity for every mutating call", () => {

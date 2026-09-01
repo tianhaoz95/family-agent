@@ -19,12 +19,15 @@ for (const btn of navButtons) {
 // ---------- status pill ----------
 const statusPill = document.getElementById("status-pill")!;
 const statusText = document.getElementById("status-text")!;
+const inboxPathEl = document.getElementById("inbox-path")!;
 
 async function refreshStatus() {
   try {
     const health = await api.health();
     statusPill.className = "status-pill status-ok";
     statusText.textContent = `local · ${health.model}`;
+    inboxPathEl.textContent = health.inboxDir;
+    inboxPathEl.title = health.inboxDir;
   } catch {
     statusPill.className = "status-pill status-error";
     statusText.textContent = "agent-core unreachable";
@@ -143,6 +146,13 @@ function renderDocuments(docs: Document[]) {
     name.className = "document-filename";
     name.textContent = doc.filename;
     head.appendChild(name);
+    if (doc.sourcePath) {
+      const tag = document.createElement("span");
+      tag.className = "tag tag-local";
+      tag.textContent = "watched folder";
+      tag.title = doc.sourcePath;
+      head.appendChild(tag);
+    }
     if (doc.extracted?.category) {
       const chip = document.createElement("span");
       chip.className = "category-chip";

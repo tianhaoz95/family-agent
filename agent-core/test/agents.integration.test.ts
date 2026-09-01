@@ -4,8 +4,9 @@ import { buildServer } from "../src/server.js";
 import { Store } from "../src/db.js";
 import { config } from "../src/config.js";
 
-// Real end-to-end tests against the local Ollama model (gemma3n:e2b by
-// default). These are slow (small local models on CPU) and are skipped
+// Real end-to-end tests against the local Ollama model (gemma4:e2b by
+// default). These are slow — gemma4:e2b is a larger multimodal model and a
+// full planner turn on CPU has taken ~110s in testing — and are skipped
 // automatically if the model isn't reachable, so the fast unit tests still
 // pass in an environment without Ollama set up. See docs/BUILD_LOG.md for
 // the last recorded run against a live model.
@@ -46,7 +47,7 @@ maybe("family agent (live model: " + config.model + ")", () => {
       const tasks = store.listTasks();
       expect(tasks.length).toBeGreaterThanOrEqual(1);
     },
-    120000
+    240000
   );
 
   it(
@@ -63,20 +64,47 @@ maybe("family agent (live model: " + config.model + ")", () => {
       expect(ingest.statusCode).toBe(200);
       const docId = ingest.json().document.id;
 
-      // Extraction runs asynchronously (see server.ts); poll briefly for it.
+      // Extraction runs asynchronously (see server.ts); poll for it.
       let extracted: unknown = null;
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < 60; i++) {
         const doc = store.getDocument(docId);
         if (doc?.extracted) {
           extracted = doc.extracted;
           break;
         }
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 3000));
       }
 
       expect(extracted).not.toBeNull();
     },
-    120000
+    240000
+  );
+
+  it(
+    "answers 'what documents do I have' correctly once one exists",
+    async () => {
+      // Regression test: this exact prompt returned "I found no documents"
+      // against a real ingested document before list_documents existed.
+      const ingest = await app.inject({
+        method: "POST",
+        url: "/documents/ingest",
+        payload: { filename: "insurance-note.txt", text: "Auto insurance renews 2026-12-01, premium $410." },
+      });
+      const docId = ingest.json().document.id;
+      for (let i = 0; i < 60; i++) {
+        if (store.getDocument(docId)?.extracted) break;
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "What documents do I have?" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().reply.toLowerCase()).toContain("insurance-note");
+    },
+    240000
   );
 });
 

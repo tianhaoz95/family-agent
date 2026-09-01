@@ -32,6 +32,8 @@ export interface DocumentRecord {
   rawText: string;
   extracted: Record<string, unknown> | null;
   createdAt: string;
+  /** Absolute path if this came from the watched inbox folder; null for API-pasted documents. */
+  sourcePath: string | null;
 }
 
 export interface ActivityRecord {
@@ -58,7 +60,8 @@ CREATE TABLE IF NOT EXISTS documents (
   filename TEXT NOT NULL,
   raw_text TEXT NOT NULL,
   extracted TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  source_path TEXT UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS activity (
@@ -164,6 +167,7 @@ export class Store {
     filename: string;
     rawText: string;
     extracted?: Record<string, unknown> | null;
+    sourcePath?: string | null;
   }): DocumentRecord {
     const rec: DocumentRecord = {
       id: shortId(),
@@ -171,12 +175,31 @@ export class Store {
       rawText: input.rawText,
       extracted: input.extracted ?? null,
       createdAt: new Date().toISOString(),
+      sourcePath: input.sourcePath ?? null,
     };
     this.db
-      .prepare("INSERT INTO documents (id, filename, raw_text, extracted, created_at) VALUES (?, ?, ?, ?, ?)")
-      .run(rec.id, rec.filename, rec.rawText, rec.extracted ? JSON.stringify(rec.extracted) : null, rec.createdAt);
-    this.logActivity("document-agent", "document.ingested", `Ingested "${rec.filename}"`);
+      .prepare(
+        "INSERT INTO documents (id, filename, raw_text, extracted, created_at, source_path) VALUES (?, ?, ?, ?, ?, ?)"
+      )
+      .run(
+        rec.id,
+        rec.filename,
+        rec.rawText,
+        rec.extracted ? JSON.stringify(rec.extracted) : null,
+        rec.createdAt,
+        rec.sourcePath
+      );
+    this.logActivity(
+      "document-agent",
+      "document.ingested",
+      rec.sourcePath ? `Ingested "${rec.filename}" from watched folder` : `Ingested "${rec.filename}"`
+    );
     return rec;
+  }
+
+  findDocumentBySourcePath(sourcePath: string): DocumentRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM documents WHERE source_path = ?").get(sourcePath) as any;
+    return row ? rowToDocument(row) : undefined;
   }
 
   updateDocumentExtraction(id: string, extracted: Record<string, unknown>): DocumentRecord | undefined {
@@ -218,5 +241,6 @@ function rowToDocument(r: any): DocumentRecord {
     rawText: r.raw_text,
     extracted: r.extracted ? JSON.parse(r.extracted) : null,
     createdAt: r.created_at,
+    sourcePath: r.source_path ?? null,
   };
 }

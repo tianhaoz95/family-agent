@@ -5,29 +5,48 @@ instruction. Every place where I deviated from the brainstormed architecture,
 or made a call the user didn't specify, is recorded here rather than buried
 in commit messages. Read this before trusting any behavior that looks odd.
 
-## Model: gemma3n:e2b → qwen2.5:3b
+## Model: what was requested vs. what shipped, and a real mistake in between
 
-**Requested:** gemma3n:e2b, "for testing purposes."
-**Shipped default:** qwen2.5:3b (`FAMILY_AGENT_MODEL` env var overrides it).
+**Requested:** "the small gemma 4 e2b," for testing purposes.
+**Shipped default (final, correct):** `gemma4:e2b`.
 
-Confirmed by hand, not assumed: Ollama rejects gemma3n:e2b for tool-calling
-outright —
+This took two passes to get right, and the middle pass was a genuine mistake
+worth being explicit about rather than glossing over.
+
+**Pass 1 (wrong):** I don't have training data past January 2026. Gemma 4 was
+released in April 2026 — after my knowledge cutoff — so "gemma 4 e2b" didn't
+match anything I recognized, and I silently "corrected" it to gemma3n:e2b (a
+real model I did know, from the Gemma 3 line, which also has an E2B variant).
+I should have flagged the uncertainty instead of guessing. That substitution
+was wrong on its own terms, and it also broke: Ollama rejects gemma3n:e2b for
+tool-calling outright —
 
 ```
 MiddlewareError [ResponseError]: registry.ollama.ai/library/gemma3n:e2b does not support tools
 ```
 
-This app's entire agent architecture (deepagents' planner → subagent
-delegation → tool calls) depends on function-calling support. Gemma 3n isn't
-in Ollama's tool-calling-capable set at all; this isn't a size issue, it's a
-template/capability gap. qwen2.5:3b is the smallest widely-used model
-confirmed to support tools reliably in Ollama, and was pulled and used for
-every test in this build (`ollama pull qwen2.5:3b`, ~2GB).
+I drew the wrong general conclusion from that error — treating it as "this
+class of Gemma model doesn't do tool-calling" — and shipped qwen2.5:3b as the
+default instead, with docs asserting the substitution was necessary. The user
+correctly pushed back on both the model swap and the tool-calling claim.
 
-gemma3n:e2b is still pulled locally if you want to experiment with it under a
-different, non-tool-calling prompting strategy (plain ReAct-style text
-parsing) — that would be a real rearchitecture of the agent loop, not a
-config change, so it wasn't attempted here.
+**What's actually true:** tool-calling support is a property of the specific
+model + how Ollama's serving layer templates it, not something deepagents or
+LangChain provide or gate. `ChatOllama` just forwards a `tools` field to
+Ollama's `/api/chat`; Ollama accepts or rejects it per-model. gemma3n:e2b's
+template doesn't support that; gemma4:e2b's does — confirmed by hand, not
+assumed, the same way the original rejection was confirmed. Once pulled
+(`ollama pull gemma4:e2b`, ~7.2GB) and wired in, it correctly delegated to
+subagents and completed multi-step tool-calling tasks in testing (see
+BUILD_LOG.md for the transcript).
+
+**Trade-off worth knowing about:** gemma4:e2b is meaningfully slower than
+qwen2.5:3b was on this machine's CPU — a full planner turn has taken up to
+~110 seconds in testing, vs. a few seconds for qwen2.5:3b. That's the real
+cost of using the requested model over a smaller one; test timeouts in this
+repo are sized for it (see `test/agents.integration.test.ts`). If snappier
+responses matter more than using this exact model, qwen2.5:3b (or another
+small tool-calling model) is a one-line `FAMILY_AGENT_MODEL` env var away.
 
 ## Two subagents shipped, not four
 
@@ -96,6 +115,53 @@ One retry is built into both paths — `askFamilyAgent` and
 `extractDocument` — because a 3B local model on CPU occasionally returns an
 empty final message with no tool call on the first attempt. This was
 observed directly (see docs/BUILD_LOG.md), not added defensively.
+
+## The planner confused "documents" with its own filesystem
+
+`createDeepAgent` bakes in generic `ls`/`read_file`/`write_file`/`edit_file`
+tools for the agent's own working-memory filesystem (a deepagents feature,
+unrelated to this app's document records). Asked "what documents do I have?"
+against a real document that had already been ingested and extracted, the
+planner called `ls("/")` on its own empty scratch filesystem, got nothing
+back, and confidently told the user there were no documents — never
+delegating to document-agent at all. Reproduced identically with both
+qwen2.5:3b and gemma4:e2b, so this isn't a model-quality fluke; it's a
+genuine naming collision between "documents" (this app's domain concept) and
+"files" (deepagents' generic working-memory concept), and small models don't
+reliably resolve it from prompt wording alone — a stronger, more explicit
+system prompt on its own did not fix it.
+
+What actually fixed it, in combination:
+
+1. **`permissions: [{ operations: ["read", "write"], paths: ["/**"], mode:
+   "deny" }]`** on the top-level agent — denies the generic filesystem tools
+   any access at all. This didn't stop the planner from *trying* `ls`, but it
+   stopped it from getting a plausible-looking (wrong) answer from it.
+2. **`middleware: [createFilesystemMiddleware({ tools: ["read_file"] })]`** —
+   overrides deepagents' default filesystem middleware to expose only
+   `read_file`, removing `ls`/`write_file`/`edit_file` from the tool list
+   entirely so the model can't reach for them as an option. (`read_file` has
+   to stay — deepagents requires it for internal large-result-recovery
+   flows.) This is what actually stopped the wrong tool call.
+3. **A worked example in the system prompt** — after step 2, the planner
+   stopped calling `ls` but also stopped calling anything, answering "I don't
+   have access to a list of your documents" directly. It needed an explicit
+   example of the exact `task` tool call (`subagent_type: "document-agent"`,
+   a description) for this specific phrasing before it reliably delegated.
+   Abstract instructions ("delegate document questions to document-agent")
+   were not enough on their own; a concrete example was.
+
+Also added along the way: `document-agent` had no way to *answer* "what
+documents do I have" even once reached — its only tools were `get_document`
+(needs an id you'd have to already know) and `save_extraction`. Added
+`list_documents` (see `agent-core/src/agents/documentTools.ts`).
+
+Verified with 3 repeated runs against gemma4:e2b after all three fixes, plus
+a regression test (`agents.integration.test.ts` — "answers 'what documents do
+I have' correctly once one exists") that ingests a document, waits for
+extraction, and asserts the chat reply actually names it. Worth watching for
+this same collision pattern if the tool surface grows — "tasks" vs. some
+future generic concept, for instance.
 
 ## CORS opened, not restricted
 

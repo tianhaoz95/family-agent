@@ -22,7 +22,8 @@ describe("HTTP API", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.ok).toBe(true);
-    expect(body.model).toBe("qwen2.5:3b");
+    expect(body.model).toBe("gemma4:e2b");
+    expect(typeof body.inboxDir).toBe("string");
   });
 
   it("POST /tasks creates a task, GET /tasks lists it", async () => {

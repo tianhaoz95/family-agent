@@ -19,6 +19,7 @@ export interface Document {
   rawText: string;
   extracted: { category?: string; summary?: string; importantDates?: string[] } | null;
   createdAt: string;
+  sourcePath: string | null;
 }
 
 export interface ActivityEntry {
@@ -42,7 +43,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => request<{ ok: boolean; model: string }>("/health"),
+  health: () => request<{ ok: boolean; model: string; inboxDir: string }>("/health"),
   chat: (message: string) => request<{ reply: string }>("/chat", { method: "POST", body: JSON.stringify({ message }) }),
   listTasks: () => request<{ tasks: Task[] }>("/tasks"),
   createTask: (title: string, dueDate?: string) =>

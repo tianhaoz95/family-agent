@@ -6,6 +6,7 @@ import { config, dbPath } from "./config.js";
 import { buildFamilyAgent, askFamilyAgent } from "./agents/index.js";
 import { extractDocument } from "./agents/extraction.js";
 import { createLocalModel } from "./model.js";
+import { startInboxWatcher } from "./inboxWatcher.js";
 
 export function buildServer(store: Store = new Store(dbPath())) {
   const app = Fastify({ logger: false });
@@ -21,6 +22,7 @@ export function buildServer(store: Store = new Store(dbPath())) {
     ok: true,
     model: config.model,
     ollamaBaseUrl: config.ollamaBaseUrl,
+    inboxDir: config.inboxDir,
   }));
 
   const ChatBody = z.object({ message: z.string().min(1) });
@@ -87,13 +89,23 @@ export function buildServer(store: Store = new Store(dbPath())) {
 }
 
 async function main() {
-  const app = buildServer();
+  const store = new Store(dbPath());
+  const app = buildServer(store);
   try {
     await app.listen({ port: config.port, host: "127.0.0.1" });
     console.log(`agent-core listening on http://127.0.0.1:${config.port}`);
   } catch (err) {
     console.error(err);
     process.exit(1);
+  }
+
+  const watcher = await startInboxWatcher(store, createLocalModel(), config.inboxDir);
+  console.log(`watching ${config.inboxDir} for new documents`);
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.on(sig, async () => {
+      await watcher.close();
+      process.exit(0);
+    });
   }
 }
 

@@ -8,7 +8,7 @@
     "desktop"
   ],
   "scripts": {
-    "test": "npm run test --workspace=@family-agent/agent-core",
+    "test": "npm run test --workspace=@family-agent/agent-core && npm run test --workspace=desktop",
     "dev:agent-core": "npm run dev --workspace=@family-agent/agent-core",
     "dev:desktop": "npm run tauri:dev --workspace=desktop"
   }

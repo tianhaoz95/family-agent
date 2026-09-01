@@ -34,8 +34,11 @@ deviation, see `docs/DECISIONS.md` — this file is the *what happened*.
   same-named unrelated package, by reading its bundled type definitions
   (`createDeepAgent`, `subagents`, skills support, matching the "skill"
   concept from the architecture notes almost exactly).
-- First live-model run against gemma3n:e2b failed outright — see
-  `docs/DECISIONS.md` for the full error and the qwen2.5:3b swap.
+- First live-model run against gemma3n:e2b failed outright. That model choice
+  was itself a mistake (I misread "gemma 4 e2b" as a model I recognized from
+  before my training cutoff rather than the real, newer Gemma 4) — corrected
+  in a later pass once the user caught it. See "Correcting the model" below
+  and `docs/DECISIONS.md` for the full story.
 - After the swap, the first *document extraction* run still failed. Root
   cause found by direct inspection (dumping `result.messages` from a raw
   `agent.invoke()` call, not guessed): the planner's `task` tool call carried
@@ -122,14 +125,69 @@ deviation, see `docs/DECISIONS.md` — this file is the *what happened*.
   app has never actually run — only compiled and unit-tested. See
   `docs/DECISIONS.md`.
 
+## Polish pass (after the user asked for continued iteration)
+
+- **Correcting the model.** The user pointed out two things: tool-calling is
+  not a "deepagents capability," and the requested model was "gemma 4 e2b,"
+  not gemma3n. Both correct. Verified gemma4:e2b actually exists (it does —
+  released April 2026, after my training cutoff, which is why I didn't
+  recognize the name), confirmed it's pulled as `gemma4:e2b` in Ollama's
+  library, pulled it (7.2GB), and tested it directly against a raw
+  `agent.invoke()` call before trusting it: it correctly called the `task`
+  delegation tool with the right subagent and arguments, and the resulting
+  task landed in the database with the right title and due date. One
+  real cost: ~110s for that single turn on this machine's CPU, vs. a few
+  seconds for qwen2.5:3b. Swapped the default, bumped test timeouts
+  accordingly (120s → 240s on the two slowest integration tests), reran the
+  full suite: 19/19 passing.
+- **Folder-watching document ingestion.** Added `chokidar`-based watching of
+  `config.inboxDir` (defaults under `dataDir`, so overriding
+  `FAMILY_AGENT_DATA_DIR` moves both together). `.txt`/`.md` files get
+  ingested automatically; other extensions are logged as skipped, not
+  silently dropped. Dedup on `source_path` (new DB column) so restarting the
+  watcher doesn't reprocess files already seen. Caught and fixed a real bug
+  while testing this: the default `inboxDir` was hardcoded relative to the
+  package directory instead of derived from `dataDir`, so a custom data dir
+  silently didn't move the inbox with it — fixed before it shipped.
+- **Found a real conversational bug via manual testing, not by inspection:**
+  asked the running app "What documents do I have?" after ingesting a real
+  document, got back "I found no documents in the current location" — wrong.
+  Root cause, found by dumping the raw message trace: the planner has
+  deepagents' built-in generic filesystem tools (`ls`, `read_file`, etc. —
+  unrelated to this app's documents) and called `ls("/")` on its own empty
+  scratch space instead of delegating to document-agent. Fixed with a
+  combination of denied filesystem permissions, a middleware override that
+  removes `ls`/`write_file`/`edit_file` from the planner's tool list
+  entirely, and — the part that actually got the planner delegating
+  correctly — a worked example in the system prompt, since abstract
+  instructions alone didn't change its behavior. Full mechanism in
+  DECISIONS.md. Also found and fixed a second problem while chasing this:
+  document-agent itself had no `list_documents` tool, so even correct
+  delegation would have failed to answer the question. Verified the fix
+  with 3 repeated live-model runs (consistent) plus a new regression test.
+  Full suite after all three fixes: 25/25 passing.
+- **Desktop and Android test coverage gaps closed.** Neither had a
+  `tsconfig.json`/test setup before this pass — `desktop/` frontend TS was
+  never actually type-checked (Vite's esbuild transpiles without checking).
+  Added `desktop/tsconfig.json`, 6 vitest unit tests for `src/api.ts`
+  (request formatting, error-message extraction on failure responses),
+  wired into the root `npm test`.
+- **Android emulator set up** with KVM hardware acceleration — `/dev/kvm`
+  wasn't accessible via the user's nominal group membership (`groups` didn't
+  list `kvm`), but a direct file-descriptor open succeeded, revealing an
+  explicit ACL grant `getfacl` confirmed. This made a real emulator (not
+  just compile-and-unit-test) possible without needing sudo to fix group
+  membership. System image `system-images;android-34;google_apis;x86_64`
+  installed alongside the `emulator` package.
+
 ## Final state
 
-- 15/15 agent-core tests passing (13 unit, 2 live-model integration).
-- 5/5 Android unit tests passing.
-- Desktop: Rust build clean, frontend build clean, full HTTP-level
-  end-to-end flow manually verified against the live model; GUI not
-  visually confirmed (tooling limitation in this environment, not a known
-  defect).
-- Android: builds and unit-tests clean, produces a real APK; never run on a
-  device or emulator.
+- 25/25 agent-core tests passing (live-model tests against gemma4:e2b).
+- 6/6 desktop frontend tests passing; Rust build clean, frontend build
+  clean, full HTTP-level and folder-watching end-to-end flows manually
+  verified against the live model.
+- 5/5 Android unit tests passing, real APK produced.
 - iOS: not attempted, per explicit instruction.
+- Still open at this point in the session: visual confirmation of both the
+  desktop UI and the Android app on an actual running emulator — in
+  progress, see the rest of this log / STATUS.md for the current state.

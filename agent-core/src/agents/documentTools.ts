@@ -48,5 +48,26 @@ export function makeDocumentTools(store: Store) {
     }
   );
 
-  return [getDocument, saveExtraction];
+  const listDocuments = tool(
+    async () => {
+      const docs = store.listDocuments();
+      if (docs.length === 0) return "No documents have been ingested yet.";
+      return docs
+        .map((d) => {
+          const status = d.extracted
+            ? `${d.extracted.category ?? "uncategorized"} — ${d.extracted.summary ?? ""}`
+            : "still being processed";
+          return `- ${d.filename} (id: ${d.id}): ${status}`;
+        })
+        .join("\n");
+    },
+    {
+      name: "list_documents",
+      description:
+        "List every document that has been ingested, with its id, category, and summary if extraction has finished. Use this before answering any question about what documents exist.",
+      schema: z.object({}),
+    }
+  );
+
+  return [getDocument, listDocuments, saveExtraction];
 }

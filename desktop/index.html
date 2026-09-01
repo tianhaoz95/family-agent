@@ -69,7 +69,10 @@
         <section id="view-documents" class="view" aria-label="Documents">
           <div class="view-header">
             <h1>Documents</h1>
-            <p class="view-sub">Paste text to simulate a dropped-in file (folder watching is future work).</p>
+            <p class="view-sub">
+              Drop a <code>.txt</code> or <code>.md</code> file into
+              <code id="inbox-path">the watched folder</code>, or paste text below.
+            </p>
           </div>
           <form id="document-form" class="inline-form inline-form-stacked">
             <input id="document-filename" type="text" placeholder="Filename, e.g. electric-bill.txt" required />
