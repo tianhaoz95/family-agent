@@ -1,0 +1,15 @@
+{
+  "name": "family-agent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first agentic app for family document, schedule, and misc-task organization.",
+  "workspaces": [
+    "agent-core",
+    "desktop"
+  ],
+  "scripts": {
+    "test": "npm run test --workspace=@family-agent/agent-core",
+    "dev:agent-core": "npm run dev --workspace=@family-agent/agent-core",
+    "dev:desktop": "npm run tauri:dev --workspace=desktop"
+  }
+}

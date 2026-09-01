@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Family Agent</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside class="rail">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Family&nbsp;Agent</span>
+        </div>
+        <nav class="nav" aria-label="Views">
+          <button class="nav-item is-active" data-view="chat" type="button">
+            <span class="nav-label">Chat</span>
+          </button>
+          <button class="nav-item" data-view="tasks" type="button">
+            <span class="nav-label">Tasks</span>
+          </button>
+          <button class="nav-item" data-view="documents" type="button">
+            <span class="nav-label">Documents</span>
+          </button>
+          <button class="nav-item" data-view="activity" type="button">
+            <span class="nav-label">Activity</span>
+          </button>
+        </nav>
+        <div class="rail-footer">
+          <div id="status-pill" class="status-pill status-pending">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="status-text">connecting…</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section id="view-chat" class="view is-active" aria-label="Chat">
+          <div class="view-header">
+            <h1>Chat</h1>
+            <p class="view-sub">Ask about tasks, documents, or anything else — routed locally.</p>
+          </div>
+          <div id="chat-log" class="chat-log" role="log" aria-live="polite"></div>
+          <form id="chat-form" class="chat-form">
+            <textarea
+              id="chat-input"
+              placeholder="e.g. Remind me to renew the car registration by Nov 1"
+              rows="1"
+              required
+            ></textarea>
+            <button type="submit">Send</button>
+          </form>
+        </section>
+
+        <section id="view-tasks" class="view" aria-label="Tasks">
+          <div class="view-header">
+            <h1>Tasks</h1>
+            <p class="view-sub">Everything the family agent is tracking for you.</p>
+          </div>
+          <form id="task-form" class="inline-form">
+            <input id="task-title" type="text" placeholder="New task title" required />
+            <input id="task-due" type="date" />
+            <button type="submit">Add</button>
+          </form>
+          <ul id="task-list" class="task-list"></ul>
+        </section>
+
+        <section id="view-documents" class="view" aria-label="Documents">
+          <div class="view-header">
+            <h1>Documents</h1>
+            <p class="view-sub">Paste text to simulate a dropped-in file (folder watching is future work).</p>
+          </div>
+          <form id="document-form" class="inline-form inline-form-stacked">
+            <input id="document-filename" type="text" placeholder="Filename, e.g. electric-bill.txt" required />
+            <textarea id="document-text" placeholder="Paste the document text here" rows="4" required></textarea>
+            <button type="submit">Ingest</button>
+          </form>
+          <ul id="document-list" class="document-list"></ul>
+        </section>
+
+        <section id="view-activity" class="view" aria-label="Activity">
+          <div class="view-header">
+            <h1>Activity</h1>
+            <p class="view-sub">Everything the agent has read or changed, newest first.</p>
+          </div>
+          <ul id="activity-list" class="activity-list"></ul>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

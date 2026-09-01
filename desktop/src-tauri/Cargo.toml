@@ -1,0 +1,20 @@
+[package]
+name = "family-agent-desktop"
+version = "0.1.0"
+description = "Local-first family document, schedule, and task assistant."
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "family-agent-desktop"
+path = "src/main.rs"

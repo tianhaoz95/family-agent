@@ -1,0 +1,29 @@
+.claude/settings.local.json
+node_modules/
+dist/
+build/
+target/
+*.log
+.DS_Store
+
+# agent-core runtime data
+agent-core/data/
+agent-core/*.db
+agent-core/*.db-journal
+
+# tauri
+desktop/src-tauri/target/
+desktop/src-tauri/gen/schemas/
+desktop/dist/
+
+# android
+android/.gradle/
+android/**/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/**/*.iml
+android/.cxx/
+
+# toolchains (downloaded locally, not vendored)
+.toolchains/

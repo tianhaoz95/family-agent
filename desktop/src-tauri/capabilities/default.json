@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for the main window. The frontend only talks to agent-core over plain fetch() to localhost, so no Tauri IPC permissions beyond the core window are needed yet.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
