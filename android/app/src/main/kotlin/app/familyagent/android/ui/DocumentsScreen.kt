@@ -10,12 +10,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.UploadFile
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.FolderOpen
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.UploadFile
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -66,7 +66,7 @@ fun DocumentsScreen(
                 shape = MaterialTheme.shapes.medium,
                 contentPadding = PaddingValues(vertical = 14.dp),
             ) {
-                Icon(Icons.Filled.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Upload")
             }
@@ -80,7 +80,7 @@ fun DocumentsScreen(
                 shape = MaterialTheme.shapes.medium,
                 contentPadding = PaddingValues(vertical = 14.dp),
             ) {
-                Icon(Icons.Filled.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Scan")
             }
@@ -96,7 +96,7 @@ fun DocumentsScreen(
             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
         ) {
             Icon(
-                if (pasteExpanded) Icons.Outlined.KeyboardArrowDown else Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                if (pasteExpanded) Icons.Rounded.KeyboardArrowDown else Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
             )
@@ -144,10 +144,10 @@ fun DocumentsScreen(
                 text = "No documents yet. Upload or scan one to get started.",
                 icon = {
                     Icon(
-                        Icons.Outlined.FolderOpen,
+                        Icons.Rounded.FolderOpen,
                         contentDescription = null,
                         modifier = Modifier.size(30.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 },
             )
@@ -172,7 +172,7 @@ fun DocumentsScreen(
                                 modifier = Modifier.size(32.dp),
                             ) {
                                 Icon(
-                                    Icons.Outlined.Delete,
+                                    Icons.Rounded.Delete,
                                     contentDescription = "Delete ${doc.filename}",
                                     modifier = Modifier.size(18.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -12,11 +12,16 @@ inference goes through a local Ollama instance, nothing is sent to a cloud API. 
 every non-obvious choice below (and *why*), `docs/BUILD_LOG.md` has the chronological blow-by-blow
 of what broke and how it was fixed.
 
-The UI of both the desktop and Android apps follows `DESIGN.md` at the repo root (the "Notion —
-warm paper notebook" system: `#f6f5f4` canvas, single `#0075de` blue accent, hairline-border /
-no-shadow cards, Inter + Source Serif 4, **light theme only**). Tokens are defined identically in
-`desktop/src/style.css` `:root` and `android/.../ui/theme/Theme.kt` — change both together, and
-don't add a dark-mode branch or card shadows.
+The **desktop** app follows `DESIGN.md` at the repo root (the "Notion — warm paper notebook"
+system: `#f6f5f4` canvas, single `#0075de` blue accent, hairline-border / no-shadow cards, Inter
++ Source Serif 4, **light theme only**). Its tokens live in `desktop/src/style.css` `:root`.
+
+The **Android** app follows its own `android/DESIGN.md` (the "Playful Color Mobile Design
+System": `#6366F1` indigo / `#F472B6` pink / `#22D3EE` cyan, soft-shadow rounded cards, Nunito,
+**light + dark**). Its tokens live in `android/.../ui/theme/Theme.kt` (`AppAccents`, the two
+`ColorScheme`s, typography, shapes) and `android/app/src/main/res/values{,-night}/colors.xml`.
+The two design systems are deliberately independent — there is no shared token file, and a
+desktop change does **not** imply an Android change (or vice versa).
 
 ## Prerequisites
 

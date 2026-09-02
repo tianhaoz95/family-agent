@@ -6,7 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.TaskAlt
+import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -69,10 +69,10 @@ fun TasksScreen(
                 text = "No tasks yet. Add one above or ask in Chat.",
                 icon = {
                     Icon(
-                        Icons.Outlined.TaskAlt,
+                        Icons.Rounded.TaskAlt,
                         contentDescription = null,
                         modifier = Modifier.size(30.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 },
             )

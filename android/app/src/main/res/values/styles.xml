@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.FamilyAgent" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Non-DayNight parent (android:Theme.Material.DayNight needs API 29;
+         minSdk is 26). The window background is a day/night color resource,
+         so it still tracks the system theme on every API level. -->
+    <style name="Theme.FamilyAgent" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
 </resources>

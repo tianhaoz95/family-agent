@@ -84,6 +84,19 @@ deviation, see `docs/DECISIONS.md` — this file is the *what happened*.
   launched again, confirmed the sidecar's PID was live and listening,
   `kill -9`'d the parent, confirmed within ~2s that the port was free and no
   orphaned `node` process remained in `ps aux`.
+- Desktop app crashed on launch with `EADDRINUSE 127.0.0.1:4174` — a previous
+  `agent-core` had been reparented to `systemd --user` (PR_SET_PDEATHSIG isn't
+  airtight across a `tauri:dev` Rust rebuild) and still held ports 4173/4174.
+  The tools server's `net.Server` had no `error` listener, so it came out as an
+  unhandled 'error' event + stack dump rather than a handled failure. Fix:
+  (1) `agent-core` retries `EADDRINUSE` for up to 8s on both ports, then exits 1
+  with a one-line `kill $(lsof -ti tcp:…)` hint; (2) permanent `server.on("error")`
+  on the tools server past initial bind; (3) `main.rs` `kill_stale_agent_core()`
+  reaps stale LISTEN-ers on those ports at startup (cmdline-filtered to ours),
+  SIGTERMs the child on shutdown, and also handles `RunEvent::Exit`. Verified:
+  ran two `agent-core` instances back to back — second retried then exited
+  cleanly with the hint; killed the first and a fresh one bound immediately;
+  SIGTERM shuts one down cleanly with ports freed. See `docs/DECISIONS.md`.
 - Full manual HTTP smoke test against a freshly built `dist/server.js`
   (after the CORS + short-id fixes): `/health`, CORS preflight on `/tasks`,
   `POST /tasks` (confirmed short id in the response), `POST

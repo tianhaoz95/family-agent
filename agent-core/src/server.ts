@@ -378,10 +378,15 @@ async function main() {
   let watcherModel = createLocalModel();
   let watcher: Awaited<ReturnType<typeof startInboxWatcher>> | undefined;
   const supervisor = new ToolSupervisor();
-  let toolsServer: ReturnType<typeof startToolsServer> | undefined;
+  let toolsServer: Awaited<ReturnType<typeof startToolsServer>> | undefined;
   if (config.toolsEnabled) {
     const { resolveDenoPath } = await import("./tools/supervisor.js");
-    toolsServer = startToolsServer(store, supervisor);
+    try {
+      toolsServer = await startToolsServer(store, supervisor);
+    } catch (err) {
+      console.error((err as Error).message ?? err);
+      process.exit(1);
+    }
     console.log(
       `tools server on http://127.0.0.1:${config.toolsPort}` +
         (resolveDenoPath() || supervisor.denoAvailable() ? " (Deno backend available)" : " (static tools only — Deno not found)")
@@ -402,12 +407,37 @@ async function main() {
   };
 
   const app = buildServer(store, onInboxDirChange, onModelChange, supervisor);
-  try {
-    await app.listen({ port: config.port, host: "127.0.0.1" });
-    console.log(`agent-core listening on http://127.0.0.1:${config.port}`);
-  } catch (err) {
-    console.error(err);
-    process.exit(1);
+  const listenDeadline = Date.now() + 8000;
+  let listenWarned = false;
+  for (;;) {
+    try {
+      await app.listen({ port: config.port, host: "127.0.0.1" });
+      console.log(`agent-core listening on http://127.0.0.1:${config.port}`);
+      break;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EADDRINUSE" && Date.now() < listenDeadline) {
+        if (!listenWarned) {
+          console.log(
+            `agent-core: port ${config.port} busy (a previous instance is shutting down) — retrying for up to 8s…`
+          );
+          listenWarned = true;
+        }
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      if (code === "EADDRINUSE") {
+        console.error(
+          `agent-core: port ${config.port} is already in use and did not free up. ` +
+            `Another agent-core is running (or an orphan from a previous run). ` +
+            `Stop it with:  kill $(lsof -ti tcp:${config.port} tcp:${config.toolsPort})`
+        );
+      } else {
+        console.error(err);
+      }
+      toolsServer?.close();
+      process.exit(1);
+    }
   }
 
   watcher = await startInboxWatcher(store, watcherModel, config.inboxDir);

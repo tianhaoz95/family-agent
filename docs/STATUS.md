@@ -146,6 +146,25 @@ second machine.
    compute mesh, per-family-member access control.
 
 Later changes (not part of the original autonomous session):
+- **Android UI: full visual redesign to `android/DESIGN.md`** (the "Playful
+  Color Mobile Design System" — indigo/pink/cyan, soft-shadow rounded cards,
+  Nunito, **light + dark**). The Android app no longer shares the repo-root
+  `DESIGN.md`; the desktop app still does. Bundled Nunito
+  (`res/font/nunito_variable.ttf`). Dark mode is driven by
+  `isSystemInDarkTheme()` with a day/night `windowBackground` colour so
+  there's no launch flash (non-DayNight style parent — `Theme.Material.DayNight`
+  needs API 29, minSdk is 26). Rounded icon set throughout. Verified on the
+  emulator in both light and dark.
+- **Android nav redesign**: the bottom `NavigationBar` is replaced by a
+  `ModalNavigationDrawer` — Chat is the app's main surface (start
+  destination, full-height), and a collapsible left sidebar (a filled menu
+  button in the top bar) switches between Chat / Tasks / Documents / Tools /
+  Activity / Settings. Gradient brand mark, a filled-indigo pill behind the
+  active nav item, and a connection-status pill pinned to the drawer footer
+  (refreshed each time the drawer opens). The in-app tool WebView route keeps
+  its own full-bleed chrome — the top bar and drawer gestures are suppressed
+  there. All in `android/.../MainActivity.kt`; the per-screen `ScreenScaffold`
+  headers are unchanged in structure (restyled by the new theme).
 - UI of the desktop and Android apps follows **`./DESIGN.md`** ("Notion — warm
   paper notebook"): warm `#f6f5f4` canvas, white hairline-bordered cards (no
   shadows), a single blue accent (`#0075de`), Inter + Source Serif 4 (bundled

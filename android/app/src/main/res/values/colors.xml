@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window background shown for the split-second before Compose draws.
+         Matches the DESIGN.md Background token per mode so there's no flash. -->
+    <color name="window_background">#FFFFFFFF</color>
+</resources>

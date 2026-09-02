@@ -187,6 +187,28 @@ listening, `kill -9`'d the parent, confirmed the sidecar was gone within the
 poll window (`ss -tlnp` on port 4173 empty, no orphaned `node` process in
 `ps aux`).
 
+PR_SET_PDEATHSIG turned out not to be airtight in practice: under `tauri:dev`,
+a Rust rebuild kills and respawns the app binary, and if the old `agent-core`
+is slow to exit (or the signal is missed on an abrupt teardown) it gets
+reparented to `systemd --user` and keeps holding ports 4173/4174. The fresh
+`agent-core` then hit `EADDRINUSE` — and worse, the tools server's raw
+`net.Server` had no `error` listener, so that surfaced as an *unhandled* error
+event and a hard crash with a stack dump. Three layers were added:
+
+- `agent-core` now retries `EADDRINUSE` on both the API port and the tools
+  port for up to 8s (`listenWithRetry` in `tools/server.ts`, and an inline loop
+  in `server.ts main()`), which covers the normal rebuild race. If it still
+  can't bind it prints one actionable line (`kill $(lsof -ti tcp:4173 ...)`)
+  and exits 1 instead of dumping a stack.
+- The tools server keeps a permanent `server.on("error")` handler past the
+  initial bind so a late socket error can never crash the process.
+- `main.rs` reaps stale listeners on startup (`kill_stale_agent_core`,
+  Unix-only): `lsof -ti -a -sTCP:LISTEN -itcp:4173 -itcp:4174`, filtered to
+  PIDs whose `/proc/<pid>/cmdline` mentions `agent-core`/`server.js`, SIGTERM
+  then SIGKILL. It also SIGTERMs (not bare SIGKILLs) the child on shutdown via
+  `shutdown_child`, and handles `RunEvent::Exit` in addition to
+  `WindowEvent::Destroyed`.
+
 ## Toolchains installed without sudo, without Docker
 
 No passwordless sudo was available, and the Docker daemon wasn't running

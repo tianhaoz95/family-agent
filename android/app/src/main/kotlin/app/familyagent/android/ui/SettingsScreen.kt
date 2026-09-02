@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.ConnectionStatus
+import app.familyagent.android.ui.theme.AppAccents
 
 @Composable
 fun SettingsScreen(
@@ -65,14 +66,14 @@ private fun SectionLabel(text: String) {
 
 @Composable
 private fun ConnectionStatusRow(connection: ConnectionStatus) {
-    val (label, color) = when (connection) {
-        is ConnectionStatus.Connecting -> "Connecting…" to MaterialTheme.colorScheme.onSurfaceVariant
-        is ConnectionStatus.Connected -> "Connected · local · ${connection.model}" to MaterialTheme.colorScheme.tertiary
+    val (label, dot) = when (connection) {
+        is ConnectionStatus.Connecting -> "Connecting…" to AppAccents.warning
+        is ConnectionStatus.Connected -> "Connected · local · ${connection.model}" to AppAccents.success
         is ConnectionStatus.Unreachable -> "Unreachable: ${connection.message}" to MaterialTheme.colorScheme.error
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        StatusDot(color)
+        StatusDot(dot)
         Spacer(Modifier.width(10.dp))
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = color)
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
     }
 }

@@ -99,7 +99,7 @@ async function proxyToBackend(port: number, req: IncomingMessage, res: ServerRes
   res.writeHead(upstream.status).end(buf);
 }
 
-export function startToolsServer(store: Store, supervisor: ToolSupervisor) {
+export async function startToolsServer(store: Store, supervisor: ToolSupervisor) {
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://tools.local");
@@ -145,6 +145,63 @@ export function startToolsServer(store: Store, supervisor: ToolSupervisor) {
     }
   });
 
-  server.listen(config.toolsPort, "127.0.0.1");
+  await listenWithRetry(server, config.toolsPort, "tools server");
+
+  // Past the initial bind, a late socket error (e.g. the OS reclaiming the port)
+  // must not become an unhandled 'error' event that takes the whole process
+  // down — log it and keep serving what we can.
+  server.on("error", (err) => console.error("tools server socket error:", err));
+
   return server;
+}
+
+/**
+ * Bind an http server, retrying briefly on EADDRINUSE. During `tauri:dev` a Rust
+ * rebuild kills and respawns the app; the new agent-core can race the old one's
+ * shutdown and find the port still held for a moment. Without this that surfaced
+ * as an unhandled EADDRINUSE 'error' event and a hard crash (see docs/DECISIONS.md).
+ */
+export function listenWithRetry(
+  server: import("node:http").Server,
+  port: number,
+  label: string,
+  timeoutMs = 8000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let warned = false;
+  const attempt = (): Promise<void> =>
+    new Promise((resolvePromise, reject) => {
+      const onError = (err: NodeJS.ErrnoException) => {
+        server.removeListener("listening", onListening);
+        if (err.code === "EADDRINUSE" && Date.now() < deadline) {
+          if (!warned) {
+            console.log(
+              `${label}: port ${port} busy (a previous instance is shutting down) — retrying for up to ${Math.round(timeoutMs / 1000)}s…`
+            );
+            warned = true;
+          }
+          setTimeout(() => attempt().then(resolvePromise, reject), 400);
+          return;
+        }
+        if (err.code === "EADDRINUSE") {
+          reject(
+            new Error(
+              `${label}: port ${port} is already in use and did not free up. ` +
+                `Another agent-core is running (or an orphan from a previous run). ` +
+                `Stop it with:  kill $(lsof -ti tcp:${port})`
+            )
+          );
+          return;
+        }
+        reject(err);
+      };
+      const onListening = () => {
+        server.removeListener("error", onError);
+        resolvePromise();
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(port, "127.0.0.1");
+    });
+  return attempt();
 }

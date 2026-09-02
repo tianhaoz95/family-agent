@@ -5,9 +5,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Build
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -63,10 +63,10 @@ fun ToolsScreen(
                 text = "No tools yet. Describe one above, or ask in Chat (\"build me a…\").",
                 icon = {
                     Icon(
-                        Icons.Outlined.Build,
+                        Icons.Rounded.Build,
                         contentDescription = null,
                         modifier = Modifier.size(30.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 },
             )
@@ -88,7 +88,7 @@ fun ToolsScreen(
                             }
                             IconButton(onClick = { onDelete(tool.id) }, modifier = Modifier.size(32.dp)) {
                                 Icon(
-                                    Icons.Outlined.Delete,
+                                    Icons.Rounded.Delete,
                                     contentDescription = "Delete ${tool.name}",
                                     modifier = Modifier.size(18.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -122,7 +122,7 @@ fun ToolsScreen(
                                 shape = RoundedCornerShape(12.dp),
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                             ) {
-                                Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text("Open")
                             }

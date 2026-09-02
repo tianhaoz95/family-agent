@@ -7,7 +7,6 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,11 +15,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.automirrored.outlined.Chat
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.PhotoCamera
-import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -87,10 +86,10 @@ fun ChatScreen(
                 modifier = Modifier.weight(1f),
                 icon = {
                     Icon(
-                        Icons.AutoMirrored.Outlined.Chat,
+                        Icons.AutoMirrored.Rounded.Chat,
                         contentDescription = null,
-                        modifier = Modifier.size(30.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 },
             )
@@ -136,7 +135,7 @@ fun ChatScreen(
                                 .clickable { attached = attached.filterIndexed { j, _ -> j != i } },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(Icons.Outlined.Close, contentDescription = "Remove", tint = Color.White, modifier = Modifier.size(12.dp))
+                            Icon(Icons.Rounded.Close, contentDescription = "Remove", tint = Color.White, modifier = Modifier.size(12.dp))
                         }
                     }
                 }
@@ -154,23 +153,24 @@ fun ChatScreen(
         Row(
             Modifier
                 .fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
-                .padding(start = 4.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                .clip(RoundedCornerShape(22.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box {
                 IconButton(onClick = { attachMenuOpen = true }, enabled = !sending && attached.size < MAX_IMAGES) {
                     Icon(
-                        Icons.Outlined.PhotoLibrary,
+                        Icons.Rounded.PhotoLibrary,
                         contentDescription = "Attach image",
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                        tint = MaterialTheme.colorScheme.primary,
                     )
                 }
                 DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
                     DropdownMenuItem(
                         text = { Text("Photo library") },
-                        leadingIcon = { Icon(Icons.Outlined.PhotoLibrary, contentDescription = null) },
+                        leadingIcon = { Icon(Icons.Rounded.PhotoLibrary, contentDescription = null) },
                         onClick = {
                             attachMenuOpen = false
                             pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -178,7 +178,7 @@ fun ChatScreen(
                     )
                     DropdownMenuItem(
                         text = { Text("Take photo") },
-                        leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null) },
+                        leadingIcon = { Icon(Icons.Rounded.PhotoCamera, contentDescription = null) },
                         onClick = {
                             attachMenuOpen = false
                             val uri = createChatPhotoUri(context)
@@ -194,6 +194,7 @@ fun ChatScreen(
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("Message, or attach a photo…") },
                 maxLines = 4,
+                textStyle = MaterialTheme.typography.bodyLarge,
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = Color.Transparent,
                     unfocusedContainerColor = Color.Transparent,
@@ -206,10 +207,10 @@ fun ChatScreen(
             FilledIconButton(
                 onClick = submit,
                 enabled = !sending && (input.isNotBlank() || attached.isNotEmpty()),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.size(40.dp),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.size(46.dp),
             ) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))
+                Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
             }
         }
     }
@@ -230,21 +231,20 @@ private fun ChatBubble(msg: ChatMessage) {
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         val shape = if (isUser) {
-            RoundedCornerShape(16.dp, 16.dp, 5.dp, 16.dp)
+            RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
         } else {
-            RoundedCornerShape(16.dp, 16.dp, 16.dp, 5.dp)
+            RoundedCornerShape(22.dp, 22.dp, 22.dp, 6.dp)
         }
-        val bubbleModifier = if (isUser) {
-            Modifier.background(MaterialTheme.colorScheme.primary, shape)
+        val bubbleColor = if (isUser) {
+            MaterialTheme.colorScheme.primary
         } else {
-            Modifier
-                .background(MaterialTheme.colorScheme.surface, shape)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+            MaterialTheme.colorScheme.surfaceVariant
         }
         Column(
-            modifier = bubbleModifier
+            modifier = Modifier
+                .background(bubbleColor, shape)
                 .widthIn(max = 300.dp)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 14.dp, vertical = 11.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (msg.images.isNotEmpty()) {
@@ -265,7 +265,6 @@ private fun ChatBubble(msg: ChatMessage) {
             if (msg.text.isNotBlank()) {
                 Text(
                     msg.text,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                     color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.bodyLarge,
                 )
