@@ -138,6 +138,40 @@ maybe("family agent (live model: " + config.model + ")", () => {
     },
     240000
   );
+
+  it(
+    "answers 'what is my insurance number' with the number, not a privacy refusal",
+    async () => {
+      // Regression: uploading an insurance doc and asking for the number came
+      // back as "I cannot provide personal information such as insurance
+      // numbers. Please check your family documents for this information." —
+      // a generic safety reflex applied to the family's own paperwork. See
+      // docs/DECISIONS.md ("the planner refused to read a number off the
+      // family's own document").
+      // No need to wait for async field extraction — the FTS index is
+      // populated by a synchronous trigger on ingest, and both the filename
+      // and the body contain "insurance", so search_documents finds it now.
+      await inject({
+        method: "POST",
+        url: "/documents/ingest",
+        payload: {
+          filename: "insurance.pdf",
+          text: "Regence BlueShield health insurance. Member ID: 210284396. Group: 10001234.",
+        },
+      });
+
+      const res = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "What is my insurance number?" },
+      });
+      expect(res.statusCode).toBe(200);
+      const reply = res.json().reply as string;
+      expect(reply).toContain("210284396");
+      expect(reply.toLowerCase()).not.toMatch(/cannot provide|can'?t (?:provide|share)|check your (?:family )?documents/);
+    },
+    300000
+  );
 });
 
 if (!ready) {

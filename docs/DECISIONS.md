@@ -332,6 +332,46 @@ direct runs plus a permanent regression test
 (`agents.integration.test.ts` — "creates a task from a bare action phrase
 instead of refusing it").
 
+## The planner refused to read a number off the family's own document
+
+Reported by the user, and a repeat of a class of failure we'd seen before:
+they uploaded `~/Downloads/insurance.pdf`, asked *"what is my insurance
+number?"*, and got *"I cannot provide personal information such as insurance
+numbers. Please check your family documents for this information."*
+
+This is **not** the FTS retrieval bug from the "three fixes" follow-up in
+BUILD_LOG (that was ANDed query tokens — long fixed, and `db.test.ts` proves
+the search itself still returns the right document for this exact phrasing).
+It's a model-behaviour bug of the same family as "task-agent refused a bare
+action phrase": a small model applying a generic "don't disclose personal
+data" reflex to a question about the family's *own* paperwork, on their *own*
+machine, and answering directly with a refusal instead of delegating to
+document-agent.
+
+Fixed defense-in-depth, three layers:
+
+1. **`PLANNER_PROMPT`** — an explicit paragraph that the family's paperwork is
+   not PII to be withheld from them, that "detail *out of* a document"
+   questions (policy/account/member number, amount, expiry) are document-agent
+   requests, and that a refusal or "check your documents yourself" is never an
+   acceptable answer for them. Plus a worked example for this exact phrasing
+   ("what is my insurance number?").
+2. **`DOCUMENT_AGENT_PROMPT`** — when a question asks for a specific value,
+   search → `get_document` on the id → read the full text → quote the value
+   back; "that's personal information" / "check the document yourself" is
+   always wrong once the document is found.
+3. **`askFamilyAgent`** — a narrow `LOOKS_LIKE_REFUSAL` regex (privacy-refusal
+   shape only; a genuine "I couldn't find an insurance document" must not
+   match). A matching reply triggers the one existing retry — the model
+   usually delegates on the second attempt — and is kept as the fallback so a
+   real (if unhelpful) answer is never downgraded to the generic error.
+
+Verified: fast unit tests in `askFamilyAgent.test.ts` (retry fires on the
+verbatim refusal; a genuine not-found answer is left alone; a double refusal
+returns the refusal, not the generic error) and a live-model regression test
+in `agents.integration.test.ts` ("answers 'what is my insurance number' with
+the number, not a privacy refusal").
+
 ## The retry logic didn't catch every way a small model can misbehave
 
 Found on a later full-suite run, not the same run the bugs above were

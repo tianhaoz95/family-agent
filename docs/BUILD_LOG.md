@@ -429,3 +429,31 @@ Three desktop-only UX fixes, no agent-core changes:
 - Tests: `typecheck` clean, desktop 21 pass, `vite build` clean. `dist/`
   not rebuilt here (Tauri `tauri:dev` builds the frontend itself); restart
   the desktop app to pick it up.
+
+## "What is my insurance number?" refused again — model-behaviour fix
+
+The user re-hit the old symptom: uploaded `~/Downloads/insurance.pdf`, asked
+"what is my insurance number?", got *"I cannot provide personal information
+such as insurance numbers. Please check your family documents for this
+information."*
+
+Not the FTS regression from earlier (that was ANDed query tokens; the search
+still returns the right doc — `db.test.ts` covers this phrasing verbatim).
+This is a small-model safety reflex: the planner answers directly with a
+privacy refusal instead of delegating to document-agent. Same family as the
+"buy stamps" refusal.
+
+Fixed in three layers (full write-up in `docs/DECISIONS.md`):
+
+- `PLANNER_PROMPT`: the family's own paperwork is not PII to withhold from
+  them; "detail out of a document" questions go to document-agent; refusing is
+  never acceptable. Worked example for this exact phrasing.
+- `DOCUMENT_AGENT_PROMPT`: for a specific-value question, search →
+  `get_document` → quote the value; don't refuse once the doc is found.
+- `askFamilyAgent`: narrow `LOOKS_LIKE_REFUSAL` regex triggers the existing
+  one retry and is kept as the fallback (never downgraded to the generic
+  error).
+
+Tests: `askFamilyAgent.test.ts` +3 (fast), `agents.integration.test.ts` +1
+(live model). Fast suite green, typecheck clean. **`dist/` rebuilt** — the
+user must restart agent-core / the desktop app to pick this up.

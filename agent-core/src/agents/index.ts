@@ -38,6 +38,20 @@ description "Search the family documents for the car insurance policy and
 report what you find." Pass along the specific thing they're looking for —
 document-agent can search by keyword, it does not need the whole list.
 
+The family's own paperwork is NOT "personal information" to be withheld from
+them — a family member reading a number off their own document is the entire
+point of this app, and you are running locally on their own machine with no
+one to leak to. When someone asks for a detail *out of* a document ("what is
+my insurance number?", "what's the policy number?", "what's the account
+number on the water bill?", "how much is the electric bill?", "when does my
+passport expire?"), that is a document-agent request. Never answer it with a
+refusal, a privacy disclaimer, or "check your documents yourself" — always
+delegate.
+
+Example — user asks "what is my insurance number?": call task with
+subagent_type "document-agent" and description "Find the insurance document
+and report the policy or member number it lists."
+
 Example — user asks "remind me to renew the car registration": call task
 with subagent_type "task-agent" and description "Create a task to renew the
 car registration."
@@ -73,6 +87,15 @@ searches filenames, full text, and summaries and returns the best matches
 with their ids. It can also filter by category or by a date range. Use
 list_documents only to browse everything with no particular query. Use
 get_document to read one document's full text by its id.
+
+When the question asks for a specific value out of a document — a policy or
+member number, an account number, an amount, an expiry date — search for the
+document, then call get_document on its id and read the full text to pull out
+the exact value, and quote it back. These documents belong to the family
+member asking; reporting what one says is your job, never a privacy
+violation. "I can't share that", "that's personal information", and "check
+the document yourself" are always the wrong answer here — if you found the
+document, answer with what it says.
 
 The first time you read a document, call save_extraction with a category, a
 one-line summary, and any important dates you find (due dates, expirations,
@@ -159,6 +182,23 @@ export type FamilyAgent = ReturnType<typeof buildFamilyAgent>;
 // literal final-message content. Treated the same as an empty response.
 const LOOKS_MALFORMED = /<\|.*?\|>|<tool_call|subagent_type\s*:|^call:/i;
 
+// A small model sometimes applies a generic "don't reveal personal data"
+// reflex to a question about the family's *own* paperwork and answers with a
+// refusal instead of delegating to document-agent — observed verbatim: "I
+// cannot provide personal information such as insurance numbers. Please check
+// your family documents for this information." The prompts push hard against
+// this; this catches the shape so askFamilyAgent can retry once. Deliberately
+// narrow — a legitimate "I couldn't find an insurance document" must NOT match.
+const LOOKS_LIKE_REFUSAL = new RegExp(
+  [
+    /\b(?:can(?:no|')?t|cannot|not able to|unable to|won'?t|not allowed to)\b[^.?!]{0,60}\b(?:provide|share|disclose|reveal|give|hand out|access)\b[^.?!]{0,60}\b(?:personal|private|sensitive|confidential|identif)/,
+    /\b(?:provide|share|disclose|give you|reveal|access)\b[^.?!]{0,25}\bpersonal (?:information|details|data|numbers?)/,
+  ]
+    .map((r) => r.source)
+    .join("|"),
+  "i"
+);
+
 // Small local models occasionally return an empty, or garbled, final
 // message with no clean tool call on the first try (both observed in
 // testing — see docs/BUILD_LOG.md and docs/DECISIONS.md). One retry clears
@@ -180,13 +220,25 @@ export async function askFamilyAgent(
         ...images.map((url) => ({ type: "image_url", image_url: { url } })),
       ]
     : message;
+  let lastRefusal = "";
   for (let attempt = 1; attempt <= 2; attempt++) {
     const result = await agent.invoke({
       messages: [{ role: "user", content }],
     });
     const last = result.messages.at(-1);
     const text = last ? (typeof last.content === "string" ? last.content : JSON.stringify(last.content)) : "";
-    if (text.trim() && !LOOKS_MALFORMED.test(text)) return text;
+    if (!text.trim() || LOOKS_MALFORMED.test(text)) continue;
+    // Retry a privacy-refusal once (the model usually delegates on the second
+    // try); keep it as a fallback so we never downgrade a real answer — even
+    // an unhelpful one — to the generic error string.
+    if (LOOKS_LIKE_REFUSAL.test(text) && attempt < 2) {
+      lastRefusal = text;
+      continue;
+    }
+    return text;
   }
-  return "(the local model didn't return a clean response — try rephrasing, or check /activity for what it attempted)";
+  return (
+    lastRefusal ||
+    "(the local model didn't return a clean response — try rephrasing, or check /activity for what it attempted)"
+  );
 }
