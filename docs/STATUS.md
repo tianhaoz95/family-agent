@@ -146,8 +146,12 @@ second machine.
    compute mesh, per-family-member access control.
 
 Later changes (not part of the original autonomous session):
-- UI redesign of the desktop and Android apps ("Clean & calm" design system,
-  shared tokens — `desktop/src/style.css` and `android/.../ui/theme/Theme.kt`).
+- UI of the desktop and Android apps follows **`./DESIGN.md`** ("Notion — warm
+  paper notebook"): warm `#f6f5f4` canvas, white hairline-bordered cards (no
+  shadows), a single blue accent (`#0075de`), Inter + Source Serif 4 (bundled
+  locally, no CDN), 12px card / 8px button / pill radii. **Light only** — dark
+  mode is deliberately not implemented. Tokens live in `desktop/src/style.css`
+  `:root` and `android/.../ui/theme/Theme.kt`, kept 1:1.
 - Desktop Settings are now fully live-editable: chat **model** (dropdown
   populated from `GET /ollama/models`), **Ollama address** (text), **watched
   folder** (text + a native directory picker via `tauri-plugin-dialog`, shown

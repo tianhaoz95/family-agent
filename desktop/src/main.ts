@@ -1,3 +1,6 @@
+// Bundled locally (no CDN) — the DESIGN.md typeface pair.
+import "@fontsource-variable/inter/wght.css";
+import "@fontsource/source-serif-4/400.css";
 import {
   api,
   toolUrl,

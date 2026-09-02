@@ -1,94 +1,73 @@
 /* ============================================================================
    Family Agent — desktop UI
-   "Clean & calm" design system: near-neutral canvas, hairline borders, a
-   single indigo accent, generous spacing, subtle motion. Shared identity with
-   the Android app (android/.../ui/theme/Theme.kt mirrors these tokens).
+   Implements the "Notion — warm paper notebook" system in ./DESIGN.md.
+   Light only. android/.../ui/theme/Theme.kt mirrors these tokens.
    ========================================================================== */
 
+/* Tokens mirror ./DESIGN.md ("Notion — warm paper notebook"). Light only. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
-  /* Surfaces — flat, separated by hairlines rather than heavy shadow */
-  --bg: #fbfbfc;
-  --surface: #ffffff;
-  --surface-2: #f4f4f6;
-  --surface-3: #ededf1;
-  --border: #e7e7ec;
-  --border-strong: #d8d8df;
+  /* Surfaces — warm canvas, white cards, separated by hairlines only */
+  --bg: #f6f5f4; /* paper warmth — the signature */
+  --surface: #ffffff; /* card surface */
+  --surface-2: rgba(0, 0, 0, 0.04); /* tinted hover wash */
+  --surface-3: rgba(0, 0, 0, 0.07);
+  --border: rgba(0, 0, 0, 0.08); /* the one border weight */
+  --border-strong: rgba(0, 0, 0, 0.16);
 
-  /* Text */
-  --text: #1b1b21;
-  --text-muted: #63636e;
-  --text-faint: #9a9aa4;
+  /* Text — one colour, hierarchy via alpha (+ warm graphite for body) */
+  --text: #000000;
+  --text-strong: rgba(0, 0, 0, 0.95);
+  --text-muted: rgba(0, 0, 0, 0.6);
+  --text-faint: rgba(0, 0, 0, 0.4);
+  --text-body: #615d59; /* graphite — warm-cast body copy */
 
-  /* Accent — indigo, used sparingly */
-  --accent: #5a5ad6;
-  --accent-hover: #4c4cc4;
-  --accent-press: #4141ad;
+  /* Accent — the single chromatic commitment */
+  --accent: #0075de; /* notion blue */
+  --accent-hover: #0068c4;
+  --accent-press: #005ba8;
   --accent-contrast: #ffffff;
-  --accent-soft: #5a5ad614;
-  --accent-ring: #5a5ad63d;
+  --accent-soft: #e6f3fe; /* sky tint — ghost buttons, active nav, hovers */
+  --accent-ring: rgba(0, 117, 222, 0.35);
 
-  /* Signals */
-  --local: #1f9d63;
-  --local-soft: #1f9d6314;
-  --warn: #c9781f;
-  --warn-soft: #c9781f18;
-  --danger: #d93b46;
-  --danger-soft: #d93b4614;
+  /* Accent cast — for coloured card / pill fills, never buttons */
+  --marigold: #ffb110;
+  --coral: #f64932;
+  --saffron: #e89d01;
+  --sky-wash: #62aef0;
+  --midnight: #02093a;
+  --peach: #f6d5b8;
 
-  /* Shape */
-  --r-sm: 8px;
-  --r-md: 11px;
-  --r-lg: 16px;
-  --r-xl: 22px;
-  --r-pill: 999px;
+  /* Signals (the doc has no green; a restrained one for "connected") */
+  --local: #448361;
+  --local-soft: #edf3ef;
+  --warn: #cb912f;
+  --warn-soft: #faf3e8;
+  --danger: #e32d14; /* vermillion */
+  --danger-soft: #fdecea;
 
-  /* Depth — reserved for hover / floating elements only */
-  --shadow-sm: 0 1px 2px rgba(20, 20, 40, 0.06), 0 1px 1px rgba(20, 20, 40, 0.04);
-  --shadow-md: 0 4px 12px rgba(20, 20, 40, 0.08), 0 2px 4px rgba(20, 20, 40, 0.05);
-  --shadow-lg: 0 16px 40px rgba(20, 20, 40, 0.14);
+  /* Shape — cards 12, buttons 8, small 4, pills full */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 12px;
+  --r-pill: 9999px;
 
-  --font-sans: "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Depth — content cards get NONE. Only the nav bar / floating popovers. */
+  --shadow-sm: none;
+  --shadow-md: 0 0.7px 1.5px rgba(0, 0, 0, 0.015), 0 3px 9px rgba(0, 0, 0, 0.03);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.1);
+
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-serif: "Source Serif 4", ui-serif, Georgia, "Times New Roman", serif;
   --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Code", ui-monospace,
     "Roboto Mono", Menlo, monospace;
 
-  --ease: cubic-bezier(0.32, 0.72, 0, 1);
-  --dur: 160ms;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d0d10;
-    --surface: #161619;
-    --surface-2: #1e1e23;
-    --surface-3: #26262c;
-    --border: #262630;
-    --border-strong: #34343f;
-
-    --text: #ececef;
-    --text-muted: #9c9ca7;
-    --text-faint: #6a6a75;
-
-    --accent: #8b8bf0;
-    --accent-hover: #9c9cf3;
-    --accent-press: #7a7ae4;
-    --accent-contrast: #10101a;
-    --accent-soft: #8b8bf01f;
-    --accent-ring: #8b8bf04d;
-
-    --local: #45c98a;
-    --local-soft: #45c98a1f;
-    --warn: #e0a15f;
-    --warn-soft: #e0a15f1f;
-    --danger: #ff6b73;
-    --danger-soft: #ff6b731f;
-
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
-    --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.55);
-  }
+  /* Motion — 200ms ease for everything ordinary */
+  --ease: ease;
+  --dur: 200ms;
 }
 
 * {
@@ -109,13 +88,14 @@ body {
 
 body {
   background: var(--bg);
-  color: var(--text);
+  color: var(--text-body);
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.5;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  font-feature-settings: "lnum";
 }
 
 button,
@@ -167,12 +147,12 @@ textarea {
   padding: 6px 8px 18px;
 }
 
+/* Flat fill, no gradient, no shadow — a warm accent square like a sticky note. */
 .brand-mark {
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  background: linear-gradient(150deg, var(--accent) 0%, #7d5ae0 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), var(--shadow-sm);
+  background: var(--marigold);
   display: grid;
   place-items: center;
   flex: none;
@@ -182,14 +162,14 @@ textarea {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.28);
+  background: var(--text);
 }
 
 .brand-name {
-  font-weight: 640;
-  font-size: 0.94rem;
-  letter-spacing: -0.01em;
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: -0.014em;
+  color: var(--text);
 }
 
 .nav {
@@ -222,13 +202,13 @@ textarea {
 
 .nav-item:hover {
   background: var(--surface-2);
-  color: var(--text);
+  color: var(--text-strong);
 }
 
 .nav-item.is-active {
   background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .nav-item:focus-visible {
@@ -329,20 +309,26 @@ textarea {
 }
 
 .view-header {
-  margin-bottom: 20px;
+  margin-bottom: 24px;
   flex: none;
 }
 
 .view-header h1 {
-  font-size: 1.6rem;
-  font-weight: 680;
-  letter-spacing: -0.021em;
-  margin: 0 0 3px;
+  font-family: var(--font-sans);
+  font-size: 1.75rem; /* ~28px */
+  font-weight: 600;
+  letter-spacing: -0.022em;
+  line-height: 1.1;
+  color: var(--text);
+  margin: 0 0 6px;
 }
 
+/* Editorial voice — Source Serif, used only for section subheads. */
 .view-sub {
-  color: var(--text-muted);
-  font-size: 0.875rem;
+  font-family: var(--font-serif);
+  color: var(--text-body);
+  font-size: 1rem;
+  line-height: 1.5;
   margin: 0;
 }
 
@@ -588,17 +574,19 @@ textarea {
 }
 
 /* ---------- Buttons --------------------------------------------------- */
+/* The single filled button in the system — Notion blue. Everything else
+   is a ghost or text button (see .btn-ghost). */
 button[type="submit"],
 .btn-primary {
   background: var(--accent);
   color: var(--accent-contrast);
   border: none;
   border-radius: var(--r-md);
-  padding: 9px 16px;
-  font-size: 0.86rem;
-  font-weight: 600;
+  padding: 8px 15px;
+  font-size: 0.875rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: background var(--dur) var(--ease), transform var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease);
 }
 
 button[type="submit"]:hover,
@@ -608,7 +596,6 @@ button[type="submit"]:hover,
 button[type="submit"]:active,
 .btn-primary:active {
   background: var(--accent-press);
-  transform: translateY(0.5px);
 }
 
 button[type="submit"]:disabled {
@@ -679,7 +666,7 @@ summary:focus-visible {
   cursor: pointer;
   appearance: none;
   padding-right: 32px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b8bf0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%230075de' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
 }
@@ -689,20 +676,22 @@ summary:focus-visible {
   cursor: not-allowed;
 }
 
+/* Ghost CTA — soft blue tint, blue text. The lower-commitment sibling
+   of the filled primary button. */
 .btn-ghost {
-  background: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: none;
   border-radius: var(--r-md);
-  padding: 9px 14px;
-  font-size: 0.86rem;
+  padding: 8px 15px;
+  font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   transition: background var(--dur) var(--ease);
   flex: none;
 }
 .btn-ghost:hover {
-  background: var(--surface-3);
+  background: #d7ebfd;
 }
 
 .inline-form input[type="date"] {
@@ -732,23 +721,22 @@ summary:focus-visible {
   gap: 8px;
 }
 
+/* White cards on the warm canvas — hairline border, 12px, never a shadow. */
 .task-row,
 .document-row,
 .activity-row,
 .tool-row {
   border: 1px solid var(--border);
   background: var(--surface);
-  border-radius: var(--r-md);
-  padding: 12px 14px;
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
-    transform var(--dur) var(--ease), opacity var(--dur) var(--ease);
+  border-radius: var(--r-lg);
+  padding: 14px 16px;
+  transition: border-color var(--dur) var(--ease), opacity var(--dur) var(--ease);
 }
 
 .task-row:hover,
 .document-row:hover,
 .tool-row:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
 }
 
 .tool-row-head {
@@ -758,14 +746,16 @@ summary:focus-visible {
 }
 .tool-name {
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+  color: var(--text);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tool-row-foot {
-  margin-top: 10px;
+  margin-top: 12px;
 }
 .tool-row-foot .btn-primary {
   padding: 6px 14px;
@@ -857,26 +847,26 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
+/* Pill tags — colored fill, full radius, sans. Like Notion status labels. */
 .category-chip,
 .tag {
-  font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.045em;
-  padding: 3px 8px;
+  letter-spacing: 0;
+  padding: 3px 10px;
   border-radius: var(--r-pill);
   white-space: nowrap;
   flex: none;
 }
 
 .category-chip {
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: rgba(0, 0, 0, 0.7);
+  background: #ffefd0; /* warm marigold tint */
 }
 
 .tag-local {
-  color: var(--local);
+  color: #1c5c3f;
   background: var(--local-soft);
 }
 

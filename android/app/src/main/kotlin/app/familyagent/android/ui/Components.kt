@@ -43,11 +43,15 @@ fun ScreenScaffold(
             .padding(top = 20.dp, bottom = 8.dp),
     ) {
         Text(title, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground)
-        Spacer(Modifier.height(3.dp))
+        Spacer(Modifier.height(4.dp))
         Text(
             subtitle,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyLarge.copy(
+                fontFamily = app.familyagent.android.ui.theme.NotionSerif,
+                fontSize = 15.sp,
+                lineHeight = 22.sp,
+            ),
+            color = app.familyagent.android.ui.theme.NotionAccents.graphite,
         )
         Spacer(Modifier.height(20.dp))
         content()
