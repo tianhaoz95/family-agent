@@ -217,6 +217,35 @@ describe("HTTP API", () => {
     expect(res.statusCode).toBe(400);
   });
 
+  // /transcribe's happy path needs the Whisper model and is covered in
+  // transcribe.test.ts (opt-in). Here: the HTTP contract around it.
+  it("POST /transcribe rejects a request with no audio", async () => {
+    const res = await inject({ method: "POST", url: "/transcribe", payload: "" });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("POST /transcribe 403s when voice input is disabled, and reports it in /health", async () => {
+    const original = config.asrEnabled;
+    config.asrEnabled = false;
+    try {
+      const { contentType, body } = await multipart("voice.wav", "RIFFxxxxWAVE", "audio/wav");
+      const res = await inject({
+        method: "POST",
+        url: "/transcribe",
+        headers: { "content-type": contentType },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(403);
+      expect((await app.inject({ method: "GET", url: "/health" })).json().asrEnabled).toBe(false);
+    } finally {
+      config.asrEnabled = original;
+    }
+  });
+
+  it("GET /health reports asrEnabled true by default", async () => {
+    expect((await app.inject({ method: "GET", url: "/health" })).json().asrEnabled).toBe(true);
+  });
+
   it("answers CORS preflight for the desktop webview origin", async () => {
     const res = await app.inject({
       method: "OPTIONS",
@@ -468,6 +497,26 @@ describe("HTTP API", () => {
     } finally {
       restore();
       config.ocrModel = original;
+      if (existsSync(settingsFilePath)) rmSync(settingsFilePath);
+    }
+  });
+
+  it("PUT /settings saves a voice-input (ASR) model without hitting Ollama, and admin-gates it", async () => {
+    const original = config.asrModel;
+    const settingsFilePath = `${config.dataDir}/settings.json`;
+    try {
+      const set = await inject({ method: "PUT", url: "/settings", payload: { asrModel: "Xenova/whisper-small" } });
+      expect(set.statusCode).toBe(200);
+      expect(set.json().asrModel).toBe("Xenova/whisper-small");
+      expect(config.asrModel).toBe("Xenova/whisper-small");
+
+      const member = seedUser(store, { username: "kid2", role: "member" });
+      const asMember = authInject(app, member.token);
+      const denied = await asMember({ method: "PUT", url: "/settings", payload: { asrModel: "Xenova/whisper-tiny" } });
+      expect(denied.statusCode).toBe(403);
+      expect(config.asrModel).toBe("Xenova/whisper-small");
+    } finally {
+      config.asrModel = original;
       if (existsSync(settingsFilePath)) rmSync(settingsFilePath);
     }
   });

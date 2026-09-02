@@ -101,6 +101,8 @@ export interface Health {
   needsSetup: boolean;
   toolsPort: number;
   toolsEnabled: "full" | "static-only" | "off";
+  /** Whether the server offers speech-to-text — the chat mic button hides when false. */
+  asrEnabled: boolean;
 }
 
 export interface AuthStatus {
@@ -138,10 +140,21 @@ export interface Settings {
   model: string;
   ollamaBaseUrl: string;
   ocrModel: string;
+  /** Hugging Face repo id of the speech-to-text model used for voice input. */
+  asrModel: string;
+  /** Whether voice input is enabled at all (env-controlled, not editable here). */
+  asrEnabled: boolean;
   serverName: string;
   isAdmin: boolean;
   /** Fields pinned by an env var — read-only in the UI. */
-  envLocked: { model: boolean; ollamaBaseUrl: boolean; inboxDir: boolean; ocrModel: boolean; serverName: boolean };
+  envLocked: {
+    model: boolean;
+    ollamaBaseUrl: boolean;
+    inboxDir: boolean;
+    ocrModel: boolean;
+    asrModel: boolean;
+    serverName: boolean;
+  };
 }
 
 export interface SettingsPatch {
@@ -149,15 +162,16 @@ export interface SettingsPatch {
   model?: string;
   ollamaBaseUrl?: string;
   ocrModel?: string;
+  asrModel?: string;
   serverName?: string;
 }
 
 // Separate from request() because a file upload must NOT set
 // Content-Type: application/json — the browser sets multipart/form-data with
 // its own boundary. Still needs the bearer token.
-async function upload<T>(path: string, file: File): Promise<T> {
+async function upload<T>(path: string, file: Blob, field = "file", filename = (file as File).name || "upload"): Promise<T> {
   const formData = new FormData();
-  formData.append("file", file, file.name);
+  formData.append(field, file, filename);
   const token = getToken();
   const res = await fetch(`${BASE_URL}${path}`, {
     method: "POST",
@@ -212,6 +226,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(images.length ? { message, images } : { message }),
     }),
+  /** Transcribe a recorded voice clip (16 kHz mono WAV) for the chat composer. */
+  transcribe: (wav: Blob) => upload<{ text: string }>("/transcribe", wav, "audio", "voice.wav"),
   listTasks: () => request<{ tasks: Task[] }>("/tasks"),
   createTask: (title: string, dueDate?: string, dueTime?: string) =>
     request<{ task: Task }>("/tasks", {

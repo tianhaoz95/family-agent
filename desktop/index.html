@@ -105,6 +105,9 @@
             <button type="button" id="chat-attach-btn" class="chat-attach-btn" title="Attach image" aria-label="Attach image">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             </button>
+            <button type="button" id="chat-mic-btn" class="chat-attach-btn" title="Voice input" aria-label="Record a voice message" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+            </button>
             <textarea
               id="chat-input"
               placeholder="Ask a question, or attach a photo or screenshot"
@@ -287,6 +290,20 @@
               <button type="submit">Save</button>
             </form>
             <p id="settings-ocr-status" class="settings-hint" role="status"></p>
+
+            <h3>Voice input</h3>
+            <p class="settings-hint" id="settings-asr-hint">
+              The mic button in Chat transcribes speech with a local Whisper model —
+              nothing leaves your machine after the one-time model download. Enter a
+              Hugging Face model id: <code>Xenova/whisper-tiny.en</code> (fastest, English),
+              <code>Xenova/whisper-base</code> (default), or <code>Xenova/whisper-small</code>
+              (most accurate, slower on CPU).
+            </p>
+            <form id="settings-asr-form" class="inline-form">
+              <input id="settings-asr-model-input" type="text" placeholder="Xenova/whisper-base" />
+              <button type="submit">Save</button>
+            </form>
+            <p id="settings-asr-status" class="settings-hint" role="status"></p>
 
             <h3>Home name</h3>
             <p class="settings-hint">

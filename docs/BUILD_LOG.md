@@ -246,3 +246,63 @@ rendering at the point the previous section ended. Closed both gaps:
 - Nothing left open from the original "what's actually been seen working"
   gap — both apps have been watched doing the real thing, not just
   compiled and unit-tested.
+
+## Voice input (speech-to-text)
+
+Added a mic button to both chat composers. Recording → `POST /transcribe`
+(multipart, field `audio`, a 16 kHz mono WAV) → transcript dropped into the
+input for review. Never auto-sent.
+
+- **agent-core**: `src/transcribe.ts` — Whisper via `@huggingface/transformers`
+  (v3, `onnxruntime-node`), lazy-loaded, model cached under
+  `<dataDir>/asr-models/`. A dependency-free WAV parser (`decodeWav`) +
+  linear-interp resample to 16 kHz, so the route never touches an audio codec.
+  New route `POST /transcribe` in `server.ts` (403 when `FAMILY_AGENT_ASR=0`,
+  400 on a non-multipart / empty body); `/health` and `/settings` gained
+  `asrEnabled`; `asrModel` is an admin machine setting
+  (`Xenova/whisper-base` default, `FAMILY_AGENT_ASR_MODEL` env-locks it).
+- **desktop**: `src/audio.ts` captures mic PCM via the Web Audio API
+  (`getUserMedia` -> `MediaStreamSource` -> `ScriptProcessorNode`), merges the
+  Float32 chunks, linear-resamples to 16 kHz and writes a PCM16 WAV. **Not
+  `MediaRecorder`** — it isn't implemented in the Linux WebKitGTK webview
+  ("MediaRecorder is unsupported on this platform"), found on the first
+  desktop test; the Web Audio path works there and needs no codec. `main.ts`
+  wires the mic button (tap to start, tap to stop, pulsing red while
+  recording) and a "Voice input" Settings section.
+- **android**: `ui/VoiceRecorder.kt` uses `AudioRecord`
+  (`VOICE_RECOGNITION`, 16 kHz mono PCM16) and prepends a WAV header;
+  `RECORD_AUDIO` is runtime-requested on first tap. `ChatScreen` gets a mic
+  `IconButton` (Stop icon + error tint while recording, a spinner while the
+  clip uploads); `AppViewModel.transcribeVoice` posts it and fills the
+  composer.
+
+**Verified**
+
+- `transcribe.test.ts`: WAV decode (mono/stereo/LIST-chunk/non-WAV), resample,
+  the "clip too short → empty" guard; an opt-in (`FAMILY_AGENT_TEST_ASR=1`)
+  live test that loads the real model.
+- Full agent-core suite: 107 passed, 1 skipped (the opt-in one), live-model
+  integration tests included.
+- End-to-end against the running server: `curl -F audio=@jfk.wav
+  /transcribe` → `"And so my fellow Americans ask not what your country can do
+  for you…"` in ~2.4s on CPU; non-multipart request → 400; activity log gets a
+  `voice.transcribed` row.
+- Desktop: signed in via the browser build, confirmed the mic button renders
+  next to the attach button and the "Voice input" settings section shows with
+  the model pre-filled.
+- desktop `npm test` 20/20, `npm run typecheck` clean; android
+  `testDebugUnitTest` (24) + `assembleDebug` clean.
+
+**Linux WebKitGTK mic permission — fixed after first report.** On Linux the
+webview gave an immediate `getUserMedia` rejection ("not allowed by the user
+agent…") because WebKitGTK has no interactive permission prompt — its default
+`permission-request` handler just denies media capture. Fixed with
+`grant_webview_media_permission()` in `desktop/src-tauri/src/main.rs`: in
+`.setup()`, reach the underlying `webkit2gtk::WebView` via
+`window.with_webview(...)` and connect a `permission-request` handler that
+`.allow()`s the request. `webkit2gtk = "=2.0.2"` added as a
+`cfg(target_os = "linux")` dependency — pinned to the exact version `wry
+0.55.1` already resolves, so it's the same compiled crate, no new download.
+Auto-approving is fine here: the webview only ever loads our own bundled
+`dist/` and localhost, and the user has to click the mic button to trigger a
+request. macOS/Windows and the `npm run dev` browser build never needed this.

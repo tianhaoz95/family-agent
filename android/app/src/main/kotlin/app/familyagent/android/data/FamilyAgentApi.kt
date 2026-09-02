@@ -105,6 +105,16 @@ class FamilyAgentApi(
     suspend fun chat(message: String, images: List<String> = emptyList()): ChatResponse =
         json.decodeFromString(send("POST", "/chat", json.encodeToString(ChatRequest(message, images))))
 
+    /** Upload a recorded voice clip (16 kHz mono WAV) and get back the transcript. */
+    suspend fun transcribe(wav: ByteArray): TranscribeResponse = withContext(Dispatchers.IO) {
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("audio", "voice.wav", wav.toRequestBody("audio/wav".toMediaTypeOrNull()))
+            .build()
+        val request = Request.Builder().url("$baseUrl/transcribe").post(body).withAuth().build()
+        json.decodeFromString(execute(request))
+    }
+
     suspend fun listTasks(): List<Task> = json.decodeFromString<TasksResponse>(get("/tasks")).tasks
 
     suspend fun createTask(title: String, dueDate: String?, dueTime: String? = null): Task =

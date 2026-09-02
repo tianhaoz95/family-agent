@@ -550,6 +550,27 @@ textarea {
   box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-ring);
 }
 
+/* Voice-input button while a recording is in progress. */
+#chat-mic-btn.is-recording,
+#chat-mic-btn.is-recording:hover {
+  color: var(--accent-contrast);
+  background: var(--danger);
+  animation: mic-recording 1.4s var(--ease) infinite;
+}
+@keyframes mic-recording {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--danger-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+#chat-mic-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .chat-form:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-ring);

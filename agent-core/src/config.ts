@@ -21,6 +21,7 @@ export const envLocked = {
   // `<base>/<userId>` and can't be individually overridden.
   inboxDir: process.env.FAMILY_AGENT_INBOX_DIR !== undefined,
   ocrModel: process.env.FAMILY_AGENT_OCR_MODEL !== undefined,
+  asrModel: process.env.FAMILY_AGENT_ASR_MODEL !== undefined,
   serverName: process.env.FAMILY_AGENT_SERVER_NAME !== undefined,
 } as const;
 
@@ -47,6 +48,26 @@ export const config = {
   // on a CPU-only box a single page can take minutes, so this bounds how long
   // an upload blocks. Bump it on a machine with a GPU.
   ocrModelTimeoutMs: Number(process.env.FAMILY_AGENT_OCR_TIMEOUT_MS ?? 180_000),
+
+  // ---- Voice input (speech-to-text) ----
+  // The "hold to talk" button in both chat composers. Whisper via
+  // transformers.js, run in-process (Ollama can't serve ASR) — see
+  // transcribe.ts. Off = /transcribe returns 403 and both clients hide the
+  // mic button (they read this from /health).
+  asrEnabled: process.env.FAMILY_AGENT_ASR !== "0",
+  // Hugging Face repo id for the ASR model — NOT an Ollama model, so it's not
+  // validated against `ollama list` the way `model`/`ocrModel` are. Empty
+  // falls back to the default. Bigger = better + slower: whisper-tiny(.en) is
+  // fastest, whisper-small the most accurate that's still reasonable on CPU.
+  asrModel: process.env.FAMILY_AGENT_ASR_MODEL || persisted.asrModel || "Xenova/whisper-base",
+  // Force the transcription language (ISO code, e.g. "en"); empty = whisper
+  // autodetects. Worth pinning for a single-language household — autodetect
+  // on a short clip occasionally guesses wrong.
+  asrLanguage: process.env.FAMILY_AGENT_ASR_LANGUAGE ?? "",
+  // ONNX weight precision for the ASR model: fp32 | fp16 | q8 | q4. q8 roughly
+  // halves the download and speeds inference for a small accuracy cost.
+  asrDtype: process.env.FAMILY_AGENT_ASR_DTYPE ?? "q8",
+
   // Advertise this node on the LAN via mDNS/DNS-SD so the Android app can
   // find it without a hand-typed address. Off = manual URL entry only.
   mdnsEnabled: process.env.FAMILY_AGENT_MDNS !== "0",

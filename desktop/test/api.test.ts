@@ -164,6 +164,21 @@ describe("api client", () => {
     });
   });
 
+  it("transcribe() POSTs the clip as multipart to /transcribe without a JSON content-type", async () => {
+    setToken("tok-voice");
+    const fetchMock = mockFetchOnce(200, { text: "buy milk tomorrow" });
+    const res = await api.transcribe(new Blob([new Uint8Array([1, 2, 3])], { type: "audio/wav" }));
+    expect(res).toEqual({ text: "buy milk tomorrow" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/transcribe");
+    expect((init as RequestInit).method).toBe("POST");
+    expect((init as RequestInit).body).toBeInstanceOf(FormData);
+    expect(((init as RequestInit).body as FormData).get("audio")).toBeInstanceOf(Blob);
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer tok-voice");
+    expect(headers["Content-Type"]).toBeUndefined();
+  });
+
   it("listOllamaModels() GETs /ollama/models", async () => {
     const fetchMock = mockFetchOnce(200, { models: ["gemma4:e2b"], reachable: true });
     const res = await api.listOllamaModels();

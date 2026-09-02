@@ -16,6 +16,7 @@ import {
   type Health,
   type User,
 } from "./api.js";
+import { startRecording, type Recording } from "./audio.js";
 
 // ---------- view switching ----------
 const navButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".nav-item"));
@@ -55,6 +56,9 @@ const inboxPathEl = document.getElementById("inbox-path")!;
 // Port the tools server is on — learned from /health, used to open a tool.
 let toolsPort = 4174;
 let toolsEnabled: Health["toolsEnabled"] = "full";
+// Whether the server offers speech-to-text — learned from /health, gates the
+// chat mic button.
+let voiceEnabled = false;
 
 async function refreshStatus() {
   try {
@@ -63,6 +67,8 @@ async function refreshStatus() {
     statusText.textContent = `local · ${health.model}`;
     if (health.toolsPort) toolsPort = health.toolsPort;
     if (health.toolsEnabled) toolsEnabled = health.toolsEnabled;
+    voiceEnabled = health.asrEnabled === true;
+    chatMicBtn.hidden = !voiceEnabled;
   } catch {
     statusPill.className = "status-pill status-error";
     statusText.textContent = "agent-core unreachable";
@@ -75,6 +81,7 @@ const chatForm = document.getElementById("chat-form") as HTMLFormElement;
 const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement;
 const chatImageInput = document.getElementById("chat-image-input") as HTMLInputElement;
 const chatAttachBtn = document.getElementById("chat-attach-btn") as HTMLButtonElement;
+const chatMicBtn = document.getElementById("chat-mic-btn") as HTMLButtonElement;
 const chatAttachmentsEl = document.getElementById("chat-attachments")!;
 
 // Images staged for the next message, as JPEG data URIs.
@@ -208,6 +215,52 @@ for (const evt of ["dragover", "drop"] as const) {
     if (evt === "drop" && e.dataTransfer?.files) void addImageFiles(Array.from(e.dataTransfer.files));
   });
 }
+
+// ---------- voice input ----------
+// Tap once to start recording, tap again to stop; the transcript is dropped
+// into the input for the user to review and send (never auto-sent).
+let activeRecording: Recording | null = null;
+
+function setMicRecording(on: boolean) {
+  chatMicBtn.classList.toggle("is-recording", on);
+  chatMicBtn.setAttribute("aria-pressed", String(on));
+  chatMicBtn.title = on ? "Stop recording" : "Voice input";
+}
+
+chatMicBtn.addEventListener("click", async () => {
+  if (activeRecording) {
+    const rec = activeRecording;
+    activeRecording = null;
+    setMicRecording(false);
+    chatMicBtn.disabled = true;
+    try {
+      const wav = await rec.stop();
+      const { text } = await api.transcribe(wav);
+      if (text) {
+        const existing = chatInput.value.trim();
+        chatInput.value = existing ? `${existing} ${text}` : text;
+        chatInput.focus();
+      } else {
+        appendBubble("system", "Didn't catch any speech — try again, a bit closer to the mic.");
+      }
+    } catch (err) {
+      appendBubble("system", `Voice input failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      chatMicBtn.disabled = false;
+    }
+    return;
+  }
+  try {
+    activeRecording = await startRecording();
+    setMicRecording(true);
+  } catch (err) {
+    appendBubble(
+      "system",
+      `Couldn't start recording: ${err instanceof Error ? err.message : String(err)}. ` +
+        "Check that a microphone is connected and this app has permission to use it."
+    );
+  }
+});
 
 function appendTypingIndicator() {
   const el = document.createElement("div");
@@ -1043,6 +1096,10 @@ const settingsOcrModelSelect = document.getElementById("settings-ocr-model-selec
 const settingsOcrForm = document.getElementById("settings-ocr-form") as HTMLFormElement;
 const settingsOcrStatusEl = document.getElementById("settings-ocr-status")!;
 const settingsOcrActiveEl = document.getElementById("settings-ocr-active")!;
+const settingsAsrModelInput = document.getElementById("settings-asr-model-input") as HTMLInputElement;
+const settingsAsrForm = document.getElementById("settings-asr-form") as HTMLFormElement;
+const settingsAsrStatusEl = document.getElementById("settings-asr-status")!;
+const settingsAsrHintEl = document.getElementById("settings-asr-hint")!;
 const settingsServerNameInput = document.getElementById("settings-servername-input") as HTMLInputElement;
 const settingsServerNameForm = document.getElementById("settings-servername-form") as HTMLFormElement;
 const settingsServerNameStatusEl = document.getElementById("settings-servername-status")!;
@@ -1092,6 +1149,14 @@ async function refreshSettings() {
       fillModelSelect(settingsOcrModelSelect, models, settings.ocrModel, "Built-in (Tesseract)");
     }
     settingsOcrActiveEl.textContent = settings.ocrModel || "built-in engine";
+    if (document.activeElement !== settingsAsrModelInput) {
+      settingsAsrModelInput.value = settings.asrModel;
+    }
+    settingsAsrHintEl.hidden = !settings.asrEnabled;
+    settingsAsrForm.hidden = !settings.asrEnabled;
+    if (!settings.asrEnabled) {
+      settingsAsrStatusEl.textContent = "Voice input is turned off on this machine (FAMILY_AGENT_ASR=0).";
+    }
     if (document.activeElement !== settingsOllamaUrlInput) {
       settingsOllamaUrlInput.value = settings.ollamaBaseUrl;
     }
@@ -1116,6 +1181,7 @@ async function refreshSettings() {
     adminLock(settingsModelForm, settingsModelStatusEl, settings.envLocked.model);
     adminLock(settingsOllamaForm, settingsOllamaStatusEl, settings.envLocked.ollamaBaseUrl);
     adminLock(settingsOcrForm, settingsOcrStatusEl, settings.envLocked.ocrModel);
+    if (settings.asrEnabled) adminLock(settingsAsrForm, settingsAsrStatusEl, settings.envLocked.asrModel);
     adminLock(settingsServerNameForm, settingsServerNameStatusEl, settings.envLocked.serverName);
     // The watched folder is this user's own — always editable (unless env-pinned).
     setEnvLocked(settingsForm, settingsStatusEl, settings.envLocked.inboxDir);
@@ -1169,6 +1235,13 @@ settingsOcrForm.addEventListener("submit", (e) => {
   void saveSetting({ ocrModel }, settingsOcrStatusEl, (s) =>
     s.ocrModel ? `Saved — OCR now uses ${s.ocrModel}` : "Saved — OCR uses the built-in engine"
   );
+});
+
+settingsAsrForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  // "" is valid — the server falls back to its default model.
+  const asrModel = settingsAsrModelInput.value.trim();
+  void saveSetting({ asrModel }, settingsAsrStatusEl, (s) => `Saved — voice input now uses ${s.asrModel}`);
 });
 
 settingsServerNameForm.addEventListener("submit", (e) => {

@@ -132,6 +132,37 @@ fn shutdown_child(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// Grant the WebKitGTK webview permission for `getUserMedia` (the microphone,
+/// used by Chat's voice-input button).
+///
+/// Unlike a browser, WebKitGTK does **not** show an interactive permission
+/// prompt — its default `permission-request` handler flatly denies media
+/// capture, so without this the mic button can never work on Linux (it works
+/// out of the box on macOS/Windows and in the `npm run dev` browser build).
+/// The webview only ever loads our own bundled `dist/` assets and talks to
+/// localhost, and the user has to click the mic button to trigger a request,
+/// so auto-approving is consistent with how the rest of the app treats local
+/// device access.
+#[cfg(target_os = "linux")]
+fn grant_webview_media_permission(app: &tauri::App) {
+    use tauri::Manager;
+
+    let Some(window) = app.get_webview_window("main") else {
+        eprintln!("family-agent-desktop: no 'main' webview — voice input permission not wired");
+        return;
+    };
+    let result = window.with_webview(|webview| {
+        use webkit2gtk::{PermissionRequestExt, WebViewExt};
+        webview.inner().connect_permission_request(|_webview, request| {
+            request.allow();
+            true
+        });
+    });
+    if let Err(err) = result {
+        eprintln!("family-agent-desktop: could not reach the webview for mic permission: {err}");
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -150,6 +181,8 @@ fn main() {
                     );
                 }
             }
+            #[cfg(target_os = "linux")]
+            grant_webview_media_permission(app);
             Ok(())
         })
         .on_window_event(|window, event| {

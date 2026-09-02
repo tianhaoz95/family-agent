@@ -426,3 +426,65 @@ tool's static assets by globally-unique 8-char id, and the id is the
 capability. On a family LAN that is an accepted (small) downgrade from the
 previous loopback-only bind; revisit if the tool sandbox ever holds anything
 sensitive.
+
+## Voice input: Whisper via transformers.js, not the model the user first named
+
+**Requested:** evaluate adding voice input with the local ASR model
+`nvidia/nemotron-3.5-asr-streaming-0.6b`.
+**Shipped:** speech-to-text via **Whisper** (`Xenova/whisper-base` by default),
+run in-process with **transformers.js** (`@huggingface/transformers`, which
+pulls `onnxruntime-node`).
+
+Why not the NVIDIA model:
+
+- **It can't ride any inference path this repo has.** Ollama serves LLMs/VLMs
+  only — no ASR — so a NeMo model means a *third* runtime. The NeMo
+  FastConformer + transducer architecture isn't something llama.cpp or
+  whisper.cpp implement either (GGUF is just a container; the runtime still
+  needs the graph), and NeMo/Riva proper is a CUDA-and-Docker stack that is
+  wildly out of proportion for a family laptop — the same GPU problem the
+  `glm-ocr` OCR path already ran into.
+- **transformers.js runs Whisper in plain Node on CPU**, with a self-contained
+  ONNX runtime, and mirrors the existing OCR story almost exactly: heavy
+  dependency, lazy-loaded on first use, model fetched from a CDN once and
+  cached under `<dataDir>/` (`asr-models/`, next to `tessdata/`), flagged as
+  the one deliberate "leaves the machine" event. Measured: an 11-second clip
+  transcribes accurately in ~2.4s on this CPU with the q8 `whisper-base` build.
+- If an NVIDIA-lineage model is ever wanted, the realistic route is
+  **sherpa-onnx** (runs NeMo transducer/CTC models via ONNX export, has Node
+  and Android bindings) — noted, not built.
+
+Other calls made here:
+
+- **It runs in agent-core, not the desktop webview.** transformers.js works in
+  the browser too (with WebGPU it'd be faster), but putting it server-side
+  means one implementation serves *both* clients — desktop and Android each
+  just record a clip and `POST /transcribe`. The Android app would otherwise
+  have needed its own on-device ASR.
+- **Off the planner, like `extraction.ts`.** A transcript is a mechanical
+  pipeline step; the endpoint binds the model directly and returns text. The
+  transcript is dropped into the chat composer for the user to review — never
+  auto-sent.
+- **Clients send WAV, not compressed audio.** The desktop decodes the
+  MediaRecorder blob through WebAudio and re-encodes 16 kHz mono PCM16;
+  Android's `AudioRecord` produces PCM directly. This keeps
+  `agent-core/src/transcribe.ts` a WAV *header parse* with zero audio-codec
+  dependency (no ffmpeg).
+- **`whisper-base` default, not `tiny.en`.** `tiny.en` is faster but
+  English-only; a household may not be. `base` multilingual is a few hundred
+  ms slower and still well under the planner turn's latency. Admin-settable
+  (`Xenova/whisper-tiny.en` … `whisper-small`) via Settings /
+  `FAMILY_AGENT_ASR_MODEL`; not validated against `ollama list` because it's a
+  Hugging Face id, not an Ollama model.
+- **A stock-phrase filter.** Whisper emits "Thank you." / "you" / "Thanks for
+  watching!" on near-silence; a transcript that is *only* one of those is
+  dropped so it doesn't land in the chat box.
+
+**Known limitation — Linux desktop mic permission.** The web build and the
+macOS/Windows Tauri webviews get `getUserMedia` for free. On Linux, WebKitGTK's
+default `permission-request` handler denies media capture; granting it needs a
+handler in `desktop/src-tauri/src/main.rs` (via `webview.with_webview(...)` →
+`webkit2gtk::WebView::connect_permission_request`). Not added in this pass —
+it pulls in a version-pinned `webkit2gtk` dependency that couldn't be verified
+in the build environment available, and a wrong version breaks the whole
+desktop build. Left as a one-file follow-up; the snippet is in BUILD_LOG.

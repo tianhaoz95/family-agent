@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- mDNS/DNS-SD discovery of the master node needs multicast on Wi-Fi. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Voice input in Chat: record a clip locally, upload it to the master
+         node's /transcribe (local Whisper). Runtime-requested on first tap. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <!-- Camera capture (Documents "Scan", Chat "Take photo") goes through
          ACTION_IMAGE_CAPTURE / the system camera app via ActivityResult's
          TakePicture — we never run the camera ourselves. Deliberately do NOT

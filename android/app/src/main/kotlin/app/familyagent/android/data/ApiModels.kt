@@ -52,6 +52,8 @@ data class HealthResponse(
     val needsSetup: Boolean = false,
     val toolsPort: Int = 4174,
     val toolsEnabled: String = "off",
+    /** Whether the server offers speech-to-text — the chat mic button hides when false. */
+    val asrEnabled: Boolean = false,
 )
 
 @Serializable
@@ -106,6 +108,9 @@ data class ChatRequest(
 
 @Serializable
 data class ChatResponse(val reply: String)
+
+@Serializable
+data class TranscribeResponse(val text: String)
 
 @Serializable
 data class TasksResponse(val tasks: List<Task>)

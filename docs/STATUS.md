@@ -193,6 +193,25 @@ Later changes (not part of the original autonomous session):
   through the system camera app (`TakePicture`), which needs no app-side
   permission; declaring it would have *required* a runtime grant. Fixes a
   latent issue in the Documents "Scan" button too.
+- **Voice input (speech-to-text)**: a mic button in both chat composers records
+  a clip and posts it to `POST /transcribe`; the transcript lands in the input
+  box for the user to review and send (never auto-sent). Whisper runs
+  **in-process in agent-core** via transformers.js / onnxruntime-node
+  (`agent-core/src/transcribe.ts`) — Ollama can't serve ASR, so this is a
+  separate local inference path, the same shape as OCR. Model
+  (`Xenova/whisper-base` by default, admin-settable, `FAMILY_AGENT_ASR_MODEL` /
+  `FAMILY_AGENT_ASR=0`) is pulled from the HF CDN once and cached under
+  `<dataDir>/asr-models/` — the one deliberate "leaves the machine" event, like
+  tesseract's language data. Clients send a 16 kHz mono WAV (desktop decodes via
+  WebAudio, Android records raw PCM with `AudioRecord`) so the server side is a
+  header parse with no codec dependency. Verified end-to-end against the real
+  server: an 11s speech clip transcribed accurately in ~2.4s on CPU. Whisper's
+  planner path is untouched — a transcript is a mechanical step (cf.
+  `extraction.ts`). Linux needs a `permission-request` handler in the Rust
+  shell for the webview to allow `getUserMedia` (WebKitGTK has no interactive
+  prompt and denies by default) — `grant_webview_media_permission()` in
+  `desktop/src-tauri/src/main.rs`, added after the first test report; see
+  BUILD_LOG. Android uses a native runtime grant (`RECORD_AUDIO`).
 - **Builder tools shipped** (the §03 "sandboxed scratch-tool builder" that the
   original session deferred). The planner has a third subagent, `builder-agent`;
   "build me a…" in chat, or the Tools tab, generates a small self-contained web

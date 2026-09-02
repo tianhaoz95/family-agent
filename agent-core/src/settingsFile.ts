@@ -11,6 +11,8 @@ export interface PersistedSettings {
    * Empty / unset means the built-in tesseract.js engine. See fileExtract.ts.
    */
   ocrModel?: string;
+  /** Hugging Face repo id for the speech-to-text (voice input) model. See transcribe.ts. */
+  asrModel?: string;
   /** The chat/planner model name pulled into Ollama. */
   model?: string;
   /** Base URL of the Ollama instance (localhost, or a tailnet node). */
@@ -19,7 +21,7 @@ export interface PersistedSettings {
   serverName?: string;
 }
 
-const STRING_KEYS: (keyof PersistedSettings)[] = ["ocrModel", "model", "ollamaBaseUrl", "serverName"];
+const STRING_KEYS: (keyof PersistedSettings)[] = ["ocrModel", "asrModel", "model", "ollamaBaseUrl", "serverName"];
 
 function settingsPath(dataDir: string): string {
   return `${dataDir}/settings.json`;

@@ -117,6 +117,23 @@ class FamilyAgentApiTest {
     }
 
     @Test
+    fun `transcribe uploads the clip as multipart audio and parses the text`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"text":"buy milk tomorrow"}"""))
+        val res = api.transcribe(byteArrayOf(1, 2, 3, 4))
+        assertEquals("buy milk tomorrow", res.text)
+        val request = server.takeRequest()
+        assertEquals("/transcribe", request.path)
+        assertTrue(request.getHeader("Content-Type")!!.startsWith("multipart/form-data"))
+        assertTrue(request.body.readUtf8().contains("""name="audio""""))
+    }
+
+    @Test
+    fun `health defaults asrEnabled to false when the server omits it`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"ok":true,"model":"m"}"""))
+        assertEquals(false, api.health().asrEnabled)
+    }
+
+    @Test
     fun `non-2xx response throws ApiException with useful message`() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
         try {

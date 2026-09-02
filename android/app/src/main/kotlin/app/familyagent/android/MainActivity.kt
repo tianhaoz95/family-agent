@@ -178,7 +178,14 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                 modifier = Modifier.padding(padding),
             ) {
                 composable(Destination.Chat.route) {
-                    ChatScreen(state.chatMessages, state.chatSending, onSend = viewModel::sendChat)
+                    ChatScreen(
+                        messages = state.chatMessages,
+                        sending = state.chatSending,
+                        voiceEnabled = state.voiceEnabled,
+                        transcribing = state.chatTranscribing,
+                        onSend = viewModel::sendChat,
+                        onTranscribe = viewModel::transcribeVoice,
+                    )
                 }
                 composable(Destination.Tasks.route) {
                     TasksScreen(

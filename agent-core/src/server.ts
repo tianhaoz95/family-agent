@@ -13,6 +13,7 @@ import { verifyPassword, bearerToken } from "./auth.js";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { extractText, SUPPORTED_EXTENSIONS, UnsupportedFileTypeError } from "./fileExtract.js";
+import { transcribeWav, resetTranscriber } from "./transcribe.js";
 import { listOllamaModels, ollamaListHasModel } from "./ollamaOcr.js";
 import { toolsDir } from "./config.js";
 import { ToolSupervisor } from "./tools/supervisor.js";
@@ -147,6 +148,8 @@ export function buildServer(
     needsSetup: store.countUsers() === 0,
     toolsPort: config.toolsPort,
     toolsEnabled: config.toolsEnabled && supervisor.denoAvailable() ? "full" : config.toolsEnabled ? "static-only" : "off",
+    // Both chat UIs hide the mic button when this is false.
+    asrEnabled: config.asrEnabled,
   }));
 
   // zod's `error.message` is a JSON dump — fine for a dev, ugly in the UI.
@@ -318,6 +321,35 @@ export function buildServer(
     }
   });
 
+  // ---- voice input ----
+  // Speech-to-text for the mic button in both chat composers. The client
+  // records a clip and sends it as a WAV (multipart, field "audio"); we hand
+  // back the transcript for the user to review and send. Whisper runs
+  // in-process (transcribe.ts) and never touches the planner.
+  app.post("/transcribe", async (req, reply) => {
+    if (!config.asrEnabled) {
+      return reply.code(403).send({ error: "Voice input is turned off on this server." });
+    }
+    if (!req.isMultipart()) {
+      return reply.code(400).send({ error: "Send the recording as multipart/form-data (field \"audio\")." });
+    }
+    const data = await req.file();
+    if (!data) return reply.code(400).send({ error: "No audio uploaded." });
+    const buffer = await data.toBuffer();
+    if (buffer.length === 0) return reply.code(400).send({ error: "The audio clip is empty." });
+    try {
+      const { text } = await transcribeWav(buffer);
+      req.userStore.logActivity("user", "voice.transcribed", text || "(no speech detected)");
+      return { text };
+    } catch (err) {
+      req.log?.error?.(err);
+      return reply.code(502).send({
+        error: "Could not transcribe the audio.",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
   // ---- tasks ----
   app.get("/tasks", async (req) => {
     const status = (req.query as any)?.status;
@@ -475,6 +507,8 @@ export function buildServer(
     model: config.model,
     ollamaBaseUrl: config.ollamaBaseUrl,
     ocrModel: config.ocrModel,
+    asrModel: config.asrModel,
+    asrEnabled: config.asrEnabled,
     serverName: config.serverName,
     isAdmin: user.role === "admin",
     envLocked,
@@ -491,6 +525,7 @@ export function buildServer(
       .refine((u) => /^https?:\/\//i.test(u), "must start with http:// or https://")
       .optional(),
     ocrModel: z.string().optional(),
+    asrModel: z.string().trim().max(120).optional(),
     serverName: z.string().trim().min(1).max(60).optional(),
   });
   app.put("/settings", async (req, reply) => {
@@ -501,12 +536,12 @@ export function buildServer(
       return reply.code(400).send({ error: "Nothing to update." });
     }
 
-    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "serverName"] as const;
+    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "serverName"] as const;
     if (req.authUser.role !== "admin" && adminFields.some((f) => patch[f] !== undefined)) {
       return reply.code(403).send({ error: "Only an admin can change machine settings." });
     }
 
-    for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "serverName"] as const) {
+    for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "asrModel", "serverName"] as const) {
       if (patch[key] !== undefined && envLocked[key]) {
         return reply.code(400).send({
           error: `"${key}" is pinned by an environment variable and can't be changed here.`,
@@ -534,6 +569,7 @@ export function buildServer(
       model: patch.model,
       ollamaBaseUrl: patch.ollamaBaseUrl,
       ocrModel: patch.ocrModel,
+      asrModel: patch.asrModel,
       serverName: patch.serverName,
     };
     if (Object.values(machinePatch).some((v) => v !== undefined)) {
@@ -544,6 +580,10 @@ export function buildServer(
     if (patch.ollamaBaseUrl !== undefined) config.ollamaBaseUrl = patch.ollamaBaseUrl;
     if (patch.model !== undefined) config.model = patch.model;
     if (patch.ocrModel !== undefined) config.ocrModel = patch.ocrModel;
+    if (patch.asrModel !== undefined) {
+      config.asrModel = patch.asrModel || "Xenova/whisper-base";
+      resetTranscriber(); // next /transcribe rebuilds the pipeline on the new model
+    }
     if (patch.serverName !== undefined) config.serverName = patch.serverName;
 
     if (patch.inboxDir !== undefined) {
@@ -566,6 +606,7 @@ export function buildServer(
         patch.ocrModel ? `OCR model set to "${patch.ocrModel}"` : "OCR model cleared — using the built-in engine",
         patch.ocrModel !== undefined,
       ],
+      [`Voice-input model set to "${config.asrModel}"`, patch.asrModel !== undefined],
     ] as const) {
       if (changed) req.userStore.logActivity("system", "settings.updated", msg);
     }

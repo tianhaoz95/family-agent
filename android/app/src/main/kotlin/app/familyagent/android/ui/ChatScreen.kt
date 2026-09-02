@@ -1,6 +1,8 @@
 package app.familyagent.android.ui
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -18,8 +20,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import app.familyagent.android.ChatMessage
 import kotlinx.coroutines.launch
@@ -43,7 +48,10 @@ private const val MAX_IMAGES = 4
 fun ChatScreen(
     messages: List<ChatMessage>,
     sending: Boolean,
+    voiceEnabled: Boolean,
+    transcribing: Boolean,
     onSend: (String, List<String>) -> Unit,
+    onTranscribe: (ByteArray, (String) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     var input by remember { mutableStateOf("") }
@@ -52,6 +60,39 @@ fun ChatScreen(
     var attachMenuOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // ---- voice input ----
+    val recorder = remember { VoiceRecorder() }
+    var isRecording by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) { onDispose { recorder.cancel() } }
+
+    fun beginRecording() {
+        runCatching { recorder.start() }.onSuccess { isRecording = true }
+    }
+    fun finishRecording() {
+        if (!isRecording) return
+        isRecording = false
+        scope.launch {
+            val wav = recorder.stop()
+            if (wav.isNotEmpty()) {
+                onTranscribe(wav) { text ->
+                    input = if (input.isBlank()) text else "${input.trimEnd()} $text"
+                }
+            }
+        }
+    }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) beginRecording()
+    }
+    fun onMicClick() {
+        if (isRecording) {
+            finishRecording()
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) beginRecording() else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
 
     fun addUris(uris: List<Uri>) {
         scope.launch {
@@ -188,11 +229,26 @@ fun ChatScreen(
                     )
                 }
             }
+            if (voiceEnabled) {
+                when {
+                    transcribing -> Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
+                    else -> IconButton(onClick = { onMicClick() }, enabled = !sending) {
+                        Icon(
+                            if (isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                            contentDescription = if (isRecording) "Stop recording" else "Voice input",
+                            modifier = Modifier.size(22.dp),
+                            tint = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
             TextField(
                 value = input,
                 onValueChange = { input = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Message, or attach a photo…") },
+                placeholder = { Text(if (isRecording) "Listening…" else "Message, or attach a photo…") },
                 maxLines = 4,
                 textStyle = MaterialTheme.typography.bodyLarge,
                 colors = TextFieldDefaults.colors(

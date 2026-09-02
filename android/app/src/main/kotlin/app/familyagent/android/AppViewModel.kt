@@ -46,6 +46,10 @@ data class AppUiState(
     val connection: ConnectionStatus = ConnectionStatus.Connecting,
     val chatMessages: List<ChatMessage> = emptyList(),
     val chatSending: Boolean = false,
+    /** Server offers speech-to-text (from /health) — gates the chat mic button. */
+    val voiceEnabled: Boolean = false,
+    /** A recorded voice clip is being transcribed right now. */
+    val chatTranscribing: Boolean = false,
     val tasks: List<Task> = emptyList(),
     val documents: List<Document> = emptyList(),
     val activity: List<ActivityEntry> = emptyList(),
@@ -176,6 +180,7 @@ class AppViewModel(
                     _state.value = _state.value.copy(
                         connection = ConnectionStatus.Connected(h.model),
                         toolsBaseUrl = toolsBaseUrl(_state.value.serverUrl, h.toolsPort),
+                        voiceEnabled = h.asrEnabled,
                     )
                 }
                 .onFailure {
@@ -236,6 +241,39 @@ class AppViewModel(
             _state.value = _state.value.copy(
                 chatMessages = withUser + ChatMessage("assistant", reply),
                 chatSending = false,
+            )
+            refreshActivity()
+        }
+    }
+
+    /**
+     * Transcribe a recorded voice clip and hand the text back to the composer
+     * (via [onText]) for the user to review — never auto-sent. A failed or
+     * empty transcription drops an assistant note into the thread.
+     */
+    fun transcribeVoice(wav: ByteArray, onText: (String) -> Unit) {
+        if (wav.isEmpty()) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(chatTranscribing = true)
+            val result = apiCall { api.transcribe(wav) }
+            _state.value = _state.value.copy(chatTranscribing = false)
+            result.fold(
+                onSuccess = { r ->
+                    if (r.text.isBlank()) {
+                        _state.value = _state.value.copy(
+                            chatMessages = _state.value.chatMessages +
+                                ChatMessage("assistant", "Didn't catch any speech — try again, closer to the mic."),
+                        )
+                    } else {
+                        onText(r.text)
+                    }
+                },
+                onFailure = {
+                    _state.value = _state.value.copy(
+                        chatMessages = _state.value.chatMessages +
+                            ChatMessage("assistant", "Voice input failed: ${it.message}"),
+                    )
+                },
             )
             refreshActivity()
         }

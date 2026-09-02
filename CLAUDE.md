@@ -151,8 +151,18 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   tesseract.js (`looksLikeImage`) — feeding it a file that's merely *named* `.jpg` but isn't
   really an image can crash the whole process from inside the worker thread, not just reject one
   promise; a normal try/catch around `recognize()` doesn't stop that.
+- `transcribe.ts` — speech-to-text for the mic button in both chat composers (`POST
+  /transcribe`, multipart WAV in, `{ text }` out). Whisper via transformers.js
+  (`@huggingface/transformers` + `onnxruntime-node`), run **in-process** — Ollama can't
+  serve ASR, so this is a separate inference path with the same shape as OCR: heavy import
+  lazy-loaded on first call, model (`config.asrModel`, default `Xenova/whisper-base`) pulled
+  from the HF CDN once and cached under `<dataDir>/asr-models/`. Like `agents/extraction.ts`
+  it never touches the planner — a transcript is a mechanical step; the endpoint just returns
+  text for the user to review. Clients send a 16 kHz mono WAV so the module is a
+  dependency-free header parse (`decodeWav`), not an audio-codec problem. `FAMILY_AGENT_ASR=0`
+  disables it (route 403s, `/health.asrEnabled` false, both clients hide the mic button).
 - `settingsFile.ts` — persists the settings the desktop Settings page can change
-  (`inboxDir`, `model`, `ollamaBaseUrl`, `ocrModel`) to `<dataDir>/settings.json` as one
+  (`inboxDir`, `model`, `ollamaBaseUrl`, `ocrModel`, `asrModel`) to `<dataDir>/settings.json` as one
   merged JSON object. Precedence in `config.ts` for each: env var > persisted file > default —
   the env var always wins so an operator's explicit override can't be shadowed by something
   saved from the UI earlier, and when an env var is set that field is `envLocked` (UI shows it
