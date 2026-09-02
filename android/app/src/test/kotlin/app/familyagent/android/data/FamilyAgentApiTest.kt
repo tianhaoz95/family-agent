@@ -186,6 +186,40 @@ class FamilyAgentApiTest {
     }
 
     @Test
+    fun `searchDocuments encodes the query and filters, parses the results`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"results":[{"id":"DOC12345","filename":"car-insurance.pdf","category":"insurance","summary":"Auto policy","snippet":"… renewal …","createdAt":"2026-09-01T00:00:00.000Z","extractionStatus":"done"}]}"""
+            )
+        )
+        val hits = api.searchDocuments("car insurance", category = "insurance", dueBefore = "2026-10-01")
+        assertEquals(1, hits.size)
+        assertEquals("Auto policy", hits[0].summary)
+
+        val recorded = server.takeRequest()
+        assertTrue(recorded.path!!.startsWith("/documents/search?"))
+        assertTrue(recorded.path!!.contains("q=car+insurance") || recorded.path!!.contains("q=car%20insurance"))
+        assertTrue(recorded.path!!.contains("category=insurance"))
+        assertTrue(recorded.path!!.contains("dueBefore=2026-10-01"))
+    }
+
+    @Test
+    fun `searchTasks passes q and status`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"results":[{"id":"TSK00001","title":"Renew car registration","notes":null,"dueDate":null,"dueTime":null,"status":"open","snippet":""}]}"""
+            )
+        )
+        val hits = api.searchTasks("registration", status = "open")
+        assertEquals("Renew car registration", hits[0].title)
+
+        val recorded = server.takeRequest()
+        assertTrue(recorded.path!!.startsWith("/tasks/search?"))
+        assertTrue(recorded.path!!.contains("q=registration"))
+        assertTrue(recorded.path!!.contains("status=open"))
+    }
+
+    @Test
     fun `documents response decodes extraction fields`() = runBlocking {
         server.enqueue(
             MockResponse().setBody(

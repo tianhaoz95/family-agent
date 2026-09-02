@@ -488,3 +488,94 @@ handler in `desktop/src-tauri/src/main.rs` (via `webview.with_webview(...)` →
 it pulls in a version-pinned `webkit2gtk` dependency that couldn't be verified
 in the build environment available, and a wrong version breaks the whole
 desktop build. Left as a one-file follow-up; the snippet is in BUILD_LOG.
+
+## Document & task search: SQLite FTS5, not an external search engine
+
+**Context.** Until now both subagents "searched" by enumerating everything —
+`list_documents` / `list_tasks` return *every* row and let the model scan the
+result. That is fine for a demo and falls over for a real family: hundreds or
+thousands of documents don't fit a small local model's context window, and
+even when they do, "search quality" degrades to "how well does gemma4:e2b
+skim a long list." The user asked for real search.
+
+**What shipped.** In-process full-text search via **SQLite FTS5**, which is
+compiled into Node's built-in `node:sqlite` (verified: `CREATE VIRTUAL TABLE
+… USING fts5` works with no extension, as do the JSON1 functions and triggers
+this relies on). Two standalone FTS5 mirror tables — `documents_fts`
+(filename + full text + extracted summary) and `tasks_fts` (title + notes) —
+kept in step with the base tables by **AFTER INSERT/UPDATE/DELETE triggers**,
+so the index can't drift out of sync with the data no matter which code path
+did the write. That's the same principle the activity log already follows
+(written inline by every mutating method) — pushed down to the database so
+even a future code path that forgets about search stays correct. `user_id`
+rides along `UNINDEXED` so a search stays scoped to one family member without
+a join. On startup, a row-count mismatch between a base table and its mirror
+triggers a full rebuild — this is what backfills the index on the first
+upgrade of an existing database, and self-heals any drift; a full rebuild is
+milliseconds at family scale. `Store.rebuildSearchIndex()` exposes it for ops.
+
+New surface:
+- `ScopedStore.searchDocuments(query, { category?, dueBefore?, dueAfter?, limit? })`
+  and `ScopedStore.searchTasks(query, { status?, limit? })`. Ranked by
+  `bm25()`, with a `snippet()` excerpt. An empty/unparseable query falls back
+  to a recency listing with whatever structured filters were supplied, so
+  `searchDocuments("", { category: "bill" })` is "my bills".
+- Query tokens are **ORed**, not ANDed. First cut ANDed them ("more words
+  narrows"); a live-model test of *"what is my insurance number?"* then found
+  nothing — the insurance document never contains the literal word "number",
+  so `"insurance" AND "number"` excluded the one document the user wanted.
+  ORing and letting `bm25()` rank is the standard search-box behaviour and the
+  right call for a small corpus where recall matters more than precision.
+- `documents_fts` also indexes the extracted **category**, so "insurance" /
+  "bill" / "school" find a document classified that way even when its OCR'd
+  text never says the word.
+- `search_documents` / `search_tasks` write a `document.searched` /
+  `task.searched` row to the activity log (from the tool wrapper, not the
+  store method — so the HTTP search endpoints stay silent), giving the
+  Activity tab a record of what the agent looked for and how many hits it got.
+- Agent tools `search_documents` (bound to document-agent) and `search_tasks`
+  (bound to task-agent), plus prompt changes telling both subagents to reach
+  for search before the list-everything tools. The planner prompt gained a
+  worked example ("do we have the car insurance policy?").
+- HTTP: `GET /documents/search` and `GET /tasks/search` (both plain GET, so
+  the existing CORS method list already covers them).
+- `category` and `importantDates` filters read the extracted-fields JSON on
+  the `documents` row directly (`json_extract` / `json_each`) rather than
+  being denormalised into columns — the extraction shape is still changing
+  and a family corpus is small enough that this is free.
+
+**Why not Meilisearch / Typesense / OpenViking**, even though all three can
+run on localhost:
+- They'd each be a **second long-running service** to install, version-match,
+  supervise (the desktop shell currently spawns exactly one sidecar with a
+  `PR_SET_PDEATHSIG` death-pact), health-check, and back up. `node:sqlite`
+  was picked specifically to avoid even a native compile step; this would be
+  a much bigger dependency.
+- They are **secondary stores** that must be kept in sync with SQLite over a
+  process boundary — reintroducing exactly the drift problem the triggers
+  eliminate, now with partial-write and reconnect failure modes.
+- **No row-level security.** `ScopedStore`'s `WHERE user_id = ?` is the one
+  isolation boundary; a per-index or per-filter scheme in an external engine
+  is a new place for a cross-account leak, in an app that hasn't even built
+  cross-account *sharing* yet.
+- OpenViking specifically is not a search engine — it's an agent
+  context/memory framework (`viking://` virtual FS, its own agent loop). It
+  overlaps deepagents' job, needs an embedding model in the ingest path, is
+  AGPLv3, and is at v0.3.x. Wrong tool, wrong maturity for a foundational
+  dependency.
+
+The tool/HTTP contract is deliberately backend-shaped (`search_documents(query,
+filters) -> ranked hits`, then `get_document(id)`), so if a family ever
+outgrows FTS5 the backend can change without touching the agent or the
+clients. Semantic search (embeddings via Ollama, or `sqlite-vec` — `node:sqlite`
+does expose `loadExtension`) is the natural next step behind that same
+signature; it's not built here because keyword + structured filters covers
+the realistic query set and embeddings add a model to the ingest path.
+
+**Not done: client search UI.** The desktop Documents screen and the Android
+app still only *list*. `desktop/src/api.ts` and `android/.../FamilyAgentApi.kt`
+gained `searchDocuments` / `searchTasks` client methods (with tests), but no
+search box is wired into either UI — that needs a design pass against the two
+independent design systems and live-app verification, which is a poor fit for
+an unattended session. The agent path — the thing actually asked about — is
+complete end to end.

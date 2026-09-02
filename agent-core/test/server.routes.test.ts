@@ -153,6 +153,40 @@ describe("HTTP API", () => {
     expect(again.statusCode).toBe(404);
   });
 
+  it("GET /documents/search ranks keyword hits and applies filters", async () => {
+    await inject({ method: "POST", url: "/documents/ingest", payload: { filename: "car-insurance.pdf", text: "auto policy renewal" } });
+    await inject({ method: "POST", url: "/documents/ingest", payload: { filename: "grocery.txt", text: "milk eggs bread" } });
+
+    const hit = await inject({ method: "GET", url: "/documents/search?q=insurance%20renewal" });
+    expect(hit.statusCode).toBe(200);
+    expect(hit.json().results.map((r: any) => r.filename)).toEqual(["car-insurance.pdf"]);
+
+    const miss = await inject({ method: "GET", url: "/documents/search?q=insurance&category=school" });
+    expect(miss.json().results).toHaveLength(0);
+  });
+
+  it("GET /documents/search is scoped to the signed-in user", async () => {
+    const member = seedUser(store, { username: "kid2", role: "member" });
+    const asMember = authInject(app, member.token);
+    await inject({ method: "POST", url: "/documents/ingest", payload: { filename: "admin.txt", text: "shared word receipt" } });
+    await asMember({ method: "POST", url: "/documents/ingest", payload: { filename: "kid.txt", text: "shared word receipt" } });
+
+    expect((await inject({ method: "GET", url: "/documents/search?q=receipt" })).json().results.map((r: any) => r.filename)).toEqual(["admin.txt"]);
+    expect((await asMember({ method: "GET", url: "/documents/search?q=receipt" })).json().results.map((r: any) => r.filename)).toEqual(["kid.txt"]);
+  });
+
+  it("GET /tasks/search finds a task by keyword and filters by status", async () => {
+    await inject({ method: "POST", url: "/tasks", payload: { title: "Renew car registration" } });
+    await inject({ method: "POST", url: "/tasks", payload: { title: "Buy stamps" } });
+
+    const res = await inject({ method: "GET", url: "/tasks/search?q=registration" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().results.map((r: any) => r.title)).toEqual(["Renew car registration"]);
+
+    const none = await inject({ method: "GET", url: "/tasks/search?q=registration&status=done" });
+    expect(none.json().results).toHaveLength(0);
+  });
+
   it("POST /documents/:id/retry-extraction resets a failed doc, 404s for unknown", async () => {
     const created = await inject({
       method: "POST",

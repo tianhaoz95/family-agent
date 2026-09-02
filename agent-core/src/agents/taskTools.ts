@@ -51,6 +51,34 @@ export function makeTaskTools(store: ScopedStore) {
     }
   );
 
+  const searchTasks = tool(
+    async ({ query, status }) => {
+      const hits = store.searchTasks(query ?? "", { status, limit: 10 });
+      const label = [query?.trim(), status].filter(Boolean).join(" ") || "(all)";
+      store.logActivity(
+        "task-agent",
+        "task.searched",
+        `Searched tasks for "${label}" — ${hits.length} match${hits.length === 1 ? "" : "es"}`
+      );
+      if (hits.length === 0) return query?.trim() ? `No tasks matched "${query}".` : "No tasks found.";
+      return hits
+        .map((t) => {
+          const when = t.dueDate ? ` (due ${t.dueDate}${t.dueTime ? ` ${t.dueTime}` : ""})` : "";
+          return `- [${t.status}] ${t.title}${when} (id: ${t.id})`;
+        })
+        .join("\n");
+    },
+    {
+      name: "search_tasks",
+      description:
+        "Find existing tasks by keyword in their title or notes (best match first), optionally filtered by status. Use it to check whether a task already exists before creating a duplicate, or to get the id of the task to complete.",
+      schema: z.object({
+        query: z.string().describe("Words to look for in the task, e.g. 'dentist' or 'car registration'"),
+        status: z.enum(["open", "done"]).optional(),
+      }),
+    }
+  );
+
   const completeTask = tool(
     async ({ taskId }) => {
       const updated = store.updateTaskStatus(taskId, "done");
@@ -66,5 +94,5 @@ export function makeTaskTools(store: ScopedStore) {
     }
   );
 
-  return [createTask, listTasks, completeTask];
+  return [createTask, listTasks, searchTasks, completeTask];
 }

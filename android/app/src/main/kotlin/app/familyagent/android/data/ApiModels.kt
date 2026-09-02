@@ -34,6 +34,36 @@ data class Document(
     val extractionStatus: String = "pending",
 )
 
+/** One hit from GET /documents/search — a list row plus a match snippet. */
+@Serializable
+data class DocumentSearchHit(
+    val id: String,
+    val filename: String,
+    val category: String? = null,
+    val summary: String? = null,
+    val snippet: String = "",
+    val createdAt: String,
+    val extractionStatus: String = "pending",
+)
+
+/** One hit from GET /tasks/search. */
+@Serializable
+data class TaskSearchHit(
+    val id: String,
+    val title: String,
+    val notes: String? = null,
+    val dueDate: String? = null,
+    val dueTime: String? = null,
+    val status: String,
+    val snippet: String = "",
+)
+
+@Serializable
+data class DocumentSearchResponse(val results: List<DocumentSearchHit>)
+
+@Serializable
+data class TaskSearchResponse(val results: List<TaskSearchHit>)
+
 @Serializable
 data class ActivityEntry(
     val id: String,

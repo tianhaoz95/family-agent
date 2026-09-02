@@ -33,6 +33,55 @@ export function makeDocumentTools(store: ScopedStore) {
     }
   );
 
+  const CATEGORIES = ["bill", "medical", "school", "insurance", "tax", "receipt", "other"] as const;
+
+  const searchDocuments = tool(
+    async ({ query, category, dueBefore, dueAfter }) => {
+      const hits = store.searchDocuments(query ?? "", { category, dueBefore, dueAfter, limit: 8 });
+      const label = [query?.trim(), category && `category:${category}`].filter(Boolean).join(" ") || "(all)";
+      store.logActivity(
+        "document-agent",
+        "document.searched",
+        `Searched documents for "${label}" — ${hits.length} match${hits.length === 1 ? "" : "es"}`
+      );
+      if (hits.length === 0) {
+        return query?.trim()
+          ? `No documents matched "${query}".`
+          : "No documents match those filters.";
+      }
+      return hits
+        .map((h) => {
+          const status = h.category
+            ? `${h.category}${h.summary ? ` — ${h.summary}` : ""}`
+            : h.extractionStatus === "done"
+              ? "uncategorized"
+              : "still being processed";
+          const line = `- ${h.filename} (id: ${h.id}): ${status}`;
+          return h.snippet ? `${line}\n    “…${h.snippet}…”` : line;
+        })
+        .join("\n");
+    },
+    {
+      name: "search_documents",
+      description:
+        "Find family documents by keyword — searches the filename, the full text, and the extracted summary, and returns the best matches (with their ids) first. Optionally narrow by category (bill, medical, school, insurance, tax, receipt, other) or by an important-date range (dueBefore / dueAfter, ISO YYYY-MM-DD). Use this for any 'do we have…', 'find the…', 'when is … due' question; only fall back to list_documents to browse everything with no particular query.",
+      schema: z.object({
+        query: z
+          .string()
+          .describe("What to look for, in plain words — e.g. 'car insurance renewal' or 'Lincoln Elementary field trip'"),
+        category: z.enum(CATEGORIES).optional().describe("Only documents in this category"),
+        dueBefore: z
+          .string()
+          .optional()
+          .describe("Only documents with an important date on or before this ISO date (YYYY-MM-DD)"),
+        dueAfter: z
+          .string()
+          .optional()
+          .describe("Only documents with an important date on or after this ISO date (YYYY-MM-DD)"),
+      }),
+    }
+  );
+
   const getDocument = tool(
     async ({ documentId }) => {
       const doc = store.getDocument(documentId);
@@ -69,5 +118,5 @@ export function makeDocumentTools(store: ScopedStore) {
     }
   );
 
-  return [getDocument, listDocuments, saveExtraction];
+  return [searchDocuments, getDocument, listDocuments, saveExtraction];
 }

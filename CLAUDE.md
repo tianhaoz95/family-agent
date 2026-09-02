@@ -176,6 +176,9 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
     filesystem; these are explicitly permission-denied and stripped down to just `read_file` via
     `createFilesystemMiddleware`, because small local models reliably confuse "documents" (this
     app's domain concept) with "files" (deepagents' concept) otherwise.
+  - subagents get `search_documents` / `search_tasks` (keyword search, `db.ts`) alongside the
+    `list_*` tools; the prompts push both subagents to search for a specific thing and reserve
+    `list_*` for "show me everything". Historically they only had `list_*` — see `docs/DECISIONS.md`.
   - `askFamilyAgent()` retries once on an empty reply *or* a reply containing raw tool-call
     syntax (`LOOKS_MALFORMED` regex) — both are real small-model failure modes, not
     hypothetical. It also takes an optional `images: string[]` (data URIs) — the chat UI in
@@ -194,6 +197,13 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   and documents get short 8-char Crockford-base32 ids (`shortId()`), not UUIDs — small models
   transcribe short ids reliably and 36-char UUIDs unreliably. Every mutating method logs to the
   `activity` table itself, so the activity log can't drift out of sync with what actually happened.
+  **Search** is FTS5 (`documents_fts` / `tasks_fts`), kept in sync by triggers on the base tables
+  (same "can't drift" principle, pushed into the DB) with a startup row-count reconcile that
+  backfills a legacy DB. `ScopedStore.searchDocuments()` / `searchTasks()` do `bm25()` ranking +
+  `snippet()` + structured filters (category / important-date range read straight out of the
+  extracted-fields JSON); `toFtsMatchQuery()` turns free text into a safe `MATCH` expression (a
+  raw NL string is an FTS syntax error, not a no-op). Empty query = filtered recency list. Full
+  rationale (and why not an external search engine) in `docs/DECISIONS.md`.
 - `inboxWatcher.ts` — chokidar watch on `config.inboxDir`. Delegates to `fileExtract.ts` for
   whatever's supported there (text, PDF, images); anything else is logged as skipped, not
   silently ignored. Dedupes on `source_path` so restarts don't reprocess files.

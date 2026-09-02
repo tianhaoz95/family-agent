@@ -306,3 +306,77 @@ agent…") because WebKitGTK has no interactive permission prompt — its defaul
 Auto-approving is fine here: the webview only ever loads our own bundled
 `dist/` and localhost, and the user has to click the mic button to trigger a
 request. macOS/Windows and the `npm run dev` browser build never needed this.
+
+## Document & task search (FTS5)
+
+Replaced the "list every row and let the model skim it" approach with real
+keyword search. Full rationale (and why not Meilisearch/Typesense/OpenViking)
+in DECISIONS.md → "Document & task search". Blow-by-blow:
+
+- Probed `node:sqlite` first: FTS5, JSON1 (`json_extract`/`json_each`), and
+  triggers all work in the bundled SQLite (Node 24) with no extension. A raw
+  natural-language string passed to `MATCH` is a *syntax error*
+  (`fts5: syntax error near "'"`), not a no-op — so queries have to be
+  tokenised.
+- **agent-core**:
+  - `db.ts` — `documents_fts` / `tasks_fts` standalone FTS5 tables +
+    `AFTER INSERT/UPDATE/DELETE` triggers, created in `migrate()` (not
+    `SCHEMA`, because the triggers reference `user_id`, which a legacy
+    single-user DB only gets in the column migrations). Row-count
+    reconciliation on startup backfills/self-heals the mirror.
+    `toFtsMatchQuery()` reduces free text to quoted prefix tokens
+    (`"car"* "insurance"*`), drops 1-char noise, caps at 12 tokens, returns
+    `""` when nothing's searchable. `ScopedStore.searchDocuments()` /
+    `searchTasks()` — `bm25()` ranking + `snippet()`, JSON-based
+    `category`/date filters, empty-query fallback to a filtered recency list.
+    `Store.rebuildSearchIndex()` for ops.
+  - `agents/documentTools.ts` / `taskTools.ts` — `search_documents` /
+    `search_tasks` tools. `agents/index.ts` — document-agent, task-agent, and
+    planner prompts rewritten to prefer search over list; subagent
+    `description`s updated.
+  - `server.ts` — `GET /documents/search`, `GET /tasks/search`.
+- **desktop** / **android** — `searchDocuments` / `searchTasks` client
+  methods + response types only. No UI (see DECISIONS.md).
+- Fixed one flaky test: the empty-query fallback ordered only by
+  `created_at DESC`, and two rows created in the same millisecond tie —
+  added `, rowid DESC` as a deterministic tiebreak.
+
+**Verified**
+
+- agent-core: `db.test.ts` (+18: FTS matching on filename/body/summary,
+  ranking, per-user scoping, category + date-range filters, index freshness
+  across extraction/delete, legacy-DB backfill, `rebuildSearchIndex`,
+  `toFtsMatchQuery` unit tests), `documentTools.test.ts` (+3),
+  new `taskTools.test.ts` (5), `server.routes.test.ts` (+3). Fast suite green;
+  full suite (with live-model integration tests) left running.
+- desktop: `npm test` 21/21, `npm run typecheck` clean.
+- android: `testDebugUnitTest` 17/17, `compileDebugKotlin` clean.
+
+### Follow-up: three fixes after a live test of "what is my insurance number?"
+
+The user uploaded an insurance EOB and asked "what is my insurance number?"
+against a **stale build** (the desktop had spawned `dist/server.js` from before
+the search feature — `documents_fts` didn't even exist yet). Rebuilt and
+retested against the live model; the planner *did* delegate, but document-agent
+came back empty. Root cause and fixes:
+
+1. **Query tokens were ANDed.** `"insurance" AND "number"` — the document has
+   "insurance" but never the literal "number", so zero results. Changed
+   `toFtsMatchQuery` to join tokens with `OR` and let `bm25()` rank. Verified:
+   the same question now answers *"Your insurance Member ID … is 210284396,
+   from insurance.pdf."*
+2. **Category wasn't searchable.** Added a `category` column to `documents_fts`
+   (fed from the extracted JSON by the triggers) so "insurance" / "bill" match
+   a document classified that way even if the OCR text doesn't contain the
+   word. FTS mirror schema is now migrated by a `dropFtsTableIfColumnsDiffer`
+   guard + trigger drop/recreate on every start.
+3. **Searches were invisible in the audit trail.** `search_documents` /
+   `search_tasks` now log a `document.searched` / `task.searched` activity row
+   from the tool wrapper (HTTP `/…/search` stays silent).
+
+Tests: +2 regression tests in `db.test.ts` (multi-word query where only one
+word is in the doc; category-only match), `toFtsMatchQuery` tests updated for
+OR. Fast suite 130 pass / 1 skip; `dist/` rebuilt.
+
+**The user still needs to restart agent-core** (or the desktop app) to pick up
+any of this — their running process is the pre-search build.

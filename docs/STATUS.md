@@ -16,8 +16,9 @@ that broke and how it was fixed.
 ## What's here
 
 ```
-agent-core/   Node/TS backend — local HTTP API, SQLite storage, the deepagents
-              planner + task-agent/document-agent subagents, Ollama client.
+agent-core/   Node/TS backend — local HTTP API, SQLite storage (incl. FTS5
+              keyword search over documents + tasks), the deepagents planner +
+              task-agent/document-agent subagents, Ollama client.
 desktop/      Tauri v2 app. Spawns agent-core as a local sidecar process.
               Chat / Tasks / Documents / Activity UI.
 android/      Kotlin + Jetpack Compose companion app. Same four screens plus
@@ -117,8 +118,8 @@ export ANDROID_HOME=$(pwd)/../.toolchains/android-sdk
 Tests:
 
 ```bash
-npm test    # from repo root: runs agent-core (91 tests, ~6 min with Ollama+gemma4:e2b; ~10s without — live tests self-skip) then desktop (15 tests)
-cd android && ./gradlew testDebugUnitTest   # 11 tests, no device needed
+npm test    # from repo root: runs agent-core (128 fast tests + live-model integration tests; ~10s without Ollama — live tests self-skip) then desktop (21 tests)
+cd android && ./gradlew testDebugUnitTest   # 17 tests, no device needed
 ```
 
 ## Reproducing the toolchain
@@ -140,7 +141,10 @@ second machine.
 2. Actually run the Android app on a real phone at least once — it's been
    verified on an emulator, but a real device (real touch input, real
    network conditions) is still a step removed from that.
-3. Pick up the deferred pieces in whatever order matters most: **content
+3. Wire a search box into the desktop Documents screen and the Android app —
+   the backend + client API methods for FTS5 search are in (see "Later
+   changes"), only the UI is missing.
+4. Pick up the deferred pieces in whatever order matters most: **content
    sharing between family accounts** (the natural follow-on now that
    multi-user auth + isolation is in — see the multi-user entry under "Later
    changes"), Tailscale transport, the compute mesh.
@@ -296,3 +300,19 @@ Later changes (not part of the original autonomous session):
     `ScopedStore` and a single DB were chosen partly to make it tractable);
     Android has no admin/user-management UI (desktop only); the tools server
     (4174) is still unauthenticated (id is the capability).
+- **Document & task search (FTS5)**. The agent no longer answers "do we have
+  the …" by dumping every row into the model — `document-agent` and
+  `task-agent` have `search_documents` / `search_tasks` tools backed by
+  SQLite FTS5 mirror tables (`db.ts`), kept in sync by triggers, `bm25()`
+  ranked, with `snippet()` excerpts and `category` / important-date-range
+  filters. `GET /documents/search` and `GET /tasks/search` expose the same
+  thing over HTTP; `desktop/src/api.ts` and `android/.../FamilyAgentApi.kt`
+  have client methods. Rationale (incl. why not Meilisearch/Typesense/
+  OpenViking) in `docs/DECISIONS.md` → "Document & task search".
+  - Verified: agent-core fast suite green (+29 tests across `db.test.ts`,
+    `documentTools.test.ts`, new `taskTools.test.ts`, `server.routes.test.ts`);
+    desktop `npm test` 21/21; android `testDebugUnitTest` 17/17. Full
+    agent-core suite (with live-model integration) left running at handoff.
+  - **Not yet**: no search box in either client UI — that needs a design pass
+    against the two independent design systems and live-app verification. The
+    client API methods are in place; wiring a UI is the remaining step.

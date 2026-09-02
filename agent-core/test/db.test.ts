@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { unlinkSync } from "node:fs";
-import { Store, type ScopedStore, LEGACY_USER_ID } from "../src/db.js";
+import { Store, type ScopedStore, LEGACY_USER_ID, toFtsMatchQuery } from "../src/db.js";
 
 describe("Store (scoped to one user)", () => {
   let raw: Store;
@@ -269,5 +269,192 @@ describe("Store — migration from a single-user database", () => {
     expect(s2.scoped(again.id).listTasks().map((t) => t.title)).toContain("Persisted task");
     s2.close();
     unlinkSync(path);
+  });
+
+  it("backfills the search index for a legacy single-user database", () => {
+    const path = `/tmp/family-agent-legacy-fts-${Date.now()}.db`;
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, notes TEXT, due_date TEXT,
+        status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE documents (
+        id TEXT PRIMARY KEY, filename TEXT NOT NULL, raw_text TEXT NOT NULL,
+        extracted TEXT, created_at TEXT NOT NULL
+      );
+      CREATE TABLE activity (id TEXT PRIMARY KEY, ts TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
+      CREATE TABLE tools (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, prompt TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'building', error TEXT, created_at TEXT NOT NULL);
+    `);
+    const now = new Date().toISOString();
+    legacy
+      .prepare("INSERT INTO documents (id, filename, raw_text, extracted, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run("OLDDOC01", "water.pdf", "Palo Alto water utility bill for September", null, now);
+    legacy.prepare("INSERT INTO tasks (id, title, status, created_at, updated_at) VALUES (?, ?, 'open', ?, ?)").run("OLDTASK1", "call the plumber", now, now);
+    legacy.close();
+
+    const store = new Store(path);
+    const admin = store.createUser({ username: "owner", displayName: "Owner", password: "sekret123", role: "admin" });
+    store.reassignLegacyData(admin.id);
+    const scoped = store.scoped(admin.id);
+
+    expect(scoped.searchDocuments("water bill").map((h) => h.id)).toContain("OLDDOC01");
+    expect(scoped.searchTasks("plumber").map((h) => h.id)).toContain("OLDTASK1");
+
+    store.close();
+    unlinkSync(path);
+  });
+
+  it("rebuildSearchIndex() repairs a mirror wiped out of band", () => {
+    const raw = new Store(":memory:");
+    const u = raw.createUser({ username: "u", displayName: "U", password: "sekret123" });
+    const store = raw.scoped(u.id);
+    store.createDocument({ filename: "note.txt", rawText: "the quarterly gas bill is overdue" });
+    expect(store.searchDocuments("gas bill")).toHaveLength(1);
+
+    raw.handle.exec("DELETE FROM documents_fts");
+    expect(store.searchDocuments("gas bill")).toHaveLength(0);
+
+    raw.rebuildSearchIndex();
+    expect(store.searchDocuments("gas bill")).toHaveLength(1);
+  });
+});
+
+describe("toFtsMatchQuery", () => {
+  it("reduces free text to quoted prefix tokens ORed together", () => {
+    expect(toFtsMatchQuery("car insurance")).toBe('"car"* OR "insurance"*');
+  });
+  it("strips punctuation and FTS operator words survive only as literals", () => {
+    expect(toFtsMatchQuery("what's my water bill?")).toBe('"what"* OR "my"* OR "water"* OR "bill"*');
+  });
+  it("drops one-character noise and caps very long input", () => {
+    expect(toFtsMatchQuery("a I x")).toBe("");
+    expect(toFtsMatchQuery(Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ")).split(" OR ")).toHaveLength(12);
+  });
+  it("returns empty string for a query with nothing searchable", () => {
+    expect(toFtsMatchQuery("   ?!  ")).toBe("");
+    expect(toFtsMatchQuery("")).toBe("");
+  });
+});
+
+describe("ScopedStore — full-text search", () => {
+  let raw: Store;
+  let store: ScopedStore;
+
+  beforeEach(() => {
+    raw = new Store(":memory:");
+    store = raw.scoped(raw.createUser({ username: "owner", displayName: "Owner", password: "sekret123" }).id);
+  });
+
+  it("matches on filename, body, and extracted summary", () => {
+    const byName = store.createDocument({ filename: "car-insurance-2026.pdf", rawText: "policy terms and conditions" });
+    const byBody = store.createDocument({ filename: "scan001.pdf", rawText: "State Farm auto insurance renewal notice" });
+    const bySummary = store.createDocument({ filename: "scan002.pdf", rawText: "illegible" });
+    store.updateDocumentExtraction(bySummary.id, { category: "insurance", summary: "Home insurance declarations page" });
+
+    expect(store.searchDocuments("insurance").map((h) => h.id).sort()).toEqual(
+      [byName.id, byBody.id, bySummary.id].sort()
+    );
+    expect(store.searchDocuments("car insurance")[0].id).toBe(byName.id);
+    expect(store.searchDocuments("renewal").map((h) => h.id)).toEqual([byBody.id]);
+  });
+
+  it("still matches when only some query words appear in the document", () => {
+    // Regression: "what is my insurance number?" must find an insurance
+    // document that never contains the literal word "number". Tokens are
+    // ORed, not ANDed — see toFtsMatchQuery.
+    const doc = store.createDocument({
+      filename: "regence.pdf",
+      rawText: "Regence BlueShield health insurance. Member ID: 210284396.",
+    });
+    expect(store.searchDocuments("what is my insurance number").map((h) => h.id)).toEqual([doc.id]);
+  });
+
+  it("matches on the extracted category even when the text never says it", () => {
+    const doc = store.createDocument({ filename: "scan_0007.jpg", rawText: "Member 4471. Amount 42.10. Due 09/20." });
+    store.updateDocumentExtraction(doc.id, { category: "bill", summary: "Water service statement" });
+    expect(store.searchDocuments("bill").map((h) => h.id)).toEqual([doc.id]);
+  });
+
+  it("returns a snippet around the match", () => {
+    store.createDocument({
+      filename: "utilities.txt",
+      rawText: "Account 4471. Your City of Palo Alto water service payment of $42.10 is due on 2026-09-20.",
+    });
+    const [hit] = store.searchDocuments("water payment");
+    expect(hit.snippet.toLowerCase()).toContain("water");
+  });
+
+  it("keeps one family member's search out of another's documents", () => {
+    const other = raw.scoped(raw.createUser({ username: "kid", displayName: "Kid", password: "sekret123" }).id);
+    store.createDocument({ filename: "mine.txt", rawText: "shared keyword dentist" });
+    other.createDocument({ filename: "theirs.txt", rawText: "shared keyword dentist" });
+
+    expect(store.searchDocuments("dentist").map((h) => h.filename)).toEqual(["mine.txt"]);
+    expect(other.searchDocuments("dentist").map((h) => h.filename)).toEqual(["theirs.txt"]);
+  });
+
+  it("filters by extracted category", () => {
+    const bill = store.createDocument({ filename: "a.txt", rawText: "amount due keyword" });
+    store.updateDocumentExtraction(bill.id, { category: "bill", summary: "A bill" });
+    const school = store.createDocument({ filename: "b.txt", rawText: "amount due keyword" });
+    store.updateDocumentExtraction(school.id, { category: "school", summary: "A permission slip" });
+
+    expect(store.searchDocuments("keyword", { category: "bill" }).map((h) => h.id)).toEqual([bill.id]);
+  });
+
+  it("filters by an important-date range", () => {
+    const soon = store.createDocument({ filename: "soon.txt", rawText: "keyword" });
+    store.updateDocumentExtraction(soon.id, { category: "bill", summary: "s", importantDates: ["2026-09-20"] });
+    const later = store.createDocument({ filename: "later.txt", rawText: "keyword" });
+    store.updateDocumentExtraction(later.id, { category: "bill", summary: "s", importantDates: ["2027-03-01"] });
+    const undated = store.createDocument({ filename: "undated.txt", rawText: "keyword" });
+    store.updateDocumentExtraction(undated.id, { category: "bill", summary: "s" });
+
+    expect(store.searchDocuments("keyword", { dueBefore: "2026-12-31" }).map((h) => h.id)).toEqual([soon.id]);
+    expect(store.searchDocuments("keyword", { dueAfter: "2026-12-31" }).map((h) => h.id)).toEqual([later.id]);
+  });
+
+  it("an empty query falls back to a filtered recency listing", () => {
+    const bill = store.createDocument({ filename: "bill.txt", rawText: "x" });
+    store.updateDocumentExtraction(bill.id, { category: "bill", summary: "Electric bill" });
+    store.createDocument({ filename: "misc.txt", rawText: "y" });
+
+    const all = store.searchDocuments("");
+    expect(all).toHaveLength(2);
+    expect(all[0].filename).toBe("misc.txt"); // newest first
+
+    expect(store.searchDocuments("   ", { category: "bill" }).map((h) => h.id)).toEqual([bill.id]);
+  });
+
+  it("stays current as documents are extracted and deleted", () => {
+    const doc = store.createDocument({ filename: "scan.pdf", rawText: "unreadable blob" });
+    expect(store.searchDocuments("hydro")).toHaveLength(0);
+
+    store.updateDocumentExtraction(doc.id, { category: "bill", summary: "Hydro Quebec electricity bill" });
+    expect(store.searchDocuments("hydro").map((h) => h.id)).toEqual([doc.id]);
+
+    store.deleteDocument(doc.id);
+    expect(store.searchDocuments("hydro")).toHaveLength(0);
+  });
+
+  it("searchTasks matches title and notes, filters by status, and follows completion", () => {
+    const a = store.createTask({ title: "Renew car registration", notes: "DMV appointment needed" });
+    store.createTask({ title: "Buy milk" });
+
+    expect(store.searchTasks("registration").map((h) => h.id)).toEqual([a.id]);
+    expect(store.searchTasks("DMV").map((h) => h.id)).toEqual([a.id]);
+
+    store.updateTaskStatus(a.id, "done");
+    expect(store.searchTasks("registration", { status: "open" })).toHaveLength(0);
+    expect(store.searchTasks("registration", { status: "done" }).map((h) => h.id)).toEqual([a.id]);
+  });
+
+  it("searchTasks with an empty query lists recent tasks, status-filtered", () => {
+    const open1 = store.createTask({ title: "one" });
+    const done1 = store.createTask({ title: "two" });
+    store.updateTaskStatus(done1.id, "done");
+
+    expect(store.searchTasks("", { status: "open" }).map((h) => h.id)).toEqual([open1.id]);
   });
 });

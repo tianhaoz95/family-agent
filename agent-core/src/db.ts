@@ -17,6 +17,25 @@ function shortId(length = 8): string {
   return out;
 }
 
+// Turn a free-text query into a safe FTS5 MATCH expression. FTS5 treats bare
+// punctuation, quotes, and the bare words AND/OR/NOT/NEAR as query operators,
+// so handing it raw user text ("what's my water bill?") is a syntax error, not
+// a search. Reduce the query to its word tokens, quote each (so it can't be an
+// operator) and prefix-match it (`*`), joined with OR and left to bm25() to
+// rank. OR, not the implicit AND: a family question carries filler the target
+// document doesn't contain verbatim ("what is my insurance *number*", "when is
+// the water bill *due*") — ANDing every token drops the very document the user
+// wants. Returns "" when nothing usable is left; callers then fall back to a
+// plain recency listing with whatever structured filters were also supplied.
+export function toFtsMatchQuery(raw: string): string {
+  const tokens = (raw ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  return tokens
+    .filter((t) => t.length >= 2)
+    .slice(0, 12) // guard against someone pasting a whole paragraph
+    .map((t) => `"${t}"*`)
+    .join(" OR ");
+}
+
 // The owner assigned to any pre-existing row when a single-user database is
 // upgraded to the multi-user schema. `reassignLegacyData()` moves these to
 // the first real admin the moment one is created during setup.
@@ -76,6 +95,29 @@ export interface ActivityRecord {
   actor: string;
   action: string;
   detail: string;
+}
+
+/** One hit from `ScopedStore.searchDocuments()` — a list-row shape plus a match snippet. */
+export interface DocumentSearchHit {
+  id: string;
+  filename: string;
+  category: string | null;
+  summary: string | null;
+  /** A short excerpt around the match (FTS `snippet()`), or the head of the text on a filter-only search. */
+  snippet: string;
+  createdAt: string;
+  extractionStatus: ExtractionStatus;
+}
+
+/** One hit from `ScopedStore.searchTasks()`. */
+export interface TaskSearchHit {
+  id: string;
+  title: string;
+  notes: string | null;
+  dueDate: string | null;
+  dueTime: string | null;
+  status: "open" | "done";
+  snippet: string;
 }
 
 export type ToolKind = "static" | "server";
@@ -217,6 +259,128 @@ export class Store {
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_user ON ${table}(user_id)`);
     }
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)");
+
+    this.migrateSearchIndex();
+  }
+
+  // ---- full-text search (FTS5) ----
+  // Keyword search over documents and tasks, so a family with hundreds of
+  // documents isn't answered by dumping every row into a small model's
+  // context (the old list-everything approach — see docs/DECISIONS.md,
+  // "Document/task search"). Standalone FTS5 mirror tables kept in step by
+  // triggers on the base tables: search can't drift out of sync with the
+  // data no matter which code path did the write, the same principle as the
+  // activity log being written inline by every mutating method. `user_id`
+  // rides along UNINDEXED so a search stays scoped to one family member
+  // without a join back to the base table. Built here rather than in SCHEMA
+  // because the triggers reference `user_id`, which a legacy single-user DB
+  // only gains in the column migrations above. Idempotent — runs every start.
+  private migrateSearchIndex() {
+    // If an earlier build created these mirrors with a different column set,
+    // drop them — CREATE ... IF NOT EXISTS won't reshape an existing table,
+    // and reconcileFtsTable() below repopulates from scratch anyway.
+    this.dropFtsTableIfColumnsDiffer("documents_fts", ["doc_id", "user_id", "filename", "body", "summary", "category"]);
+    this.dropFtsTableIfColumnsDiffer("tasks_fts", ["task_id", "user_id", "title", "notes"]);
+
+    // Triggers are dropped and recreated every start (not CREATE IF NOT
+    // EXISTS) so the trigger body always matches the column list this build
+    // expects — a mirror reshape or a body change can't leave a stale trigger
+    // behind.
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+        doc_id UNINDEXED, user_id UNINDEXED, filename, body, summary, category,
+        tokenize = 'unicode61 remove_diacritics 2'
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+        task_id UNINDEXED, user_id UNINDEXED, title, notes,
+        tokenize = 'unicode61 remove_diacritics 2'
+      );
+
+      DROP TRIGGER IF EXISTS documents_fts_ai;
+      DROP TRIGGER IF EXISTS documents_fts_ad;
+      DROP TRIGGER IF EXISTS documents_fts_au;
+      DROP TRIGGER IF EXISTS tasks_fts_ai;
+      DROP TRIGGER IF EXISTS tasks_fts_ad;
+      DROP TRIGGER IF EXISTS tasks_fts_au;
+
+      CREATE TRIGGER documents_fts_ai AFTER INSERT ON documents BEGIN
+        INSERT INTO documents_fts(doc_id, user_id, filename, body, summary, category)
+        VALUES (new.id, new.user_id, new.filename, new.raw_text,
+                COALESCE(json_extract(new.extracted, '$.summary'), ''),
+                COALESCE(json_extract(new.extracted, '$.category'), ''));
+      END;
+      CREATE TRIGGER documents_fts_ad AFTER DELETE ON documents BEGIN
+        DELETE FROM documents_fts WHERE doc_id = old.id;
+      END;
+      CREATE TRIGGER documents_fts_au AFTER UPDATE ON documents BEGIN
+        DELETE FROM documents_fts WHERE doc_id = old.id;
+        INSERT INTO documents_fts(doc_id, user_id, filename, body, summary, category)
+        VALUES (new.id, new.user_id, new.filename, new.raw_text,
+                COALESCE(json_extract(new.extracted, '$.summary'), ''),
+                COALESCE(json_extract(new.extracted, '$.category'), ''));
+      END;
+
+      CREATE TRIGGER tasks_fts_ai AFTER INSERT ON tasks BEGIN
+        INSERT INTO tasks_fts(task_id, user_id, title, notes)
+        VALUES (new.id, new.user_id, new.title, COALESCE(new.notes, ''));
+      END;
+      CREATE TRIGGER tasks_fts_ad AFTER DELETE ON tasks BEGIN
+        DELETE FROM tasks_fts WHERE task_id = old.id;
+      END;
+      CREATE TRIGGER tasks_fts_au AFTER UPDATE ON tasks BEGIN
+        DELETE FROM tasks_fts WHERE task_id = old.id;
+        INSERT INTO tasks_fts(task_id, user_id, title, notes)
+        VALUES (new.id, new.user_id, new.title, COALESCE(new.notes, ''));
+      END;
+    `);
+    // Backfill on first upgrade, and self-heal if the mirror ever drifts:
+    // a row-count mismatch is a cheap, good-enough signal at family scale
+    // (a full rebuild here is milliseconds for thousands of rows).
+    this.reconcileFtsTable(
+      "documents_fts",
+      "documents",
+      "doc_id, user_id, filename, body, summary, category",
+      "id, user_id, filename, raw_text, COALESCE(json_extract(extracted, '$.summary'), ''), " +
+        "COALESCE(json_extract(extracted, '$.category'), '')"
+    );
+    this.reconcileFtsTable(
+      "tasks_fts",
+      "tasks",
+      "task_id, user_id, title, notes",
+      "id, user_id, title, COALESCE(notes, '')"
+    );
+  }
+
+  private dropFtsTableIfColumnsDiffer(ftsTable: string, expected: string[]) {
+    const cols = this.db.prepare(`PRAGMA table_info(${ftsTable})`).all() as { name: string }[];
+    if (cols.length === 0) return; // doesn't exist yet
+    const names = cols.map((c) => c.name);
+    if (names.length !== expected.length || names.some((n, i) => n !== expected[i])) {
+      this.db.exec(`DROP TABLE ${ftsTable}`);
+    }
+  }
+
+  private reconcileFtsTable(ftsTable: string, base: string, insertCols: string, selectExpr: string) {
+    const baseN = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM ${base}`).get() as any).n);
+    const ftsN = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM ${ftsTable}`).get() as any).n);
+    if (baseN === ftsN) return;
+    this.db.exec(`DELETE FROM ${ftsTable}`);
+    this.db.exec(`INSERT INTO ${ftsTable}(${insertCols}) SELECT ${selectExpr} FROM ${base}`);
+  }
+
+  /** Drop and rebuild both search mirrors from the base tables. For ops/tests. */
+  rebuildSearchIndex() {
+    this.db.exec("DELETE FROM documents_fts");
+    this.db.exec("DELETE FROM tasks_fts");
+    this.db.exec(
+      "INSERT INTO documents_fts(doc_id, user_id, filename, body, summary, category) " +
+        "SELECT id, user_id, filename, raw_text, COALESCE(json_extract(extracted, '$.summary'), ''), " +
+        "COALESCE(json_extract(extracted, '$.category'), '') FROM documents"
+    );
+    this.db.exec(
+      "INSERT INTO tasks_fts(task_id, user_id, title, notes) " +
+        "SELECT id, user_id, title, COALESCE(notes, '') FROM tasks"
+    );
   }
 
   close() {
@@ -497,6 +661,63 @@ export class ScopedStore {
     return row ? rowToTask(row) : undefined;
   }
 
+  /**
+   * Keyword search over this user's task titles and notes, best match first.
+   * An empty / unparseable query falls back to a recency listing (optionally
+   * status-filtered), so `searchTasks("", { status: "open" })` is "my open
+   * tasks". See `toFtsMatchQuery`.
+   */
+  searchTasks(
+    query: string,
+    opts: { status?: "open" | "done"; limit?: number } = {}
+  ): TaskSearchHit[] {
+    const limit = Math.min(Math.max(opts.limit ?? 10, 1), 50);
+    const match = toFtsMatchQuery(query);
+    const where: string[] = ["t.user_id = ?"];
+    const params: unknown[] = [this.userId];
+    let fromClause: string;
+    let orderClause: string;
+    let snippetExpr: string;
+
+    if (match) {
+      fromClause = "tasks_fts f JOIN tasks t ON t.id = f.task_id";
+      where.unshift("f.user_id = ?");
+      params.unshift(this.userId);
+      where.push("tasks_fts MATCH ?");
+      params.push(match);
+      orderClause = "bm25(tasks_fts)";
+      snippetExpr = "snippet(tasks_fts, 3, '', '', ' … ', 12)";
+    } else {
+      fromClause = "tasks t";
+      orderClause = "t.created_at DESC, t.rowid DESC";
+      snippetExpr = "COALESCE(t.notes, '')";
+    }
+    if (opts.status) {
+      where.push("t.status = ?");
+      params.push(opts.status);
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT t.id, t.title, t.notes, t.due_date, t.due_time, t.status, ${snippetExpr} AS snippet
+         FROM ${fromClause}
+         WHERE ${where.join(" AND ")}
+         ORDER BY ${orderClause}
+         LIMIT ?`
+      )
+      .all(...(params as any[]), limit) as any[];
+
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      notes: r.notes ?? null,
+      dueDate: r.due_date ?? null,
+      dueTime: r.due_time ?? null,
+      status: r.status,
+      snippet: String(r.snippet ?? "").trim(),
+    }));
+  }
+
   updateTaskStatus(id: string, status: "open" | "done"): TaskRecord | undefined {
     return this.updateTask(id, { status });
   }
@@ -651,6 +872,83 @@ export class ScopedStore {
       .prepare("SELECT * FROM documents WHERE user_id = ? ORDER BY created_at DESC")
       .all(this.userId) as any[];
     return rows.map(rowToDocument);
+  }
+
+  /**
+   * Keyword search over this user's documents (filename + full text +
+   * extracted summary), best match first, with optional structured filters
+   * on the extracted `category` and `importantDates`. An empty / unparseable
+   * query falls back to a recency listing, so `searchDocuments("", { category:
+   * "bill" })` is "my bills". See `toFtsMatchQuery`.
+   */
+  searchDocuments(
+    query: string,
+    opts: { category?: string; dueAfter?: string; dueBefore?: string; limit?: number } = {}
+  ): DocumentSearchHit[] {
+    const limit = Math.min(Math.max(opts.limit ?? 8, 1), 50);
+    const match = toFtsMatchQuery(query);
+    const where: string[] = ["d.user_id = ?"];
+    const params: unknown[] = [this.userId];
+    let fromClause: string;
+    let orderClause: string;
+    let snippetExpr: string;
+
+    if (match) {
+      fromClause = "documents_fts f JOIN documents d ON d.id = f.doc_id";
+      where.unshift("f.user_id = ?");
+      params.unshift(this.userId);
+      where.push("documents_fts MATCH ?");
+      params.push(match);
+      orderClause = "bm25(documents_fts)";
+      // Column 3 is `body` (0=doc_id, 1=user_id, 2=filename, 3=body, 4=summary).
+      snippetExpr = "snippet(documents_fts, 3, '', '', ' … ', 14)";
+    } else {
+      fromClause = "documents d";
+      orderClause = "d.created_at DESC, d.rowid DESC";
+      snippetExpr = "substr(d.raw_text, 1, 180)";
+    }
+
+    if (opts.category) {
+      where.push("json_extract(d.extracted, '$.category') = ?");
+      params.push(opts.category);
+    }
+    if (opts.dueAfter) {
+      where.push(
+        "json_extract(d.extracted, '$.importantDates') IS NOT NULL AND " +
+          "EXISTS (SELECT 1 FROM json_each(d.extracted, '$.importantDates') WHERE value >= ?)"
+      );
+      params.push(opts.dueAfter);
+    }
+    if (opts.dueBefore) {
+      where.push(
+        "json_extract(d.extracted, '$.importantDates') IS NOT NULL AND " +
+          "EXISTS (SELECT 1 FROM json_each(d.extracted, '$.importantDates') WHERE value <= ?)"
+      );
+      params.push(opts.dueBefore);
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT d.id, d.filename, d.extracted, d.created_at, d.extraction_status, ${snippetExpr} AS snippet
+         FROM ${fromClause}
+         WHERE ${where.join(" AND ")}
+         ORDER BY ${orderClause}
+         LIMIT ?`
+      )
+      .all(...(params as any[]), limit) as any[];
+
+    return rows.map((r) => {
+      const extracted = r.extracted ? JSON.parse(r.extracted) : null;
+      return {
+        id: r.id,
+        filename: r.filename,
+        category: (extracted?.category as string) ?? null,
+        summary: (extracted?.summary as string) ?? null,
+        snippet: String(r.snippet ?? "").trim(),
+        createdAt: r.created_at,
+        extractionStatus: (r.extraction_status as ExtractionStatus) ?? "pending",
+      };
+    });
   }
 
   // ---- builder tools ----

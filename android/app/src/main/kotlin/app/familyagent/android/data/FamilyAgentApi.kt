@@ -12,7 +12,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+
+private fun String.encodeQuery(): String = URLEncoder.encode(this, "UTF-8")
 
 /** Thrown for any non-2xx response or transport failure, with a message safe to show the user. */
 open class ApiException(message: String) : IOException(message)
@@ -133,6 +136,31 @@ class FamilyAgentApi(
         ).task
 
     suspend fun listDocuments(): List<Document> = json.decodeFromString<DocumentsResponse>(get("/documents")).documents
+
+    /** Keyword search over documents (filename + full text + summary), ranked, with optional filters. */
+    suspend fun searchDocuments(
+        query: String,
+        category: String? = null,
+        dueBefore: String? = null,
+        dueAfter: String? = null,
+    ): List<DocumentSearchHit> {
+        val params = buildString {
+            append("q=").append(query.encodeQuery())
+            category?.let { append("&category=").append(it.encodeQuery()) }
+            dueBefore?.let { append("&dueBefore=").append(it.encodeQuery()) }
+            dueAfter?.let { append("&dueAfter=").append(it.encodeQuery()) }
+        }
+        return json.decodeFromString<DocumentSearchResponse>(get("/documents/search?$params")).results
+    }
+
+    /** Keyword search over task titles and notes, ranked, optionally filtered by status. */
+    suspend fun searchTasks(query: String, status: String? = null): List<TaskSearchHit> {
+        val params = buildString {
+            append("q=").append(query.encodeQuery())
+            status?.let { append("&status=").append(it.encodeQuery()) }
+        }
+        return json.decodeFromString<TaskSearchResponse>(get("/tasks/search?$params")).results
+    }
 
     suspend fun ingestDocument(filename: String, text: String): Document =
         json.decodeFromString<DocumentResponse>(

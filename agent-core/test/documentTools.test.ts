@@ -53,6 +53,35 @@ describe("document tools", () => {
     expect(missing).toContain("No document found");
   });
 
+  it("search_documents returns matching ids, categories, and summaries", async () => {
+    const bill = store.createDocument({ filename: "pge-statement.pdf", rawText: "PG&E gas and electric statement" });
+    store.updateDocumentExtraction(bill.id, { category: "bill", summary: "PG&E utility bill" });
+    store.createDocument({ filename: "recipe.txt", rawText: "how to make sourdough" });
+
+    const result = (await find("search_documents").invoke({ query: "electric bill" })) as string;
+    expect(result).toContain("pge-statement.pdf");
+    expect(result).toContain(bill.id);
+    expect(result).toContain("PG&E utility bill");
+    expect(result).not.toContain("recipe.txt");
+  });
+
+  it("search_documents honours the category filter", async () => {
+    const a = store.createDocument({ filename: "a.pdf", rawText: "shared keyword here" });
+    store.updateDocumentExtraction(a.id, { category: "medical", summary: "Lab results" });
+    const b = store.createDocument({ filename: "b.pdf", rawText: "shared keyword here" });
+    store.updateDocumentExtraction(b.id, { category: "tax", summary: "1099 form" });
+
+    const result = (await find("search_documents").invoke({ query: "keyword", category: "tax" })) as string;
+    expect(result).toContain("b.pdf");
+    expect(result).not.toContain("a.pdf");
+  });
+
+  it("search_documents reports a clean miss", async () => {
+    store.createDocument({ filename: "note.txt", rawText: "nothing relevant" });
+    const result = (await find("search_documents").invoke({ query: "helicopter" })) as string;
+    expect(result).toContain("No documents matched");
+  });
+
   it("save_extraction persists fields onto the right document", async () => {
     const doc = store.createDocument({ filename: "note.txt", rawText: "hello" });
     await find("save_extraction").invoke({

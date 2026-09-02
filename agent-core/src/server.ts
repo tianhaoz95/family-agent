@@ -356,6 +356,20 @@ export function buildServer(
     return { tasks: req.userStore.listTasks(status === "open" || status === "done" ? status : undefined) };
   });
 
+  // Keyword search over this user's tasks. `q` empty + `status` set is just
+  // "my open tasks" (see ScopedStore.searchTasks). Same shape as /documents/search.
+  app.get("/tasks/search", async (req) => {
+    const q = req.query as Record<string, string | undefined>;
+    const status = q.status === "open" || q.status === "done" ? q.status : undefined;
+    const limit = q.limit ? Number(q.limit) : undefined;
+    return {
+      results: req.userStore.searchTasks(q.q ?? "", {
+        status,
+        limit: Number.isFinite(limit) ? limit : undefined,
+      }),
+    };
+  });
+
   const CreateTaskBody = z.object({
     title: z.string().min(1),
     notes: z.string().optional(),
@@ -388,6 +402,22 @@ export function buildServer(
 
   // ---- documents ----
   app.get("/documents", async (req) => ({ documents: req.userStore.listDocuments() }));
+
+  // Keyword search (filename + full text + summary), ranked, with optional
+  // category / important-date-range filters. `q` empty + a filter set is a
+  // pure structured query, e.g. ?category=bill&dueBefore=2026-10-01.
+  app.get("/documents/search", async (req) => {
+    const q = req.query as Record<string, string | undefined>;
+    const limit = q.limit ? Number(q.limit) : undefined;
+    return {
+      results: req.userStore.searchDocuments(q.q ?? "", {
+        category: q.category || undefined,
+        dueBefore: q.dueBefore || undefined,
+        dueAfter: q.dueAfter || undefined,
+        limit: Number.isFinite(limit) ? limit : undefined,
+      }),
+    };
+  });
 
   const IngestBody = z.object({ filename: z.string().min(1), text: z.string().min(1) });
   app.post("/documents/ingest", async (req, reply) => {

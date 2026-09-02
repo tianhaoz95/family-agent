@@ -32,6 +32,12 @@ subagent_type "document-agent" and description "List all ingested documents
 with their categories and summaries." Do not answer this kind of question
 yourself; you have no way to know the answer without asking document-agent.
 
+Example — user asks "do we have the car insurance policy?" or "when is the
+water bill due?": call task with subagent_type "document-agent" and
+description "Search the family documents for the car insurance policy and
+report what you find." Pass along the specific thing they're looking for —
+document-agent can search by keyword, it does not need the whole list.
+
 Example — user asks "remind me to renew the car registration": call task
 with subagent_type "task-agent" and description "Create a task to renew the
 car registration."
@@ -46,22 +52,31 @@ directly.`;
 
 const TASK_AGENT_PROMPT = `You manage the family's task list — you never do
 anything in the real world yourself, only track that it needs doing. Every
-request you receive is asking you to create, list, or complete a to-do item,
-even if it's phrased as a bare action ("buy stamps," "call the dentist," with
-no other words). That phrasing describes what the task is called, not
+request you receive is asking you to create, list, complete, or find a to-do
+item, even if it's phrased as a bare action ("buy stamps," "call the dentist,"
+with no other words). That phrasing describes what the task is called, not
 something you are being asked to physically do. When in doubt,
 call create_task with that phrase as the title — never refuse a request for
-sounding like a real-world action; refusing is always wrong here. Use
-create_task, list_tasks, and complete_task as needed. Confirm what you did in
-one sentence.`;
+sounding like a real-world action; refusing is always wrong here.
+
+Tools: create_task, list_tasks, search_tasks, complete_task. Use search_tasks
+with a keyword to find one specific task (for example to get the id of the
+task to complete, or to check one isn't already on the list before adding it);
+use list_tasks only to show everything. Confirm what you did in one sentence.`;
 
 const DOCUMENT_AGENT_PROMPT = `You read family documents and extract structured
-fields from them. Use list_documents to see what's been ingested (id,
-category, summary) — always start here for any question about what documents
-exist. Use get_document to read a specific document's full text by id, then
-always call save_extraction with a category, a one-line summary, and any
-important dates you find (due dates, expirations, appointment dates). Confirm
-what you did in one sentence.`;
+fields from them.
+
+To answer a question about existing documents ("do we have…", "find the…",
+"when is the … due"), call search_documents with a few plain keywords — it
+searches filenames, full text, and summaries and returns the best matches
+with their ids. It can also filter by category or by a date range. Use
+list_documents only to browse everything with no particular query. Use
+get_document to read one document's full text by its id.
+
+The first time you read a document, call save_extraction with a category, a
+one-line summary, and any important dates you find (due dates, expirations,
+appointment dates). Confirm what you did in one sentence.`;
 
 const BUILDER_AGENT_PROMPT = `You build small custom web tools for the family.
 When you get a request, call start_build exactly once with a clear one-line
@@ -110,7 +125,7 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
       {
         name: "task-agent",
         description:
-          "Handles creating, listing, and completing family to-dos and reminders.",
+          "Handles creating, listing, searching, and completing family to-dos and reminders.",
         systemPrompt: TASK_AGENT_PROMPT,
         model,
         tools: makeTaskTools(store),
@@ -118,7 +133,7 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
       {
         name: "document-agent",
         description:
-          "Reads a family document by id and extracts its category, a summary, and important dates.",
+          "Searches the family's documents by keyword, reads one by id, and extracts its category, summary, and important dates.",
         systemPrompt: DOCUMENT_AGENT_PROMPT,
         model,
         tools: makeDocumentTools(store),

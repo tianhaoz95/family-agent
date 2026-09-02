@@ -194,4 +194,23 @@ describe("api client", () => {
     expect((init as RequestInit).method).toBe("POST");
     expect((init as RequestInit).headers).toBeUndefined();
   });
+
+  it("searchDocuments() builds a query string with q and filters", async () => {
+    const fetchMock = mockFetchOnce(200, { results: [] });
+    await api.searchDocuments("water bill", { category: "bill", dueBefore: "2026-10-01" });
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("/documents/search?");
+    expect(url).toContain("q=water+bill");
+    expect(url).toContain("category=bill");
+    expect(url).toContain("dueBefore=2026-10-01");
+  });
+
+  it("searchTasks() passes q and an optional status", async () => {
+    const fetchMock = mockFetchOnce(200, { results: [] });
+    await api.searchTasks("registration", { status: "open" });
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("/tasks/search?");
+    expect(url).toContain("q=registration");
+    expect(url).toContain("status=open");
+  });
 });
