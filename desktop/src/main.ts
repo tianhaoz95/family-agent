@@ -260,8 +260,90 @@ chatForm.addEventListener("submit", async (e) => {
 const taskForm = document.getElementById("task-form") as HTMLFormElement;
 const taskTitleInput = document.getElementById("task-title") as HTMLInputElement;
 const taskDueInput = document.getElementById("task-due") as HTMLInputElement;
+const taskTimeInput = document.getElementById("task-time") as HTMLInputElement;
 const taskList = document.getElementById("task-list")!;
+const taskCalendar = document.getElementById("task-calendar") as HTMLElement;
+const calGrid = document.getElementById("cal-grid")!;
+const calLabel = document.getElementById("cal-label")!;
+const calUnscheduled = document.getElementById("cal-unscheduled") as HTMLElement;
+const calUnscheduledList = document.getElementById("cal-unscheduled-list")!;
+const calTimeGrid = document.getElementById("cal-timegrid") as HTMLElement;
+const calTgHead = document.getElementById("cal-tg-head")!;
+const calAllDay = document.getElementById("cal-allday")!;
+const calHours = document.getElementById("cal-hours")!;
+const taskViewButtons = Array.from(
+  document.querySelectorAll<HTMLButtonElement>(".seg-toggle [data-taskview]")
+);
 
+type TaskView = "list" | "day" | "3day" | "week" | "month";
+const TASK_VIEWS: TaskView[] = ["list", "day", "3day", "week", "month"];
+const TASK_VIEW_KEY = "family-agent:taskView";
+const HOUR_H = 44; // px per hour in the time grid — keep in sync with .cal-daycol
+
+function loadTaskView(): TaskView {
+  const raw = localStorage.getItem(TASK_VIEW_KEY);
+  if (raw === "calendar") return "month"; // legacy value from the first version
+  if (raw && (TASK_VIEWS as string[]).includes(raw)) return raw as TaskView;
+  return "week";
+}
+let taskView: TaskView = loadTaskView();
+// Anchor day for the calendar range (midnight, local).
+let calAnchor = startOfDay(new Date());
+let lastTasks: Task[] = [];
+
+// ---- date helpers (local, no timezone drift) ----
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+function startOfWeekMon(d: Date): Date {
+  const s = startOfDay(d);
+  s.setDate(s.getDate() - ((s.getDay() + 6) % 7));
+  return s;
+}
+function addDays(d: Date, n: number): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+}
+function isoDay(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+function dueKey(task: Task): string | null {
+  return task.dueDate ? task.dueDate.slice(0, 10) : null;
+}
+function parseHM(s: string | null): { h: number; m: number } | null {
+  if (!s) return null;
+  const [h, m] = s.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return { h, m };
+}
+/** Days visible for the current non-month view. */
+function rangeDays(): Date[] {
+  const count = taskView === "day" ? 1 : taskView === "3day" ? 3 : 7;
+  const start = taskView === "week" ? startOfWeekMon(calAnchor) : startOfDay(calAnchor);
+  return Array.from({ length: count }, (_, i) => addDays(start, i));
+}
+
+function bucketByDay(tasks: Task[]) {
+  const byDay = new Map<string, Task[]>();
+  const unscheduled: Task[] = [];
+  for (const t of tasks) {
+    const key = dueKey(t);
+    if (!key) {
+      unscheduled.push(t);
+      continue;
+    }
+    const bucket = byDay.get(key);
+    if (bucket) bucket.push(t);
+    else byDay.set(key, [t]);
+  }
+  return { byDay, unscheduled };
+}
+
+// ---- list view ----
 function renderTasks(tasks: Task[]) {
   taskList.innerHTML = "";
   if (tasks.length === 0) {
@@ -288,25 +370,314 @@ function renderTasks(tasks: Task[]) {
     if (task.dueDate) {
       const due = document.createElement("span");
       due.className = "task-due";
-      due.textContent = task.dueDate;
+      due.textContent = task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate;
       li.appendChild(due);
     }
     taskList.appendChild(li);
   }
 }
 
+// ---- calendar shared bits ----
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function makeTaskChip(task: Task): HTMLElement {
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = `cal-task${task.status === "done" ? " is-done" : ""}`;
+  chip.textContent = task.dueTime ? `${task.dueTime} ${task.title}` : task.title;
+  chip.title = task.title;
+  chip.draggable = true;
+  chip.addEventListener("dragstart", (e) => {
+    e.dataTransfer?.setData("text/plain", task.id);
+    chip.classList.add("is-dragging");
+  });
+  chip.addEventListener("dragend", () => chip.classList.remove("is-dragging"));
+  chip.addEventListener("click", async () => {
+    if (task.status === "done") return;
+    await api.completeTask(task.id);
+    void refreshTasks();
+    void refreshActivity();
+  });
+  return chip;
+}
+
+async function moveTask(id: string, patch: { dueDate?: string | null; dueTime?: string | null }) {
+  await api.rescheduleTask(id, patch);
+  void refreshTasks();
+  void refreshActivity();
+}
+
+function wireDropTarget(
+  el: HTMLElement,
+  patchFor: (e: DragEvent) => { dueDate?: string | null; dueTime?: string | null }
+) {
+  el.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    el.classList.add("is-drop-target");
+  });
+  el.addEventListener("dragleave", () => el.classList.remove("is-drop-target"));
+  el.addEventListener("drop", (e) => {
+    e.preventDefault();
+    el.classList.remove("is-drop-target");
+    const id = e.dataTransfer?.getData("text/plain");
+    if (id) void moveTask(id, patchFor(e));
+  });
+}
+
+function openQuickAdd(cell: HTMLElement, day: string, time?: string, topPx?: number) {
+  if (cell.querySelector(".cal-add")) return;
+  const input = document.createElement("input");
+  input.className = "cal-add";
+  input.type = "text";
+  input.placeholder = time ? `New task · ${time}` : "New task";
+  if (topPx !== undefined) {
+    input.style.position = "absolute";
+    input.style.top = `${topPx}px`;
+    input.style.left = "2px";
+    input.style.right = "2px";
+    input.style.width = "auto";
+    input.style.zIndex = "5";
+  }
+  const close = () => input.remove();
+  input.addEventListener("keydown", async (e) => {
+    if (e.key === "Escape") close();
+    if (e.key === "Enter") {
+      const title = input.value.trim();
+      close();
+      if (!title) return;
+      await api.createTask(title, day, time);
+      void refreshTasks();
+      void refreshActivity();
+    }
+  });
+  input.addEventListener("blur", close);
+  cell.appendChild(input);
+  input.focus();
+}
+
+// ---- month grid ----
+function renderMonthGrid(tasks: Task[]) {
+  const first = startOfMonth(calAnchor);
+  calLabel.textContent = first.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  const { byDay, unscheduled } = bucketByDay(tasks);
+
+  calGrid.innerHTML = "";
+  for (const wd of WEEKDAYS) {
+    const h = document.createElement("div");
+    h.className = "cal-weekday";
+    h.textContent = wd;
+    calGrid.appendChild(h);
+  }
+
+  const start = addDays(first, -((first.getDay() + 6) % 7));
+  const todayKey = isoDay(new Date());
+
+  for (let i = 0; i < 42; i++) {
+    const d = addDays(start, i);
+    const key = isoDay(d);
+    const cell = document.createElement("div");
+    cell.className = "cal-day";
+    if (d.getMonth() !== first.getMonth()) cell.classList.add("cal-day--other-month");
+    if (key === todayKey) cell.classList.add("cal-day--today");
+
+    const num = document.createElement("span");
+    num.className = "cal-day-num";
+    num.textContent = String(d.getDate());
+    cell.appendChild(num);
+
+    for (const t of byDay.get(key) ?? []) cell.appendChild(makeTaskChip(t));
+
+    cell.addEventListener("click", (e) => {
+      if (!(e.target as HTMLElement).closest(".cal-task, .cal-add")) openQuickAdd(cell, key);
+    });
+    // Dropping onto a month cell just changes the date, keeping any time.
+    wireDropTarget(cell, () => ({ dueDate: key }));
+    calGrid.appendChild(cell);
+  }
+
+  calUnscheduledList.innerHTML = "";
+  if (unscheduled.length === 0) {
+    const span = document.createElement("span");
+    span.className = "cal-unscheduled-empty";
+    span.textContent = "Nothing without a due date.";
+    calUnscheduledList.appendChild(span);
+  } else {
+    for (const t of unscheduled) calUnscheduledList.appendChild(makeTaskChip(t));
+  }
+}
+
+// ---- day / 3-day / week time grid ----
+function renderTimeGrid(tasks: Task[]) {
+  const days = rangeDays();
+  const cols = `4rem repeat(${days.length}, 1fr)`;
+  calTgHead.style.gridTemplateColumns = cols;
+  calAllDay.style.gridTemplateColumns = cols;
+
+  const label =
+    days.length === 1
+      ? days[0].toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
+      : `${days[0].toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${days[
+          days.length - 1
+        ].toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  calLabel.textContent = label;
+
+  const { byDay } = bucketByDay(tasks);
+  const todayKey = isoDay(new Date());
+
+  // Header row.
+  calTgHead.innerHTML = '<div class="cal-tg-corner"></div>';
+  for (const d of days) {
+    const h = document.createElement("div");
+    h.className = "cal-tg-dayname";
+    if (isoDay(d) === todayKey) h.classList.add("is-today");
+    h.textContent = d.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+    calTgHead.appendChild(h);
+  }
+
+  // All-day row (date-only tasks).
+  calAllDay.innerHTML = '<div class="cal-allday-label">all-day</div>';
+  for (const d of days) {
+    const key = isoDay(d);
+    const cell = document.createElement("div");
+    cell.className = "cal-allday-cell";
+    for (const t of (byDay.get(key) ?? []).filter((t) => !t.dueTime)) {
+      cell.appendChild(makeTaskChip(t));
+    }
+    cell.addEventListener("click", (e) => {
+      if (!(e.target as HTMLElement).closest(".cal-task, .cal-add")) openQuickAdd(cell, key);
+    });
+    wireDropTarget(cell, () => ({ dueDate: key, dueTime: null }));
+    calAllDay.appendChild(cell);
+  }
+
+  // Hours body — a flex row: [time gutter] [day column]*N, each column full height.
+  calHours.innerHTML = "";
+  const body = document.createElement("div");
+  body.className = "cal-hours-body";
+  body.style.height = `${HOUR_H * 24}px`;
+
+  const gutter = document.createElement("div");
+  gutter.className = "cal-gutter";
+  for (let h = 0; h < 24; h++) {
+    const lbl = document.createElement("div");
+    lbl.className = "cal-hourlabel";
+    lbl.style.height = `${HOUR_H}px`;
+    lbl.textContent = h === 0 ? "" : `${String(h).padStart(2, "0")}:00`;
+    gutter.appendChild(lbl);
+  }
+  body.appendChild(gutter);
+
+  days.forEach((d) => {
+    const key = isoDay(d);
+    const col = document.createElement("div");
+    col.className = "cal-daycol";
+    if (key === todayKey) col.classList.add("is-today");
+
+    for (const t of (byDay.get(key) ?? []).filter((t) => t.dueTime)) {
+      const hm = parseHM(t.dueTime)!;
+      const block = document.createElement("button");
+      block.type = "button";
+      block.className = `cal-event${t.status === "done" ? " is-done" : ""}`;
+      block.style.top = `${((hm.h * 60 + hm.m) / 60) * HOUR_H}px`;
+      block.style.height = `${HOUR_H - 4}px`;
+      block.textContent = `${t.dueTime} ${t.title}`;
+      block.title = t.title;
+      block.draggable = true;
+      block.addEventListener("dragstart", (e) => {
+        e.dataTransfer?.setData("text/plain", t.id);
+        block.classList.add("is-dragging");
+      });
+      block.addEventListener("dragend", () => block.classList.remove("is-dragging"));
+      block.addEventListener("click", async () => {
+        if (t.status === "done") return;
+        await api.completeTask(t.id);
+        void refreshTasks();
+        void refreshActivity();
+      });
+      col.appendChild(block);
+    }
+
+    const slotMinutes = (e: MouseEvent): number => {
+      const rect = col.getBoundingClientRect();
+      const mins = Math.max(0, Math.min(23 * 60 + 30, ((e.clientY - rect.top) / HOUR_H) * 60));
+      return Math.round(mins / 30) * 30;
+    };
+    const asHM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    col.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest(".cal-event, .cal-add")) return;
+      const m = slotMinutes(e);
+      openQuickAdd(col, key, asHM(m), (m / 60) * HOUR_H);
+    });
+    wireDropTarget(col, (e) => ({ dueDate: key, dueTime: asHM(slotMinutes(e as MouseEvent)) }));
+    body.appendChild(col);
+  });
+
+  calHours.appendChild(body);
+  calHours.scrollTop = 7 * HOUR_H; // open around 07:00
+}
+
+function applyTaskView() {
+  for (const btn of taskViewButtons) {
+    btn.classList.toggle("is-active", btn.dataset.taskview === taskView);
+  }
+  const isList = taskView === "list";
+  const isMonth = taskView === "month";
+  const isTime = !isList && !isMonth;
+
+  taskForm.hidden = !isList;
+  taskList.hidden = !isList;
+  taskCalendar.hidden = isList;
+  calGrid.hidden = !isMonth;
+  calUnscheduled.hidden = !isMonth;
+  calTimeGrid.hidden = !isTime;
+
+  if (isList) renderTasks(lastTasks);
+  else if (isMonth) renderMonthGrid(lastTasks);
+  else renderTimeGrid(lastTasks);
+}
+
+for (const btn of taskViewButtons) {
+  btn.addEventListener("click", () => {
+    const v = btn.dataset.taskview as TaskView;
+    if (!TASK_VIEWS.includes(v)) return;
+    taskView = v;
+    localStorage.setItem(TASK_VIEW_KEY, taskView);
+    applyTaskView();
+  });
+}
+
+wireDropTarget(calUnscheduled, () => ({ dueDate: null }));
+
+function shiftAnchor(dir: 1 | -1) {
+  if (taskView === "month") {
+    calAnchor = new Date(calAnchor.getFullYear(), calAnchor.getMonth() + dir, 1);
+  } else {
+    calAnchor = addDays(calAnchor, dir * (taskView === "day" ? 1 : taskView === "3day" ? 3 : 7));
+  }
+  applyTaskView();
+}
+document.getElementById("cal-prev")!.addEventListener("click", () => shiftAnchor(-1));
+document.getElementById("cal-next")!.addEventListener("click", () => shiftAnchor(1));
+document.getElementById("cal-today")!.addEventListener("click", () => {
+  calAnchor = startOfDay(new Date());
+  applyTaskView();
+});
+
 async function refreshTasks() {
   const { tasks } = await api.listTasks();
-  renderTasks(tasks);
+  lastTasks = tasks;
+  applyTaskView();
 }
 
 taskForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const title = taskTitleInput.value.trim();
   if (!title) return;
-  await api.createTask(title, taskDueInput.value);
+  await api.createTask(title, taskDueInput.value, taskTimeInput.value);
   taskTitleInput.value = "";
   taskDueInput.value = "";
+  taskTimeInput.value = "";
   void refreshTasks();
   void refreshActivity();
 });

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 
 sealed interface ConnectionStatus {
     data object Connecting : ConnectionStatus
@@ -53,6 +54,10 @@ data class AppUiState(
     val toolStatus: String? = null,
     /** Base URL of the tools server, derived from serverUrl + /health's toolsPort. */
     val toolsBaseUrl: String? = null,
+    /** Tasks screen: list | day | 3day | week | month (persisted in DataStore). */
+    val taskView: String = "week",
+    /** Anchor day for the calendar range (day/3day/week start from it; month uses its month). */
+    val calAnchor: LocalDate = LocalDate.now(),
 )
 
 class AppViewModel(
@@ -63,6 +68,11 @@ class AppViewModel(
     val state: StateFlow<AppUiState> = _state.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            settings.taskView.collect { view ->
+                _state.value = _state.value.copy(taskView = view)
+            }
+        }
         viewModelScope.launch {
             val stored = settings.session.first()
             if (stored == null) {
@@ -237,9 +247,9 @@ class AppViewModel(
         }
     }
 
-    fun addTask(title: String, dueDate: String?) {
+    fun addTask(title: String, dueDate: String?, dueTime: String? = null) {
         viewModelScope.launch {
-            apiCall { api.createTask(title, dueDate) }.onSuccess {
+            apiCall { api.createTask(title, dueDate, dueTime) }.onSuccess {
                 refreshTasks()
                 refreshActivity()
             }
@@ -253,6 +263,36 @@ class AppViewModel(
                 refreshActivity()
             }
         }
+    }
+
+    fun rescheduleTask(id: String, dueDate: String?, dueTime: String?) {
+        viewModelScope.launch {
+            apiCall { api.rescheduleTask(id, dueDate, dueTime) }.onSuccess {
+                refreshTasks()
+                refreshActivity()
+            }
+        }
+    }
+
+    fun setTaskView(view: String) {
+        viewModelScope.launch { settings.setTaskView(view) }
+    }
+
+    /** Step the calendar by one visible range (month for "month", else the day count). */
+    fun shiftCalRange(forward: Boolean) {
+        val dir = if (forward) 1L else -1L
+        val a = _state.value.calAnchor
+        val next = when (_state.value.taskView) {
+            "month" -> a.plusMonths(dir)
+            "day" -> a.plusDays(dir)
+            "3day" -> a.plusDays(dir * 3)
+            else -> a.plusWeeks(dir)
+        }
+        _state.value = _state.value.copy(calAnchor = next)
+    }
+
+    fun resetCalRange() {
+        _state.value = _state.value.copy(calAnchor = LocalDate.now())
     }
 
     fun refreshDocuments() {

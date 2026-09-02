@@ -74,6 +74,40 @@ describe("HTTP API", () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it("PATCH /tasks/:id reschedules and clears a due date, rejects an empty body", async () => {
+    const create = await inject({ method: "POST", url: "/tasks", payload: { title: "Vet visit" } });
+    const id = create.json().task.id;
+
+    const moved = await inject({ method: "PATCH", url: `/tasks/${id}`, payload: { dueDate: "2026-12-01" } });
+    expect(moved.statusCode).toBe(200);
+    expect(moved.json().task.dueDate).toBe("2026-12-01");
+
+    const cleared = await inject({ method: "PATCH", url: `/tasks/${id}`, payload: { dueDate: null } });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().task.dueDate).toBeNull();
+
+    const empty = await inject({ method: "PATCH", url: `/tasks/${id}`, payload: {} });
+    expect(empty.statusCode).toBe(400);
+  });
+
+  it("POST /tasks accepts a dueTime, PATCH can change and clear it", async () => {
+    const create = await inject({
+      method: "POST",
+      url: "/tasks",
+      payload: { title: "Dentist", dueDate: "2026-10-15", dueTime: "09:30" },
+    });
+    expect(create.statusCode).toBe(200);
+    expect(create.json().task.dueTime).toBe("09:30");
+    const id = create.json().task.id;
+
+    const moved = await inject({ method: "PATCH", url: `/tasks/${id}`, payload: { dueTime: "11:00" } });
+    expect(moved.json().task.dueTime).toBe("11:00");
+
+    const allDay = await inject({ method: "PATCH", url: `/tasks/${id}`, payload: { dueTime: null } });
+    expect(allDay.json().task.dueTime).toBeNull();
+    expect(allDay.json().task.dueDate).toBe("2026-10-15");
+  });
+
   it("keeps two users' tasks isolated over HTTP", async () => {
     const member = seedUser(store, { username: "kid", role: "member" });
     const asMember = authInject(app, member.token);

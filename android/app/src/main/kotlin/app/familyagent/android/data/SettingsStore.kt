@@ -11,6 +11,8 @@ private val SERVER_URL_KEY = stringPreferencesKey("server_url")
 private val AUTH_TOKEN_KEY = stringPreferencesKey("auth_token")
 private val USER_NAME_KEY = stringPreferencesKey("user_display_name")
 private val SERVER_NAME_KEY = stringPreferencesKey("server_name")
+private val TASK_VIEW_KEY = stringPreferencesKey("task_view")
+private val TASK_VIEWS = listOf("list", "day", "3day", "week", "month")
 
 // Prefill for the manual-address field only. The normal path is LAN discovery
 // (ServerDiscovery) — this app talks only to a server the user picked or typed.
@@ -37,6 +39,20 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setServerUrl(url: String) {
         context.dataStore.edit { it[SERVER_URL_KEY] = url.trimEnd('/') }
+    }
+
+    /** Which Tasks view to show: list | day | 3day | week | month. Survives sign-out. */
+    val taskView = context.dataStore.data.map {
+        when (val v = it[TASK_VIEW_KEY]) {
+            null -> "week"          // new default
+            "calendar" -> "month"  // legacy value from the first version
+            in TASK_VIEWS -> v!!
+            else -> "week"
+        }
+    }
+
+    suspend fun setTaskView(view: String) {
+        context.dataStore.edit { it[TASK_VIEW_KEY] = view }
     }
 
     suspend fun saveSession(serverUrl: String, token: String, displayName: String, serverName: String) {

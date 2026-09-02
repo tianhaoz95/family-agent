@@ -328,6 +328,7 @@ export function buildServer(
     title: z.string().min(1),
     notes: z.string().optional(),
     dueDate: z.string().optional(),
+    dueTime: z.string().optional(),
   });
   app.post("/tasks", async (req, reply) => {
     const parsed = CreateTaskBody.safeParse(req.body);
@@ -335,12 +336,20 @@ export function buildServer(
     return { task: req.userStore.createTask(parsed.data) };
   });
 
-  const UpdateTaskBody = z.object({ status: z.enum(["open", "done"]) });
+  const UpdateTaskBody = z
+    .object({
+      status: z.enum(["open", "done"]).optional(),
+      dueDate: z.string().nullable().optional(),
+      dueTime: z.string().nullable().optional(),
+    })
+    .refine((b) => b.status !== undefined || "dueDate" in b || "dueTime" in b, {
+      message: "provide status and/or dueDate and/or dueTime",
+    });
   app.patch("/tasks/:id", async (req, reply) => {
     const parsed = UpdateTaskBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
     const { id } = req.params as { id: string };
-    const updated = req.userStore.updateTaskStatus(id, parsed.data.status);
+    const updated = req.userStore.updateTask(id, parsed.data);
     if (!updated) return reply.code(404).send({ error: "task not found" });
     return { task: updated };
   });

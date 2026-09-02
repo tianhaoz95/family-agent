@@ -7,9 +7,10 @@ import type { ScopedStore } from "../db.js";
 // that user's tasks.
 export function makeTaskTools(store: ScopedStore) {
   const createTask = tool(
-    async ({ title, notes, dueDate }) => {
-      const rec = store.createTask({ title, notes, dueDate });
-      return `Created task ${rec.id}: "${rec.title}"${rec.dueDate ? ` (due ${rec.dueDate})` : ""}.`;
+    async ({ title, notes, dueDate, dueTime }) => {
+      const rec = store.createTask({ title, notes, dueDate, dueTime });
+      const when = rec.dueDate ? ` (due ${rec.dueDate}${rec.dueTime ? ` ${rec.dueTime}` : ""})` : "";
+      return `Created task ${rec.id}: "${rec.title}"${when}.`;
     },
     {
       name: "create_task",
@@ -22,6 +23,10 @@ export function makeTaskTools(store: ScopedStore) {
           .string()
           .optional()
           .describe("ISO 8601 date (YYYY-MM-DD) if the task has a deadline"),
+        dueTime: z
+          .string()
+          .optional()
+          .describe("24-hour time HH:MM if a specific time of day was mentioned; needs dueDate too"),
       }),
     }
   );
@@ -31,7 +36,10 @@ export function makeTaskTools(store: ScopedStore) {
       const tasks = store.listTasks(status);
       if (tasks.length === 0) return "No tasks found.";
       return tasks
-        .map((t) => `- [${t.status}] ${t.title}${t.dueDate ? ` (due ${t.dueDate})` : ""} (id: ${t.id})`)
+        .map((t) => {
+          const when = t.dueDate ? ` (due ${t.dueDate}${t.dueTime ? ` ${t.dueTime}` : ""})` : "";
+          return `- [${t.status}] ${t.title}${when} (id: ${t.id})`;
+        })
         .join("\n");
     },
     {

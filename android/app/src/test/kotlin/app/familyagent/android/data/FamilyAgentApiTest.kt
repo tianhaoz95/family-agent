@@ -65,6 +65,45 @@ class FamilyAgentApiTest {
     }
 
     @Test
+    fun `createTask forwards an optional dueTime`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"task":{"id":"XYZ12345","title":"Dentist","notes":null,"dueDate":"2026-12-01","dueTime":"09:30","status":"open","createdAt":"2026-09-01T00:00:00.000Z","updatedAt":"2026-09-01T00:00:00.000Z"}}"""
+            )
+        )
+        val task = api.createTask("Dentist", "2026-12-01", "09:30")
+        assertEquals("09:30", task.dueTime)
+        assertEquals("""{"title":"Dentist","dueDate":"2026-12-01","dueTime":"09:30"}""", server.takeRequest().body.readUtf8())
+    }
+
+    @Test
+    fun `rescheduleTask PATCHes the task id with an explicit dueDate and dueTime`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"task":{"id":"XYZ12345","title":"Vet visit","notes":null,"dueDate":"2026-12-01","dueTime":"11:00","status":"open","createdAt":"2026-09-01T00:00:00.000Z","updatedAt":"2026-09-01T00:00:00.000Z"}}"""
+            )
+        )
+        val task = api.rescheduleTask("XYZ12345", "2026-12-01", "11:00")
+        assertEquals("11:00", task.dueTime)
+
+        val recorded = server.takeRequest()
+        assertEquals("PATCH", recorded.method)
+        assertEquals("/tasks/XYZ12345", recorded.path)
+        assertEquals("""{"dueDate":"2026-12-01","dueTime":"11:00"}""", recorded.body.readUtf8())
+    }
+
+    @Test
+    fun `rescheduleTask sends explicit nulls to clear date and time`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"task":{"id":"XYZ12345","title":"Vet visit","notes":null,"dueDate":null,"dueTime":null,"status":"open","createdAt":"2026-09-01T00:00:00.000Z","updatedAt":"2026-09-01T00:00:00.000Z"}}"""
+            )
+        )
+        api.rescheduleTask("XYZ12345", null, null)
+        assertEquals("""{"dueDate":null,"dueTime":null}""", server.takeRequest().body.readUtf8())
+    }
+
+    @Test
     fun `chat omits images when none attached, includes them when present`() = runBlocking {
         server.enqueue(MockResponse().setBody("""{"reply":"hi"}"""))
         api.chat("hello")

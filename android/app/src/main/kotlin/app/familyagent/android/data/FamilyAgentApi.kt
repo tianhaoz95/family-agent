@@ -107,14 +107,19 @@ class FamilyAgentApi(
 
     suspend fun listTasks(): List<Task> = json.decodeFromString<TasksResponse>(get("/tasks")).tasks
 
-    suspend fun createTask(title: String, dueDate: String?): Task =
+    suspend fun createTask(title: String, dueDate: String?, dueTime: String? = null): Task =
         json.decodeFromString<TaskResponse>(
-            send("POST", "/tasks", json.encodeToString(CreateTaskRequest(title, dueDate)))
+            send("POST", "/tasks", json.encodeToString(CreateTaskRequest(title, dueDate, dueTime)))
         ).task
 
     suspend fun completeTask(id: String): Task =
         json.decodeFromString<TaskResponse>(
             send("PATCH", "/tasks/$id", json.encodeToString(UpdateTaskRequest("done")))
+        ).task
+
+    suspend fun rescheduleTask(id: String, dueDate: String?, dueTime: String?): Task =
+        json.decodeFromString<TaskResponse>(
+            send("PATCH", "/tasks/$id", json.encodeToString(RescheduleTaskRequest(dueDate, dueTime)))
         ).task
 
     suspend fun listDocuments(): List<Document> = json.decodeFromString<DocumentsResponse>(get("/documents")).documents

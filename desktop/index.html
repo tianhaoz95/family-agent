@@ -115,16 +115,44 @@
         </section>
 
         <section id="view-tasks" class="view" aria-label="Tasks">
-          <div class="view-header">
-            <h1>Tasks</h1>
-            <p class="view-sub">Everything the family agent is tracking for you.</p>
+          <div class="view-header view-header--row">
+            <div>
+              <h1>Tasks</h1>
+              <p class="view-sub">Everything the family agent is tracking for you.</p>
+            </div>
+            <div class="seg-toggle" role="tablist" aria-label="Task view">
+              <button type="button" data-taskview="list" role="tab">List</button>
+              <button type="button" data-taskview="day" role="tab">Day</button>
+              <button type="button" data-taskview="3day" role="tab">3-Day</button>
+              <button type="button" data-taskview="week" class="is-active" role="tab">Week</button>
+              <button type="button" data-taskview="month" role="tab">Month</button>
+            </div>
           </div>
           <form id="task-form" class="inline-form">
             <input id="task-title" type="text" placeholder="New task title" required />
             <input id="task-due" type="date" />
+            <input id="task-time" type="time" aria-label="Due time" />
             <button type="submit">Add</button>
           </form>
           <ul id="task-list" class="task-list"></ul>
+          <div id="task-calendar" hidden>
+            <div class="cal-nav">
+              <button type="button" id="cal-prev" aria-label="Previous">&lsaquo;</button>
+              <span id="cal-label"></span>
+              <button type="button" id="cal-next" aria-label="Next">&rsaquo;</button>
+              <button type="button" id="cal-today" class="cal-today-btn">Today</button>
+            </div>
+            <div id="cal-grid" class="cal-grid" hidden></div>
+            <div id="cal-unscheduled" class="cal-unscheduled" hidden>
+              <h2>Unscheduled</h2>
+              <div id="cal-unscheduled-list" class="cal-unscheduled-list"></div>
+            </div>
+            <div id="cal-timegrid" class="cal-timegrid" hidden>
+              <div class="cal-tg-head" id="cal-tg-head"></div>
+              <div class="cal-allday" id="cal-allday"></div>
+              <div class="cal-hours" id="cal-hours"></div>
+            </div>
+          </div>
         </section>
 
         <section id="view-documents" class="view" aria-label="Documents">

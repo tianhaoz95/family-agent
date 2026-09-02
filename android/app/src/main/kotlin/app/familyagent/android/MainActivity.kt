@@ -181,7 +181,17 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                     ChatScreen(state.chatMessages, state.chatSending, onSend = viewModel::sendChat)
                 }
                 composable(Destination.Tasks.route) {
-                    TasksScreen(state.tasks, onAdd = viewModel::addTask, onComplete = viewModel::completeTask)
+                    TasksScreen(
+                        tasks = state.tasks,
+                        taskView = state.taskView,
+                        calAnchor = state.calAnchor,
+                        onAdd = viewModel::addTask,
+                        onComplete = viewModel::completeTask,
+                        onReschedule = viewModel::rescheduleTask,
+                        onSetTaskView = viewModel::setTaskView,
+                        onShiftRange = viewModel::shiftCalRange,
+                        onResetRange = viewModel::resetCalRange,
+                    )
                 }
                 composable(Destination.Documents.route) {
                     DocumentsScreen(

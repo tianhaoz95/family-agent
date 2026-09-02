@@ -57,6 +57,8 @@ export interface Task {
   title: string;
   notes: string | null;
   dueDate: string | null;
+  /** 24-hour "HH:MM" when the task has a specific time; null = all-day. */
+  dueTime: string | null;
   status: "open" | "done";
   createdAt: string;
   updatedAt: string;
@@ -211,10 +213,15 @@ export const api = {
       body: JSON.stringify(images.length ? { message, images } : { message }),
     }),
   listTasks: () => request<{ tasks: Task[] }>("/tasks"),
-  createTask: (title: string, dueDate?: string) =>
-    request<{ task: Task }>("/tasks", { method: "POST", body: JSON.stringify({ title, dueDate: dueDate || undefined }) }),
+  createTask: (title: string, dueDate?: string, dueTime?: string) =>
+    request<{ task: Task }>("/tasks", {
+      method: "POST",
+      body: JSON.stringify({ title, dueDate: dueDate || undefined, dueTime: dueTime || undefined }),
+    }),
   completeTask: (id: string) =>
     request<{ task: Task }>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify({ status: "done" }) }),
+  rescheduleTask: (id: string, patch: { dueDate?: string | null; dueTime?: string | null }) =>
+    request<{ task: Task }>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   listDocuments: () => request<{ documents: Document[] }>("/documents"),
   ingestDocument: (filename: string, text: string) =>
     request<{ document: Document }>("/documents/ingest", { method: "POST", body: JSON.stringify({ filename, text }) }),

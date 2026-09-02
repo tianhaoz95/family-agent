@@ -8,6 +8,8 @@ data class Task(
     val title: String,
     val notes: String? = null,
     val dueDate: String? = null,
+    /** 24-hour "HH:MM" when the task has a specific time; null = all-day. */
+    val dueTime: String? = null,
     val status: String,
     val createdAt: String,
     val updatedAt: String,
@@ -121,10 +123,19 @@ data class DocumentResponse(val document: Document)
 data class ActivityResponse(val activity: List<ActivityEntry>)
 
 @Serializable
-data class CreateTaskRequest(val title: String, val dueDate: String? = null)
+data class CreateTaskRequest(
+    val title: String,
+    val dueDate: String? = null,
+    val dueTime: String? = null,
+)
 
 @Serializable
 data class UpdateTaskRequest(val status: String)
+
+/** No defaults so `null` is serialized explicitly — the server reads an explicit
+ *  `null` as "clear this field". Clearing dueDate also clears dueTime server-side. */
+@Serializable
+data class RescheduleTaskRequest(val dueDate: String?, val dueTime: String?)
 
 @Serializable
 data class IngestDocumentRequest(val filename: String, val text: String)

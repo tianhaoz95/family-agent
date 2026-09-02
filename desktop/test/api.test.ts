@@ -101,6 +101,32 @@ describe("api client", () => {
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ status: "done" });
   });
 
+  it("rescheduleTask() PATCHes the task id with the patch body", async () => {
+    const fetchMock = mockFetchOnce(200, { task: { id: "ABC123", dueDate: "2026-12-01" } });
+    await api.rescheduleTask("ABC123", { dueDate: "2026-12-01", dueTime: "09:30" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/tasks/ABC123");
+    expect((init as RequestInit).method).toBe("PATCH");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      dueDate: "2026-12-01",
+      dueTime: "09:30",
+    });
+  });
+
+  it("rescheduleTask() sends explicit nulls to clear date/time", async () => {
+    const fetchMock = mockFetchOnce(200, { task: { id: "ABC123", dueDate: null } });
+    await api.rescheduleTask("ABC123", { dueDate: null });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ dueDate: null });
+  });
+
+  it("createTask() forwards an optional dueTime", async () => {
+    const fetchMock = mockFetchOnce(200, { task: { id: "X" } });
+    await api.createTask("Dentist", "2026-12-01", "09:30");
+    const sent = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(sent).toEqual({ title: "Dentist", dueDate: "2026-12-01", dueTime: "09:30" });
+  });
+
   it("deleteDocument() DELETEs by id with no JSON content-type (Fastify 400s an empty JSON body)", async () => {
     const fetchMock = mockFetchOnce(200, { document: { id: "DOC1" } });
     await api.deleteDocument("DOC1");

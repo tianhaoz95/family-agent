@@ -44,6 +44,8 @@ export interface TaskRecord {
   title: string;
   notes: string | null;
   dueDate: string | null;
+  /** 24-hour "HH:MM" if the task has a specific time of day; null = all-day. */
+  dueTime: string | null;
   status: "open" | "done";
   createdAt: string;
   updatedAt: string;
@@ -118,6 +120,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   title TEXT NOT NULL,
   notes TEXT,
   due_date TEXT,
+  due_time TEXT,
   status TEXT NOT NULL DEFAULT 'open',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -175,6 +178,7 @@ const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   // has rows with no owner — the DEFAULT backfills them to the legacy
   // sentinel, which reassignLegacyData() then hands to the first admin.
   { table: "tasks", column: "user_id", ddl: `ALTER TABLE tasks ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}'` },
+  { table: "tasks", column: "due_time", ddl: "ALTER TABLE tasks ADD COLUMN due_time TEXT" },
   { table: "documents", column: "user_id", ddl: `ALTER TABLE documents ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}'` },
   { table: "activity", column: "user_id", ddl: `ALTER TABLE activity ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}'` },
   { table: "tools", column: "user_id", ddl: `ALTER TABLE tools ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}'` },
@@ -439,22 +443,40 @@ export class ScopedStore {
   }
 
   // ---- tasks ----
-  createTask(input: { title: string; notes?: string | null; dueDate?: string | null }): TaskRecord {
+  createTask(input: {
+    title: string;
+    notes?: string | null;
+    dueDate?: string | null;
+    dueTime?: string | null;
+  }): TaskRecord {
     const now = new Date().toISOString();
+    const dueDate = input.dueDate ?? null;
     const rec: TaskRecord = {
       id: shortId(),
       title: input.title,
       notes: input.notes ?? null,
-      dueDate: input.dueDate ?? null,
+      dueDate,
+      // A time with no date is meaningless — drop it.
+      dueTime: dueDate ? input.dueTime ?? null : null,
       status: "open",
       createdAt: now,
       updatedAt: now,
     };
     this.db
       .prepare(
-        "INSERT INTO tasks (id, user_id, title, notes, due_date, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO tasks (id, user_id, title, notes, due_date, due_time, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
       )
-      .run(rec.id, this.userId, rec.title, rec.notes, rec.dueDate, rec.status, rec.createdAt, rec.updatedAt);
+      .run(
+        rec.id,
+        this.userId,
+        rec.title,
+        rec.notes,
+        rec.dueDate,
+        rec.dueTime,
+        rec.status,
+        rec.createdAt,
+        rec.updatedAt
+      );
     this.logActivity("task-agent", "task.created", `Created task "${rec.title}"`);
     return rec;
   }
@@ -476,14 +498,61 @@ export class ScopedStore {
   }
 
   updateTaskStatus(id: string, status: "open" | "done"): TaskRecord | undefined {
-    if (!this.getTask(id)) return undefined;
+    return this.updateTask(id, { status });
+  }
+
+  /**
+   * Patch a task's status, due date, and/or due time. `null` clears a field;
+   * omitting the key leaves it untouched. Callers must supply at least one key.
+   * Clearing `dueDate` also clears `dueTime` (a time with no date is meaningless).
+   */
+  updateTask(
+    id: string,
+    patch: { status?: "open" | "done"; dueDate?: string | null; dueTime?: string | null }
+  ): TaskRecord | undefined {
+    const existing = this.getTask(id);
+    if (!existing) return undefined;
+
+    // Resolve the target date/time, applying the "time needs a date" invariant.
+    const nextDate = "dueDate" in patch ? patch.dueDate ?? null : existing.dueDate;
+    let nextTime = "dueTime" in patch ? patch.dueTime ?? null : existing.dueTime;
+    if (!nextDate) nextTime = null;
+
+    const sets: string[] = [];
+    const values: (string | null)[] = [];
+    if (patch.status !== undefined) {
+      sets.push("status = ?");
+      values.push(patch.status);
+    }
+    if (nextDate !== existing.dueDate) {
+      sets.push("due_date = ?");
+      values.push(nextDate);
+    }
+    if (nextTime !== existing.dueTime) {
+      sets.push("due_time = ?");
+      values.push(nextTime);
+    }
+    if (sets.length === 0) return existing;
     const now = new Date().toISOString();
+    sets.push("updated_at = ?");
+    values.push(now);
     this.db
-      .prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-      .run(status, now, id, this.userId);
+      .prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ? AND user_id = ?`)
+      .run(...values, id, this.userId);
     const updated = this.getTask(id);
     if (updated) {
-      this.logActivity("task-agent", "task.updated", `Marked task "${updated.title}" as ${status}`);
+      if (patch.status !== undefined && patch.status !== existing.status) {
+        this.logActivity("task-agent", "task.updated", `Marked task "${updated.title}" as ${patch.status}`);
+      }
+      if (updated.dueDate !== existing.dueDate || updated.dueTime !== existing.dueTime) {
+        this.logActivity(
+          "task-agent",
+          "task.updated",
+          updated.dueDate
+            ? `Rescheduled task "${updated.title}" to ${updated.dueDate}${updated.dueTime ? ` ${updated.dueTime}` : ""}`
+            : `Cleared due date on task "${updated.title}"`
+        );
+      }
     }
     return updated;
   }
@@ -672,6 +741,7 @@ function rowToTask(r: any): TaskRecord {
     title: r.title,
     notes: r.notes,
     dueDate: r.due_date,
+    dueTime: r.due_time ?? null,
     status: r.status,
     createdAt: r.created_at,
     updatedAt: r.updated_at,

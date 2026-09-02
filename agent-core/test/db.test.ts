@@ -36,6 +36,49 @@ describe("Store (scoped to one user)", () => {
     expect(store.updateTaskStatus("nope", "done")).toBeUndefined();
   });
 
+  it("updateTask reschedules and clears a due date", () => {
+    const t = store.createTask({ title: "Dentist" });
+    expect(t.dueDate).toBeNull();
+
+    const rescheduled = store.updateTask(t.id, { dueDate: "2026-12-01" });
+    expect(rescheduled?.dueDate).toBe("2026-12-01");
+
+    const cleared = store.updateTask(t.id, { dueDate: null });
+    expect(cleared?.dueDate).toBeNull();
+
+    // status untouched when only dueDate is patched
+    expect(cleared?.status).toBe("open");
+
+    expect(store.updateTask("nope", { dueDate: "2026-12-01" })).toBeUndefined();
+  });
+
+  it("updateTask sets a time, and clearing the date clears the time too", () => {
+    const t = store.createTask({ title: "Dentist", dueDate: "2026-12-01" });
+
+    const timed = store.updateTask(t.id, { dueTime: "09:30" });
+    expect(timed?.dueTime).toBe("09:30");
+
+    const retimed = store.updateTask(t.id, { dueTime: "11:00" });
+    expect(retimed?.dueTime).toBe("11:00");
+
+    const allDay = store.updateTask(t.id, { dueTime: null });
+    expect(allDay?.dueTime).toBeNull();
+    expect(allDay?.dueDate).toBe("2026-12-01");
+
+    // re-add a time, then clear the date — time must go with it
+    store.updateTask(t.id, { dueTime: "08:00" });
+    const cleared = store.updateTask(t.id, { dueDate: null });
+    expect(cleared?.dueDate).toBeNull();
+    expect(cleared?.dueTime).toBeNull();
+  });
+
+  it("createTask drops a time when there is no date", () => {
+    const t = store.createTask({ title: "Loose", dueTime: "10:00" });
+    expect(t.dueTime).toBeNull();
+    const withBoth = store.createTask({ title: "Firm", dueDate: "2026-12-01", dueTime: "10:00" });
+    expect(withBoth.dueTime).toBe("10:00");
+  });
+
   it("creates a document and later attaches an extraction", () => {
     const doc = store.createDocument({ filename: "bill.txt", rawText: "Due $120 on 2026-09-15" });
     expect(doc.extracted).toBeNull();
