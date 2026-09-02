@@ -1,8 +1,9 @@
 import { readPersistedSettings } from "./settingsFile.js";
+import type { UserRecord } from "./db.js";
 
 // Local by default, cloud by explicit grant (see docs/DECISIONS.md).
 // Nothing in this file reaches off-box; ollamaBaseUrl always points at
-// localhost or another node on the family tailnet, never a public host.
+// localhost or another node on the family network, never a public host.
 const dataDir = process.env.FAMILY_AGENT_DATA_DIR ?? new URL("../data", import.meta.url).pathname;
 
 // Precedence for the live-editable settings: explicit env var > persisted
@@ -16,8 +17,11 @@ const persisted = readPersistedSettings(dataDir);
 export const envLocked = {
   model: process.env.FAMILY_AGENT_MODEL !== undefined,
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL !== undefined,
+  // Pins the inbox *base* dir — each user's watched folder is then
+  // `<base>/<userId>` and can't be individually overridden.
   inboxDir: process.env.FAMILY_AGENT_INBOX_DIR !== undefined,
   ocrModel: process.env.FAMILY_AGENT_OCR_MODEL !== undefined,
+  serverName: process.env.FAMILY_AGENT_SERVER_NAME !== undefined,
 } as const;
 
 export const config = {
@@ -26,12 +30,14 @@ export const config = {
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? persisted.ollamaBaseUrl ?? "http://127.0.0.1:11434",
   model: process.env.FAMILY_AGENT_MODEL ?? persisted.model ?? "gemma4:e2b",
   dataDir,
-  // The "drop a file in a watched folder" story from the architecture notes.
-  // Derived from dataDir (not hardcoded) so overriding FAMILY_AGENT_DATA_DIR
-  // moves both together, unless FAMILY_AGENT_INBOX_DIR is set explicitly. A
-  // real deployment would point this at the NAS/cloud-mounted directory
-  // instead of anywhere under dataDir. Mutated at runtime by PUT /settings.
-  inboxDir: process.env.FAMILY_AGENT_INBOX_DIR ?? persisted.inboxDir ?? `${dataDir}/inbox`,
+  // Display name for this master node, shown on the login screen and
+  // advertised over mDNS so a phone can pick the right family server.
+  serverName: process.env.FAMILY_AGENT_SERVER_NAME ?? persisted.serverName ?? "Family Agent",
+  // The "drop a file in a watched folder" story from the architecture notes,
+  // now per-user: each account watches `<inboxBase>/<userId>` unless it set
+  // its own folder (users.inbox_dir). Derived from dataDir so overriding
+  // FAMILY_AGENT_DATA_DIR moves it too, unless FAMILY_AGENT_INBOX_DIR is set.
+  inboxBase: process.env.FAMILY_AGENT_INBOX_DIR ?? `${dataDir}/inbox`,
   // Optional OCR upgrade: an Ollama vision model (e.g. "glm-ocr:latest") used
   // for scans/photos/image-only PDFs instead of the built-in tesseract.js.
   // Empty string = built-in engine. Mutated at runtime by PUT /settings.
@@ -41,6 +47,9 @@ export const config = {
   // on a CPU-only box a single page can take minutes, so this bounds how long
   // an upload blocks. Bump it on a machine with a GPU.
   ocrModelTimeoutMs: Number(process.env.FAMILY_AGENT_OCR_TIMEOUT_MS ?? 180_000),
+  // Advertise this node on the LAN via mDNS/DNS-SD so the Android app can
+  // find it without a hand-typed address. Off = manual URL entry only.
+  mdnsEnabled: process.env.FAMILY_AGENT_MDNS !== "0",
 
   // ---- Builder tools (agents/builder + tools/*) ----
   // The agent can generate small self-contained web tools to help finish a
@@ -58,6 +67,11 @@ export const config = {
   // without being opened, and always capped at this since last activity.
   toolIdleTimeoutMs: Number(process.env.FAMILY_AGENT_TOOL_IDLE_MS ?? 30 * 60_000),
 };
+
+/** The watched folder for one user — their own override, or the derived default. */
+export function userInboxDir(user: Pick<UserRecord, "id" | "inboxDir">): string {
+  return user.inboxDir ?? `${config.inboxBase}/${user.id}`;
+}
 
 export function toolsDir(): string {
   return `${config.dataDir}/tools`;

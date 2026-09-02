@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { api } from "../src/api.js";
+import { api, setToken, clearToken, SIGNED_OUT_EVENT } from "../src/api.js";
 
 function mockFetchOnce(status: number, body: unknown) {
   const fn = vi.fn().mockResolvedValue({
@@ -15,14 +15,46 @@ function mockFetchOnce(status: number, body: unknown) {
 describe("api client", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    clearToken();
   });
 
   it("health() hits /health and returns the parsed body", async () => {
-    const fetchMock = mockFetchOnce(200, { ok: true, model: "qwen2.5:3b", inboxDir: "/data/inbox" });
+    const fetchMock = mockFetchOnce(200, { ok: true, model: "qwen2.5:3b", serverName: "Home", needsSetup: false });
     const health = await api.health();
     expect(health.model).toBe("qwen2.5:3b");
     const [url] = fetchMock.mock.calls[0];
     expect(String(url)).toContain("/health");
+  });
+
+  it("attaches a bearer token to requests once one is set", async () => {
+    setToken("tok-abc");
+    const fetchMock = mockFetchOnce(200, { tasks: [] });
+    await api.listTasks();
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer tok-abc");
+  });
+
+  it("login() posts credentials and does not need a prior token", async () => {
+    const fetchMock = mockFetchOnce(200, { token: "t1", user: { id: "u", username: "a", displayName: "A", role: "admin" } });
+    const res = await api.login("a", "pw");
+    expect(res.token).toBe("t1");
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toMatchObject({ username: "a", password: "pw" });
+  });
+
+  it("a 401 clears the token and fires the signed-out event", async () => {
+    setToken("stale");
+    let fired = false;
+    const onOut = () => { fired = true; };
+    globalThis.addEventListener?.(SIGNED_OUT_EVENT, onOut);
+    mockFetchOnce(401, { error: "Not signed in." });
+    await expect(api.listTasks()).rejects.toThrow();
+    globalThis.removeEventListener?.(SIGNED_OUT_EVENT, onOut);
+    // token is cleared regardless of whether a window exists to hear the event
+    const fetchMock = mockFetchOnce(200, { tasks: [] });
+    await api.listTasks();
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit)?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBeUndefined();
   });
 
   it("createTask() sends title and dueDate in the body", async () => {

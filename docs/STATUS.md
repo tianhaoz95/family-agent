@@ -117,8 +117,8 @@ export ANDROID_HOME=$(pwd)/../.toolchains/android-sdk
 Tests:
 
 ```bash
-npm test    # from repo root: runs agent-core (30 tests, ~3-5 min, needs Ollama+gemma4:e2b) then desktop (6 tests)
-cd android && ./gradlew testDebugUnitTest   # 5 tests, no device needed
+npm test    # from repo root: runs agent-core (91 tests, ~6 min with Ollama+gemma4:e2b; ~10s without — live tests self-skip) then desktop (15 tests)
+cd android && ./gradlew testDebugUnitTest   # 11 tests, no device needed
 ```
 
 ## Reproducing the toolchain
@@ -140,10 +140,10 @@ second machine.
 2. Actually run the Android app on a real phone at least once — it's been
    verified on an emulator, but a real device (real touch input, real
    network conditions) is still a step removed from that.
-3. Pick up the deferred pieces in whatever order matters most: Tailscale
-   transport, the sandboxed builder/scratch-tool agent (this one deserves a
-   supervised build, not an autonomous one, given what it can do), the
-   compute mesh, per-family-member access control.
+3. Pick up the deferred pieces in whatever order matters most: **content
+   sharing between family accounts** (the natural follow-on now that
+   multi-user auth + isolation is in — see the multi-user entry under "Later
+   changes"), Tailscale transport, the compute mesh.
 
 Later changes (not part of the original autonomous session):
 - **Android UI: full visual redesign to `android/DESIGN.md`** (the "Playful
@@ -245,3 +245,35 @@ Later changes (not part of the original autonomous session):
   (built-in engine) for that reason. Also: OCR still runs on the synchronous
   upload path, so with a vision model set an upload blocks up to the budget;
   moving it to the background extraction pass is the real next step.
+- **Multi-user master node** (the "per-family-member access control" next-step
+  below, done). `agent-core` is now a real multi-user server: `auth.ts`
+  (scrypt + bearer tokens), `users`/`sessions` tables, and a `ScopedStore`
+  (`store.scoped(userId)`) that scopes every task/document/activity/tool query
+  by `user_id`. `server.ts` has a `preHandler` auth hook, `/auth/*` +
+  `/users` routes, one planner + one inbox watcher per account, and
+  admin-only machine settings. First run: `GET /auth/status` → `needsSetup`
+  → `POST /auth/bootstrap` (desktop shows a setup screen; it also reassigns
+  any data from a migrated single-user DB). `agent-core` binds `0.0.0.0` and
+  advertises `_familyagent._tcp` over mDNS (`bonjour-service`).
+  - **desktop**: `main.ts` gates the app behind setup/login; a "Family" admin
+    screen manages accounts; the rail shows the signed-in user + Sign out;
+    machine settings are disabled for non-admins. Token in `localStorage`, a
+    401 reloads to the login screen. 15/15 `test/api.test.ts` pass.
+  - **android**: `AuthState` gates the UI (`PickServer` → `NeedLogin` →
+    `Authenticated`). `ServerDiscovery` finds home servers on the LAN — mDNS
+    (`NsdManager`) *plus* an active `/health` probe of the device's /24 and
+    `10.0.2.2`, because the emulator doesn't forward multicast and some Wi-Fi
+    blocks client-to-client mDNS; manual-address entry is the last resort.
+    `LoginScreen` signs in; `SettingsStore` persists the session; a 401
+    anywhere (`UnauthorizedException` → `AppViewModel.apiCall`) bounces back
+    to login. Settings shows the account + Sign out. 11/11 unit tests pass.
+    **Verified on the emulator**: discovery lists the desktop server, tapping
+    it → login screen (screenshotted).
+  - Verified by hand: `curl` bootstrap → login → two accounts, each sees only
+    its own tasks; member gets 403 on `/users`; per-user inbox watchers start
+    on account creation; mDNS record published. Full agent-core suite 91/91
+    (incl. live-model integration).
+  - **Not yet**: content *sharing* between accounts (the intended next phase —
+    `ScopedStore` and a single DB were chosen partly to make it tractable);
+    Android has no admin/user-management UI (desktop only); the tools server
+    (4174) is still unauthenticated (id is the capability).

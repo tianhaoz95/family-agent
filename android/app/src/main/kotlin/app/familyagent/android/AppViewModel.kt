@@ -9,6 +9,8 @@ import app.familyagent.android.data.FamilyAgentApi
 import app.familyagent.android.data.SettingsStore
 import app.familyagent.android.data.Task
 import app.familyagent.android.data.Tool
+import app.familyagent.android.data.UnauthorizedException
+import app.familyagent.android.data.User
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,10 +24,23 @@ sealed interface ConnectionStatus {
     data class Unreachable(val message: String) : ConnectionStatus
 }
 
+/** Where the app is in the sign-in flow — gates the whole UI. */
+sealed interface AuthState {
+    /** Deciding: checking a stored session, or nothing stored yet. */
+    data object Unknown : AuthState
+    /** Pick a home server on the LAN (or enter one by hand). */
+    data object PickServer : AuthState
+    /** A server is chosen; sign in. */
+    data class NeedLogin(val serverUrl: String, val serverName: String, val error: String? = null) : AuthState
+    /** Signed in. */
+    data class Authenticated(val user: User) : AuthState
+}
+
 data class ChatMessage(val role: String, val text: String, val images: List<String> = emptyList())
 
 @Immutable
 data class AppUiState(
+    val auth: AuthState = AuthState.Unknown,
     val serverUrl: String = "",
     val connection: ConnectionStatus = ConnectionStatus.Connecting,
     val chatMessages: List<ChatMessage> = emptyList(),
@@ -49,14 +64,93 @@ class AppViewModel(
 
     init {
         viewModelScope.launch {
-            val url = settings.serverUrl.first()
-            api.updateBaseUrl(url)
-            _state.value = _state.value.copy(serverUrl = url)
-            refreshStatus()
+            val stored = settings.session.first()
+            if (stored == null) {
+                _state.value = _state.value.copy(auth = AuthState.PickServer)
+                return@launch
+            }
+            api.updateBaseUrl(stored.serverUrl)
+            api.authToken = stored.token
+            _state.value = _state.value.copy(serverUrl = stored.serverUrl)
+            val user = runCatching { api.me() }.getOrNull()
+            if (user != null) {
+                _state.value = _state.value.copy(auth = AuthState.Authenticated(user))
+                refreshStatus()
+            } else {
+                // token gone stale, or server unreachable — go back to login.
+                api.authToken = null
+                val name = runCatching { api.authStatus().serverName }.getOrDefault(stored.serverName)
+                _state.value = _state.value.copy(auth = AuthState.NeedLogin(stored.serverUrl, name))
+            }
+        }
+    }
+
+    /** Any guarded API call: a 401 kicks the whole app back to the login screen. */
+    private suspend fun <T> apiCall(block: suspend () -> T): Result<T> {
+        val r = runCatching { block() }
+        (r.exceptionOrNull() as? UnauthorizedException)?.let {
+            api.authToken = null
+            settings.clearSession()
+            val auth = _state.value.auth
+            val url = _state.value.serverUrl
+            _state.value = _state.value.copy(
+                auth = AuthState.NeedLogin(url, (auth as? AuthState.NeedLogin)?.serverName ?: "", "Session expired — sign in again."),
+            )
+        }
+        return r
+    }
+
+    fun pickServer(url: String) {
+        viewModelScope.launch {
+            val clean = url.trim().trimEnd('/')
+            api.updateBaseUrl(clean)
+            _state.value = _state.value.copy(serverUrl = clean, auth = AuthState.NeedLogin(clean, "loading…"))
+            val name = runCatching { api.authStatus().serverName }.getOrDefault("Family Agent")
+            _state.value = _state.value.copy(auth = AuthState.NeedLogin(clean, name))
+        }
+    }
+
+    fun backToServerPick() {
+        _state.value = _state.value.copy(auth = AuthState.PickServer)
+    }
+
+    fun login(username: String, password: String) {
+        val current = _state.value.auth as? AuthState.NeedLogin ?: return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(auth = current.copy(error = null))
+            api.updateBaseUrl(current.serverUrl)
+            val result = runCatching { api.login(username.trim(), password) }
+            result.onSuccess { resp ->
+                api.authToken = resp.token
+                settings.saveSession(current.serverUrl, resp.token, resp.user.displayName, current.serverName)
+                _state.value = _state.value.copy(
+                    serverUrl = current.serverUrl,
+                    auth = AuthState.Authenticated(resp.user),
+                    connection = ConnectionStatus.Connecting,
+                    chatMessages = emptyList(),
+                    tasks = emptyList(),
+                    documents = emptyList(),
+                    activity = emptyList(),
+                    tools = emptyList(),
+                )
+                refreshStatus()
+            }.onFailure {
+                _state.value = _state.value.copy(auth = current.copy(error = it.message ?: "Sign-in failed."))
+            }
+        }
+    }
+
+    fun signOut() {
+        viewModelScope.launch {
+            api.logout()
+            api.authToken = null
+            settings.clearSession()
+            _state.value = AppUiState(auth = AuthState.PickServer)
         }
     }
 
     fun setServerUrl(url: String) {
+        // "Advanced" manual override from Settings while signed in.
         viewModelScope.launch {
             settings.setServerUrl(url)
             api.updateBaseUrl(url)
@@ -67,7 +161,7 @@ class AppViewModel(
 
     fun refreshStatus() {
         viewModelScope.launch {
-            runCatching { api.health() }
+            apiCall { api.health() }
                 .onSuccess { h ->
                     _state.value = _state.value.copy(
                         connection = ConnectionStatus.Connected(h.model),
@@ -89,7 +183,7 @@ class AppViewModel(
 
     fun refreshTools() {
         viewModelScope.launch {
-            runCatching { api.listTools() }.onSuccess { _state.value = _state.value.copy(tools = it) }
+            apiCall { api.listTools() }.onSuccess { _state.value = _state.value.copy(tools = it) }
         }
     }
 
@@ -97,12 +191,12 @@ class AppViewModel(
         if (prompt.isBlank()) return
         viewModelScope.launch {
             _state.value = _state.value.copy(toolStatus = "Building — this takes a minute or two.")
-            runCatching { api.buildTool(prompt) }
+            apiCall { api.buildTool(prompt) }
                 .onSuccess {
                     refreshActivity()
                     repeat(60) {
                         delay(4000)
-                        val tools = runCatching { api.listTools() }.getOrNull() ?: return@repeat
+                        val tools = apiCall { api.listTools() }.getOrNull() ?: return@repeat
                         _state.value = _state.value.copy(tools = tools)
                         if (tools.none { t -> t.status == "building" }) return@launch
                     }
@@ -113,7 +207,7 @@ class AppViewModel(
 
     fun deleteTool(id: String) {
         viewModelScope.launch {
-            runCatching { api.deleteTool(id) }.onSuccess { refreshTools() }
+            apiCall { api.deleteTool(id) }.onSuccess { refreshTools() }
         }
     }
 
@@ -124,7 +218,7 @@ class AppViewModel(
         viewModelScope.launch {
             val withUser = _state.value.chatMessages + ChatMessage("user", message, images)
             _state.value = _state.value.copy(chatMessages = withUser, chatSending = true)
-            val reply = runCatching { api.chat(prompt, images) }
+            val reply = apiCall { api.chat(prompt, images) }
                 .fold(
                     onSuccess = { it.reply },
                     onFailure = { "Error: ${it.message}" },
@@ -139,13 +233,13 @@ class AppViewModel(
 
     fun refreshTasks() {
         viewModelScope.launch {
-            runCatching { api.listTasks() }.onSuccess { _state.value = _state.value.copy(tasks = it) }
+            apiCall { api.listTasks() }.onSuccess { _state.value = _state.value.copy(tasks = it) }
         }
     }
 
     fun addTask(title: String, dueDate: String?) {
         viewModelScope.launch {
-            runCatching { api.createTask(title, dueDate) }.onSuccess {
+            apiCall { api.createTask(title, dueDate) }.onSuccess {
                 refreshTasks()
                 refreshActivity()
             }
@@ -154,7 +248,7 @@ class AppViewModel(
 
     fun completeTask(id: String) {
         viewModelScope.launch {
-            runCatching { api.completeTask(id) }.onSuccess {
+            apiCall { api.completeTask(id) }.onSuccess {
                 refreshTasks()
                 refreshActivity()
             }
@@ -163,13 +257,13 @@ class AppViewModel(
 
     fun refreshDocuments() {
         viewModelScope.launch {
-            runCatching { api.listDocuments() }.onSuccess { _state.value = _state.value.copy(documents = it) }
+            apiCall { api.listDocuments() }.onSuccess { _state.value = _state.value.copy(documents = it) }
         }
     }
 
     fun ingestDocument(filename: String, text: String) {
         viewModelScope.launch {
-            runCatching { api.ingestDocument(filename, text) }.onSuccess {
+            apiCall { api.ingestDocument(filename, text) }.onSuccess {
                 refreshActivity()
                 pollDocuments()
             }
@@ -178,7 +272,7 @@ class AppViewModel(
 
     fun deleteDocument(id: String) {
         viewModelScope.launch {
-            runCatching { api.deleteDocument(id) }
+            apiCall { api.deleteDocument(id) }
                 .onSuccess {
                     refreshDocuments()
                     refreshActivity()
@@ -191,7 +285,7 @@ class AppViewModel(
 
     fun retryExtraction(id: String) {
         viewModelScope.launch {
-            runCatching { api.retryExtraction(id) }
+            apiCall { api.retryExtraction(id) }
                 .onSuccess { pollDocuments() }
                 .onFailure { err ->
                     _state.value = _state.value.copy(documentUploadStatus = "Retry failed: ${err.message}")
@@ -213,7 +307,7 @@ class AppViewModel(
     fun uploadDocument(filename: String, bytes: ByteArray, mimeType: String?) {
         viewModelScope.launch {
             _state.value = _state.value.copy(documentUploadStatus = "Uploading \"$filename\"…")
-            runCatching { api.uploadDocument(filename, bytes, mimeType) }
+            apiCall { api.uploadDocument(filename, bytes, mimeType) }
                 .onSuccess {
                     _state.value = _state.value.copy(documentUploadStatus = "Uploaded \"${it.filename}\" — extracting…")
                     refreshActivity()
@@ -228,7 +322,7 @@ class AppViewModel(
 
     fun refreshActivity() {
         viewModelScope.launch {
-            runCatching { api.listActivity() }.onSuccess { _state.value = _state.value.copy(activity = it) }
+            apiCall { api.listActivity() }.onSuccess { _state.value = _state.value.copy(activity = it) }
         }
     }
 }

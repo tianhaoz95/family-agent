@@ -45,10 +45,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import app.familyagent.android.data.FamilyAgentApi
+import app.familyagent.android.data.ServerDiscovery
 import app.familyagent.android.data.SettingsStore
 import app.familyagent.android.ui.ActivityScreen
 import app.familyagent.android.ui.ChatScreen
+import app.familyagent.android.ui.DiscoveryScreen
 import app.familyagent.android.ui.DocumentsScreen
+import app.familyagent.android.ui.LoginScreen
 import app.familyagent.android.ui.SettingsScreen
 import app.familyagent.android.ui.StatusDot
 import app.familyagent.android.ui.TasksScreen
@@ -56,7 +59,6 @@ import app.familyagent.android.ui.ToolWebViewScreen
 import app.familyagent.android.ui.ToolsScreen
 import app.familyagent.android.ui.theme.AppAccents
 import app.familyagent.android.ui.theme.FamilyAgentTheme
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 private enum class Destination(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
@@ -76,20 +78,28 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val settingsStore = SettingsStore(applicationContext)
+        val discovery = ServerDiscovery(applicationContext)
         setContent {
             FamilyAgentTheme {
-                var initialUrl by remember { mutableStateOf<String?>(null) }
-                LaunchedEffect(Unit) {
-                    initialUrl = settingsStore.serverUrl.first()
-                }
-                val url = initialUrl
-                if (url == null) {
-                    Surface(Modifier.fillMaxSize()) {}
-                } else {
-                    val viewModel: AppViewModel = viewModel(
-                        factory = AppViewModelFactory(FamilyAgentApi(url), settingsStore),
-                    )
-                    FamilyAgentApp(viewModel)
+                val viewModel: AppViewModel = viewModel(
+                    factory = AppViewModelFactory(FamilyAgentApi(""), settingsStore),
+                )
+                val state by viewModel.state.collectAsState()
+                when (val auth = state.auth) {
+                    is AuthState.Unknown -> Surface(Modifier.fillMaxSize()) {}
+                    is AuthState.PickServer ->
+                        DiscoveryScreen(
+                            discovery = discovery,
+                            onPick = viewModel::pickServer,
+                        )
+                    is AuthState.NeedLogin ->
+                        LoginScreen(
+                            serverName = auth.serverName,
+                            error = auth.error,
+                            onSignIn = viewModel::login,
+                            onBack = viewModel::backToServerPick,
+                        )
+                    is AuthState.Authenticated -> FamilyAgentApp(viewModel)
                 }
             }
         }
@@ -201,7 +211,14 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                     ActivityScreen(state.activity)
                 }
                 composable(Destination.Settings.route) {
-                    SettingsScreen(state.serverUrl, state.connection, onSave = viewModel::setServerUrl)
+                    SettingsScreen(
+                        serverUrl = state.serverUrl,
+                        connection = state.connection,
+                        userName = (state.auth as? AuthState.Authenticated)?.user?.displayName ?: "",
+                        userRole = (state.auth as? AuthState.Authenticated)?.user?.role ?: "",
+                        onSave = viewModel::setServerUrl,
+                        onSignOut = viewModel::signOut,
+                    )
                 }
             }
         }

@@ -2,7 +2,7 @@ import { createDeepAgent, createFilesystemMiddleware } from "deepagents";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { createLocalModel } from "../model.js";
-import type { Store } from "../db.js";
+import type { ScopedStore } from "../db.js";
 import { makeTaskTools } from "./taskTools.js";
 import { makeDocumentTools } from "./documentTools.js";
 
@@ -75,7 +75,7 @@ export interface FamilyAgentDeps {
   startToolBuild?: (description: string) => void;
 }
 
-export function buildFamilyAgent(store: Store, deps: FamilyAgentDeps = {}) {
+export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {}) {
   const model = createLocalModel();
 
   const startBuild = tool(

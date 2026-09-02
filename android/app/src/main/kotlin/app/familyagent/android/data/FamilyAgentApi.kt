@@ -15,7 +15,10 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /** Thrown for any non-2xx response or transport failure, with a message safe to show the user. */
-class ApiException(message: String) : IOException(message)
+open class ApiException(message: String) : IOException(message)
+
+/** The server rejected our session token — the app should drop back to sign-in. */
+class UnauthorizedException(message: String = "Your session has expired. Sign in again.") : ApiException(message)
 
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 private val json = Json { ignoreUnknownKeys = true }
@@ -28,6 +31,8 @@ private val json = Json { ignoreUnknownKeys = true }
  */
 class FamilyAgentApi(
     private var baseUrl: String,
+    /** Bearer token for the signed-in family member; null before sign-in. */
+    var authToken: String? = null,
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
@@ -37,17 +42,21 @@ class FamilyAgentApi(
         baseUrl = url.trimEnd('/')
     }
 
+    private fun Request.Builder.withAuth(): Request.Builder =
+        authToken?.let { header("Authorization", "Bearer $it") } ?: this
+
     private suspend fun get(path: String): String = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url("$baseUrl$path").get().build()
-        execute(request)
+        execute(Request.Builder().url("$baseUrl$path").get().withAuth().build())
     }
 
     private suspend fun send(method: String, path: String, body: String): String = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url("$baseUrl$path")
-            .method(method, body.toRequestBody(JSON_MEDIA_TYPE))
-            .build()
-        execute(request)
+        execute(
+            Request.Builder()
+                .url("$baseUrl$path")
+                .method(method, body.toRequestBody(JSON_MEDIA_TYPE))
+                .withAuth()
+                .build()
+        )
     }
 
     private suspend fun sendNoBody(method: String, path: String): String = withContext(Dispatchers.IO) {
@@ -55,14 +64,16 @@ class FamilyAgentApi(
         // Send an empty body with NO content-type — Fastify 400s a request that
         // declares application/json but has an empty body.
         val body = if (method == "DELETE") null else ByteArray(0).toRequestBody(null)
-        val request = Request.Builder().url("$baseUrl$path").method(method, body).build()
-        execute(request)
+        execute(Request.Builder().url("$baseUrl$path").method(method, body).withAuth().build())
     }
 
     private fun execute(request: Request): String {
         try {
             client.newCall(request).execute().use { response ->
                 val text = response.body?.string().orEmpty()
+                if (response.code == 401) {
+                    throw UnauthorizedException()
+                }
                 if (!response.isSuccessful) {
                     val detail = runCatching { json.parseToJsonElement(text) }.getOrNull()
                     throw ApiException("${request.url.encodedPath}: HTTP ${response.code}${detail?.let { " — $it" } ?: ""}")
@@ -71,11 +82,25 @@ class FamilyAgentApi(
             }
         } catch (e: IOException) {
             if (e is ApiException) throw e
-            throw ApiException("Could not reach $baseUrl — is the desktop app running? (${e.message})")
+            throw ApiException("Could not reach $baseUrl — is the home server running? (${e.message})")
         }
     }
 
     suspend fun health(): HealthResponse = json.decodeFromString(get("/health"))
+
+    // ---- auth ----
+    suspend fun authStatus(): AuthStatusResponse = json.decodeFromString(get("/auth/status"))
+
+    suspend fun login(username: String, password: String): LoginResponse =
+        json.decodeFromString(
+            send("POST", "/auth/login", json.encodeToString(LoginRequest(username, password, deviceLabel = "android")))
+        )
+
+    suspend fun me(): User = json.decodeFromString<MeResponse>(get("/auth/me")).user
+
+    suspend fun logout() {
+        runCatching { sendNoBody("POST", "/auth/logout") }
+    }
 
     suspend fun chat(message: String, images: List<String> = emptyList()): ChatResponse =
         json.decodeFromString(send("POST", "/chat", json.encodeToString(ChatRequest(message, images))))
@@ -125,7 +150,7 @@ class FamilyAgentApi(
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", filename, bytes.toRequestBody(mimeType?.toMediaTypeOrNull()))
                 .build()
-            val request = Request.Builder().url("$baseUrl/documents/upload").post(body).build()
+            val request = Request.Builder().url("$baseUrl/documents/upload").post(body).withAuth().build()
             json.decodeFromString<DocumentResponse>(execute(request)).document
         }
 }

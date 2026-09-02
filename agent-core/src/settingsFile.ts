@@ -1,11 +1,11 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 
-// The settings a user can change from the app itself (via the desktop
-// Settings page, PUT /settings) rather than an env var + restart. Small and
-// file-based on purpose — one JSON object, no migration story needed.
+// The MACHINE-WIDE settings an admin can change from the app itself (via the
+// desktop Settings page, PUT /settings) rather than an env var + restart.
+// Small and file-based on purpose — one JSON object, no migration story
+// needed. Per-user settings (each user's watched folder) live on the `users`
+// table instead, not here.
 export interface PersistedSettings {
-  /** Watched inbox folder. */
-  inboxDir?: string;
   /**
    * Ollama vision model to use for OCR (scans, photos, image-only PDFs).
    * Empty / unset means the built-in tesseract.js engine. See fileExtract.ts.
@@ -15,9 +15,11 @@ export interface PersistedSettings {
   model?: string;
   /** Base URL of the Ollama instance (localhost, or a tailnet node). */
   ollamaBaseUrl?: string;
+  /** Display name for this master node — shown on login and in LAN discovery. */
+  serverName?: string;
 }
 
-const STRING_KEYS: (keyof PersistedSettings)[] = ["inboxDir", "ocrModel", "model", "ollamaBaseUrl"];
+const STRING_KEYS: (keyof PersistedSettings)[] = ["ocrModel", "model", "ollamaBaseUrl", "serverName"];
 
 function settingsPath(dataDir: string): string {
   return `${dataDir}/settings.json`;

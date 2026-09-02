@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { ChatOllama } from "@langchain/ollama";
-import type { Store, ToolRecord } from "../db.js";
+import type { ScopedStore, ToolRecord } from "../db.js";
 import { toolsDir } from "../config.js";
 import { DEFAULT_HANDLER, HARNESS } from "./harness.js";
 import type { ToolSupervisor } from "./supervisor.js";
@@ -120,7 +120,7 @@ export interface BuildResult {
 
 async function generateAndWrite(
   model: ChatOllama,
-  store: Store,
+  store: ScopedStore,
   supervisor: ToolSupervisor,
   prompt: string,
   kind: "static" | "server",
@@ -164,7 +164,7 @@ const BUILD_TIMEOUT_MS = Number(process.env.FAMILY_AGENT_TOOL_BUILD_MS ?? 8 * 60
 
 export async function buildTool(
   model: ChatOllama,
-  store: Store,
+  store: ScopedStore,
   supervisor: ToolSupervisor,
   prompt: string
 ): Promise<BuildResult> {

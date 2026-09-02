@@ -7,7 +7,38 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <div id="app">
+    <!-- Auth gate: shown before the app when the server needs first-run setup
+         or nobody is signed in on this machine. -->
+    <div id="gate" class="gate" hidden>
+      <div class="gate-card">
+        <div class="brand brand-lg">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Family&nbsp;Agent</span>
+        </div>
+
+        <form id="setup-form" class="gate-form" hidden>
+          <h1>Set up this home</h1>
+          <p class="gate-sub">Create the owner account. You can add family members afterwards.</p>
+          <label>Home name<input id="setup-servername" type="text" placeholder="The Nguyens" autocomplete="off" /></label>
+          <label>Your name<input id="setup-displayname" type="text" placeholder="Alex" autocomplete="name" required /></label>
+          <label>Username<input id="setup-username" type="text" placeholder="alex" autocomplete="username" required /></label>
+          <label>Password<input id="setup-password" type="password" placeholder="at least 6 characters" autocomplete="new-password" required /></label>
+          <button type="submit">Create owner account</button>
+          <p id="setup-error" class="gate-error" role="alert"></p>
+        </form>
+
+        <form id="login-form" class="gate-form" hidden>
+          <h1 id="login-title">Sign in</h1>
+          <p class="gate-sub">This machine keeps everyone's things separate.</p>
+          <label>Username<input id="login-username" type="text" autocomplete="username" required /></label>
+          <label>Password<input id="login-password" type="password" autocomplete="current-password" required /></label>
+          <button type="submit">Sign in</button>
+          <p id="login-error" class="gate-error" role="alert"></p>
+        </form>
+      </div>
+    </div>
+
+    <div id="app" hidden>
       <aside class="rail">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true"></span>
@@ -30,6 +61,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/></svg>
             <span class="nav-label">Tools</span>
           </button>
+          <button class="nav-item" data-view="family" type="button" id="nav-family" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <span class="nav-label">Family</span>
+          </button>
           <button class="nav-item" data-view="activity" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
             <span class="nav-label">Activity</span>
@@ -40,6 +75,10 @@
           </button>
         </nav>
         <div class="rail-footer">
+          <div class="rail-user" id="rail-user" hidden>
+            <span class="rail-user-name" id="rail-user-name"></span>
+            <button type="button" id="signout-btn" class="rail-signout">Sign out</button>
+          </div>
           <div id="status-pill" class="status-pill status-pending">
             <span class="status-dot" aria-hidden="true"></span>
             <span id="status-text">connecting…</span>
@@ -138,6 +177,25 @@
           <ul id="tool-list" class="tool-list"></ul>
         </section>
 
+        <section id="view-family" class="view" aria-label="Family">
+          <div class="view-header">
+            <h1>Family</h1>
+            <p class="view-sub">Accounts on this home server. Each one keeps its own tasks, documents, and history.</p>
+          </div>
+          <form id="user-form" class="inline-form inline-form-stacked">
+            <input id="user-displayname" type="text" placeholder="Name, e.g. Sam" required />
+            <input id="user-username" type="text" placeholder="Username" autocomplete="off" required />
+            <input id="user-password" type="password" placeholder="Temporary password (6+ chars)" autocomplete="new-password" required />
+            <select id="user-role">
+              <option value="member">Member</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button type="submit">Add account</button>
+          </form>
+          <p id="user-status" class="settings-hint" role="status"></p>
+          <ul id="user-list" class="user-list"></ul>
+        </section>
+
         <section id="view-activity" class="view" aria-label="Activity">
           <div class="view-header">
             <h1>Activity</h1>
@@ -201,6 +259,28 @@
               <button type="submit">Save</button>
             </form>
             <p id="settings-ocr-status" class="settings-hint" role="status"></p>
+
+            <h3>Home name</h3>
+            <p class="settings-hint">
+              Shown on the sign-in screen and to phones discovering this server on the network.
+            </p>
+            <form id="settings-servername-form" class="inline-form">
+              <input id="settings-servername-input" type="text" placeholder="The Nguyens" required />
+              <button type="submit">Save</button>
+            </form>
+            <p id="settings-servername-status" class="settings-hint" role="status"></p>
+          </div>
+
+          <div class="settings-section">
+            <h3>Your account</h3>
+            <p class="settings-hint">
+              Signed in as <strong id="account-name"></strong> (<span id="account-role"></span>).
+            </p>
+            <form id="password-form" class="inline-form">
+              <input id="account-password" type="password" placeholder="New password (6+ chars)" autocomplete="new-password" required />
+              <button type="submit">Change password</button>
+            </form>
+            <p id="account-status" class="settings-hint" role="status"></p>
           </div>
         </section>
 

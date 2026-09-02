@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { Store } from "../src/db.js";
+import { Store, type ScopedStore } from "../src/db.js";
 import { makeDocumentTools } from "../src/agents/documentTools.js";
 
 // Direct unit coverage of the tools bound to the document-agent subagent —
@@ -7,11 +7,12 @@ import { makeDocumentTools } from "../src/agents/documentTools.js";
 // "I found no documents" despite one existing: the subagent had no way to
 // enumerate documents, only look one up by id it would have had to guess.
 describe("document tools", () => {
-  let store: Store;
+  let store: ScopedStore;
   let tools: ReturnType<typeof makeDocumentTools>;
 
   beforeEach(() => {
-    store = new Store(":memory:");
+    const raw = new Store(":memory:");
+    store = raw.scoped(raw.createUser({ username: "u", displayName: "U", password: "sekret123" }).id);
     tools = makeDocumentTools(store);
   });
 

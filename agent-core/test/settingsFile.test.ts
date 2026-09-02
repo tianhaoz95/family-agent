@@ -27,24 +27,24 @@ describe("settingsFile", () => {
 
   it("merges — writing one field does not drop the others", () => {
     const dir = freshDir();
-    persistSettings(dir, { inboxDir: "/nas/family" });
+    persistSettings(dir, { serverName: "The Nguyens" });
     persistSettings(dir, { ocrModel: "glm-ocr:latest" });
-    expect(readPersistedSettings(dir)).toEqual({ inboxDir: "/nas/family", ocrModel: "glm-ocr:latest" });
+    expect(readPersistedSettings(dir)).toEqual({ serverName: "The Nguyens", ocrModel: "glm-ocr:latest" });
   });
 
   it("treats an empty string as a real value but undefined as leave-unchanged", () => {
     const dir = freshDir();
-    persistSettings(dir, { inboxDir: "/nas", ocrModel: "glm-ocr:latest" });
+    persistSettings(dir, { serverName: "Home", ocrModel: "glm-ocr:latest" });
     persistSettings(dir, { ocrModel: "" }); // clear OCR model
-    persistSettings(dir, { inboxDir: undefined }); // no-op for inboxDir
-    expect(readPersistedSettings(dir)).toEqual({ inboxDir: "/nas", ocrModel: "" });
+    persistSettings(dir, { serverName: undefined }); // no-op
+    expect(readPersistedSettings(dir)).toEqual({ serverName: "Home", ocrModel: "" });
   });
 
   it("ignores non-string junk in the file", () => {
     const dir = freshDir();
-    persistSettings(dir, { inboxDir: "/nas" });
+    persistSettings(dir, { serverName: "Home" });
     const path = join(dir, "settings.json");
-    writeFileSync(path, JSON.stringify({ inboxDir: 42, ocrModel: "ok" }));
+    writeFileSync(path, JSON.stringify({ serverName: 42, ocrModel: "ok" }));
     expect(readPersistedSettings(dir)).toEqual({ ocrModel: "ok" });
   });
 });

@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- The companion app only ever talks to a server URL the user enters
-         themselves (their desktop, over the LAN or a future tailnet) — see
-         docs/DECISIONS.md for why Tailscale wiring is deferred. -->
+    <!-- The companion app talks only to a Family Agent master node it found on
+         the LAN (mDNS discovery) or that the user typed in by hand, then
+         authenticates with a username/password. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- mDNS/DNS-SD discovery of the master node needs multicast on Wi-Fi. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Camera capture (Documents "Scan", Chat "Take photo") goes through
          ACTION_IMAGE_CAPTURE / the system camera app via ActivityResult's
          TakePicture — we never run the camera ourselves. Deliberately do NOT

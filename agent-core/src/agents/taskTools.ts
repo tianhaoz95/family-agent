@@ -1,9 +1,11 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import type { Store } from "../db.js";
+import type { ScopedStore } from "../db.js";
 
-// Bound to one Store instance per server process — see agents/index.ts.
-export function makeTaskTools(store: Store) {
+// Bound to one user's ScopedStore — the planner builds a fresh agent per
+// authenticated user (see agents/index.ts), so these tools only ever touch
+// that user's tasks.
+export function makeTaskTools(store: ScopedStore) {
   const createTask = tool(
     async ({ title, notes, dueDate }) => {
       const rec = store.createTask({ title, notes, dueDate });

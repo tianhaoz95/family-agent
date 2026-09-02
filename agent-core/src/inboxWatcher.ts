@@ -1,7 +1,7 @@
 import chokidar, { type FSWatcher } from "chokidar";
 import { readFile, mkdir } from "node:fs/promises";
 import { basename, extname } from "node:path";
-import type { Store } from "./db.js";
+import type { ScopedStore } from "./db.js";
 import type { ChatOllama } from "@langchain/ollama";
 import { extractDocument } from "./agents/extraction.js";
 import { extractText, SUPPORTED_EXTENSIONS, UnsupportedFileTypeError } from "./fileExtract.js";
@@ -13,7 +13,7 @@ import { extractText, SUPPORTED_EXTENSIONS, UnsupportedFileTypeError } from "./f
  * (POST /documents/ingest for pasted text, POST /documents/upload for
  * uploaded files) rather than replacing them.
  */
-export async function startInboxWatcher(store: Store, model: ChatOllama, inboxDir: string): Promise<FSWatcher> {
+export async function startInboxWatcher(store: ScopedStore, model: ChatOllama, inboxDir: string): Promise<FSWatcher> {
   await mkdir(inboxDir, { recursive: true });
 
   const watcher = chokidar.watch(inboxDir, {
@@ -29,7 +29,7 @@ export async function startInboxWatcher(store: Store, model: ChatOllama, inboxDi
   return watcher;
 }
 
-async function handleNewFile(store: Store, model: ChatOllama, path: string): Promise<void> {
+async function handleNewFile(store: ScopedStore, model: ChatOllama, path: string): Promise<void> {
   const filename = basename(path);
 
   if (store.findDocumentBySourcePath(path)) {

@@ -89,6 +89,47 @@ class FamilyAgentApiTest {
     }
 
     @Test
+    fun `login parses the token and user, and sends credentials`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"token":"sess-123","user":{"id":"U1","username":"dad","displayName":"Dad","role":"member"}}"""
+            )
+        )
+        val resp = api.login("dad", "hunter22")
+        assertEquals("sess-123", resp.token)
+        assertEquals("Dad", resp.user.displayName)
+        val recorded = server.takeRequest()
+        assertEquals("/auth/login", recorded.path)
+        assertTrue(recorded.body.readUtf8().contains("hunter22"))
+    }
+
+    @Test
+    fun `a 401 surfaces as UnauthorizedException`() = runBlocking {
+        api.authToken = "stale"
+        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"Not signed in."}"""))
+        try {
+            api.listTasks()
+            org.junit.Assert.fail("expected UnauthorizedException")
+        } catch (e: UnauthorizedException) {
+            assertTrue(e.message!!.isNotBlank())
+        }
+    }
+
+    @Test
+    fun `requests carry the bearer token once set`() = runBlocking {
+        api.authToken = "tok-xyz"
+        server.enqueue(MockResponse().setBody("""{"tasks":[]}"""))
+        api.listTasks()
+        assertEquals("Bearer tok-xyz", server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
+    fun `me parses the current user`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"user":{"id":"U1","username":"mom","displayName":"Mom","role":"admin"}}"""))
+        assertEquals("admin", api.me().role)
+    }
+
+    @Test
     fun `documents response decodes extraction fields`() = runBlocking {
         server.enqueue(
             MockResponse().setBody(

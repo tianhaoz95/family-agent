@@ -6,6 +6,12 @@ import { Store } from "../src/db.js";
 import { startInboxWatcher } from "../src/inboxWatcher.js";
 import { config } from "../src/config.js";
 
+// The watcher takes a per-user scoped store — give each test a fresh one.
+function scopedMem() {
+  const raw = new Store(":memory:");
+  return raw.scoped(raw.createUser({ username: "u", displayName: "U", password: "sekret123" }).id);
+}
+
 // Model behavior is covered by test/agents.integration.test.ts; this test
 // only needs to prove the watcher notices files and creates document rows
 // with the right dedup/skip behavior, so it stubs extraction out rather than
@@ -25,7 +31,7 @@ describe("inbox watcher", () => {
 
   it("ingests a .txt file dropped into the folder, skips unsupported types, avoids double-ingest", async () => {
     dir = await mkdtemp(join(tmpdir(), "family-agent-inbox-"));
-    const store = new Store(":memory:");
+    const store = scopedMem();
     const extractSpy = vi.spyOn(extraction, "extractDocument").mockResolvedValue(undefined);
 
     watcher = await startInboxWatcher(store, {} as any, dir);
@@ -69,7 +75,7 @@ describe("inbox watcher", () => {
     // handled before OCR support could ship at all. See fileExtract.ts's
     // looksLikeImage magic-byte check.
     dir = await mkdtemp(join(tmpdir(), "family-agent-inbox-"));
-    const store = new Store(":memory:");
+    const store = scopedMem();
     vi.spyOn(extraction, "extractDocument").mockResolvedValue(undefined);
 
     watcher = await startInboxWatcher(store, {} as any, dir);
@@ -89,7 +95,7 @@ describe("inbox watcher", () => {
 
   it("creates the inbox directory if it doesn't exist yet", async () => {
     dir = join(await mkdtemp(join(tmpdir(), "family-agent-inbox-parent-")), "nested", "inbox");
-    const store = new Store(":memory:");
+    const store = scopedMem();
     watcher = await startInboxWatcher(store, {} as any, dir);
     // No throw = directory got created; sanity-check it's actually there.
     const stats = await import("node:fs/promises").then((fs) => fs.stat(dir));
@@ -97,11 +103,11 @@ describe("inbox watcher", () => {
   });
 });
 
-// Keep config's default inboxDir out of the way of these tests — sanity
-// check it at least resolves to somewhere under the data dir, not / or cwd.
-describe("config.inboxDir", () => {
+// Sanity-check the per-user inbox base resolves somewhere under the data
+// dir, not / or cwd.
+describe("config.inboxBase", () => {
   it("defaults under the data directory", () => {
-    expect(config.inboxDir).toContain("data");
-    expect(config.inboxDir.endsWith("inbox")).toBe(true);
+    expect(config.inboxBase).toContain("data");
+    expect(config.inboxBase.endsWith("inbox")).toBe(true);
   });
 });

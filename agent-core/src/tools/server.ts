@@ -116,7 +116,7 @@ export async function startToolsServer(store: Store, supervisor: ToolSupervisor)
         return;
       }
 
-      const tool = store.getTool(id);
+      const tool = store.getToolAny(id);
       if (!tool || tool.status !== "ready") {
         res.writeHead(404).end("tool not found");
         return;
@@ -201,7 +201,12 @@ export function listenWithRetry(
       };
       server.once("error", onError);
       server.once("listening", onListening);
-      server.listen(port, "127.0.0.1");
+      // 0.0.0.0, not 127.0.0.1: the Android app views a generated tool in a
+      // WebView over the LAN, so it has to be able to reach this port from
+      // another device. The strict CSP above still applies, and a tool's
+      // page still can't reach agent-core's authed API (different origin,
+      // connect-src 'self'). See docs/DECISIONS.md.
+      server.listen(port, "0.0.0.0");
     });
   return attempt();
 }

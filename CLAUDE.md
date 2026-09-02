@@ -12,6 +12,13 @@ inference goes through a local Ollama instance, nothing is sent to a cloud API. 
 every non-obvious choice below (and *why*), `docs/BUILD_LOG.md` has the chronological blow-by-blow
 of what broke and how it was fixed.
 
+It is **multi-user**. `agent-core` on the home laptop is the master node: an admin does a
+one-time setup, then creates a local account per family member. Every account has its own
+isolated tasks, documents, activity, chat, tools, and watched folder. Clients authenticate
+with username + password and carry a bearer token on every request; `agent-core` binds
+`0.0.0.0` and advertises itself on the LAN over mDNS (`_familyagent._tcp`) so the Android app
+can discover it. Content *sharing* between accounts is not built yet — see `docs/STATUS.md`.
+
 The **desktop** app follows `DESIGN.md` at the repo root (the "Notion — warm paper notebook"
 system: `#f6f5f4` canvas, single `#0075de` blue accent, hairline-border / no-shadow cards, Inter
 + Source Serif 4, **light theme only**). Its tokens live in `desktop/src/style.css` `:root`.
@@ -32,6 +39,11 @@ desktop change does **not** imply an Android change (or vice versa).
 - Android toolchain (JDK 17, Android SDK) lives in `.toolchains/` at the repo root, gitignored and
   machine-local — see `docs/BUILD_LOG.md`'s "android" section if it's missing and needs
   reinstalling.
+- **First run of the app** (any client): `agent-core` starts with zero accounts. The desktop
+  shows a setup screen (create the owner/admin account + name the home); the Android app
+  discovers the server on the LAN then shows a login screen. A test/dev server can be
+  bootstrapped with `curl -XPOST .../auth/bootstrap -d '{"username":...,"password":...}'`.
+  `FAMILY_AGENT_SERVER_NAME` pins the home name; `FAMILY_AGENT_MDNS=0` disables LAN advertising.
 
 ## Commands
 
@@ -92,22 +104,41 @@ duplicated by hand in each client — `desktop/src/api.ts` and
 `android/.../data/ApiModels.kt` — rather than via a shared package).
 
 ```
-agent-core (Node/TS, port 4173)  <--HTTP-->  desktop (Tauri, spawns agent-core as a sidecar)
-        ^                                     android (Kotlin/Compose, manual server URL in Settings)
+agent-core (Node/TS, 0.0.0.0:4173)  <--HTTP+bearer-->  desktop (Tauri, spawns agent-core as a sidecar)
+        ^                                                android (Kotlin/Compose, mDNS discovery + login)
         |
      Ollama (local, port 11434)
 ```
 
+**Auth / multi-user.** `agent-core/src/auth.ts` (scrypt password hashing, opaque bearer
+tokens — only their sha256 is stored, in the `sessions` table). `agent-core/src/db.ts` owns
+`users`/`sessions` plus a `user_id` column on every owned table; **`ScopedStore`** (from
+`store.scoped(userId)`) is the isolation boundary — it exposes the same task/document/activity/
+tool methods the single-user `Store` used to, each scoped with `WHERE user_id = ?`, so
+`makeTaskTools` / `makeDocumentTools` / `extraction.ts` / `inboxWatcher.ts` were barely
+touched. `server.ts` has a `preHandler` auth hook (public routes: `/health`, `/auth/status`,
+`/auth/login`, `/auth/bootstrap`); it builds one deepagents planner **per user**, bound to
+that user's `ScopedStore`, and `main()` runs one inbox watcher per user
+(`<inboxBase>/<userId>` by default, or `users.inbox_dir`). First run: `GET /auth/status`
+returns `needsSetup: true` → `POST /auth/bootstrap` creates the first admin and reassigns any
+data from a migrated single-user DB (owned by the `_legacy_` sentinel). Machine settings
+(`model`, `ollamaBaseUrl`, `ocrModel`, `serverName`) are admin-only; `inboxDir` is per-user.
+An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with a DEFAULT).
+
 **agent-core** (`agent-core/src/`):
-- `server.ts` — Fastify app. `buildServer(store, onInboxDirChange?)` is the testable factory
-  (used directly by tests via `app.inject`); `main()` wires it to a real port, starts the inbox
-  watcher, and supplies the callback that lets `PUT /settings` restart the watcher live. CORS is
-  fully open (`origin: true`) deliberately — see `docs/DECISIONS.md` for why that's not a gap.
-  **`methods` must be listed explicitly** (`["GET", "POST", "PATCH", "PUT"]`) — `@fastify/cors`
-  defaults to `GET,HEAD,POST` only, which silently broke `PATCH`/`PUT` from the real desktop
-  webview for a while (curl and `app.inject()` both bypass real CORS preflight, so neither caught
-  it). If you add a route using a new HTTP method, add it here too, or it'll work in every test
-  and every curl check while being broken in the actual browser.
+- `server.ts` — Fastify app. `buildServer(store, hooks?, supervisor?)` is the testable factory
+  (used directly by tests via `app.inject` — tests seed a user + token with
+  `test/helpers.ts`'s `seedUser` / `authInject`); `main()` wires it to a real port, runs one
+  inbox watcher per account, publishes the mDNS record, and supplies the `hooks`
+  (`onUserInboxChange` / `onModelChange` / `onUserCreated` / `onUserDeleted` /
+  `onServerNameChange`). The `preHandler` auth hook attaches `req.authUser` + `req.userStore`
+  (a `ScopedStore`) to every non-public route; `requireAdmin` gates `/users` and machine
+  settings. CORS is fully open (`origin: true`) deliberately — the bearer token is the access
+  control, not the origin (see `docs/DECISIONS.md`). **`methods` must be listed explicitly**
+  (`["GET", "POST", "PATCH", "PUT", "DELETE"]`) — `@fastify/cors` defaults to `GET,HEAD,POST`
+  only, which silently broke `PATCH`/`PUT` from the real desktop webview for a while (curl and
+  `app.inject()` both bypass real CORS preflight). If you add a route using a new HTTP method,
+  add it here too.
 - `fileExtract.ts` — `extractText(filename, buffer)` dispatches by extension: `.txt`/`.md` as
   plain utf8, `.pdf` via `pdf-parse` (text layer if present, else OCR the embedded page images —
   scanned PDFs work), images (`.jpg`/`.jpeg`/`.png`/`.webp`) via OCR. OCR is `tesseract.js` by
@@ -167,12 +198,23 @@ agent-core (Node/TS, port 4173)  <--HTTP-->  desktop (Tauri, spawns agent-core a
 `src-tauri/` is the Rust shell. `main.rs` spawns `agent-core`'s built `dist/server.js` as a child
 process via `node`, with `PR_SET_PDEATHSIG` set on the child (Linux, via `libc::prctl` in a
 `pre_exec` hook) so a hard-killed parent can't orphan it — this was a real bug, found by testing
-`kill -9` against the running app, not defensive-by-default.
+`kill -9` against the running app, not defensive-by-default. `src/api.ts` keeps the bearer token
+in `localStorage` and attaches it to every request; a `401` clears it and fires
+`family-agent:signed-out`, which `main.ts` handles by reloading to the login screen. `main.ts`
+gates the whole app behind `boot()` (setup → login → app) and shows a "Family" nav item + admin
+machine-settings only when the signed-in user is an admin.
 
 **android** (`android/app/src/main/kotlin/app/familyagent/android/`): single-Activity Compose
-app, `AppViewModel` holds all state as one `StateFlow<AppUiState>`, `FamilyAgentApi` is a thin
-OkHttp + kotlinx.serialization client. Server URL is entered by hand in Settings and persisted via
-DataStore (`SettingsStore`) — there's no service discovery. From an emulator, `10.0.2.2` is the
+app, `AppViewModel` holds all state as one `StateFlow<AppUiState>` (including `auth: AuthState`,
+which gates the UI: `PickServer` → `NeedLogin` → `Authenticated`). `FamilyAgentApi` is a thin
+OkHttp + kotlinx.serialization client carrying `authToken`; a `401` throws
+`UnauthorizedException`, which `AppViewModel.apiCall {}` catches and turns into
+`AuthState.NeedLogin`. `data/ServerDiscovery.kt` finds the master node two ways at once — mDNS
+(`NsdManager`, `_familyagent._tcp`, Wi-Fi multicast lock) **and** an active `GET /health` probe
+of the device's own /24 plus `10.0.2.2` (the emulator forwards no multicast, and some Wi-Fi
+blocks client-to-client mDNS — the probe is what makes discovery actually work in those
+cases); `DiscoveryScreen` lists whatever either method finds, plus a manual-address fallback, `LoginScreen` signs in, `SettingsStore` persists the session
+(`serverUrl` + `token` + names) in DataStore. From an emulator, `10.0.2.2` is the
 alias for the host machine running agent-core. `DocumentsScreen` uploads files via a system
 picker (`GetContent`) or camera capture (`TakePicture` + a `FileProvider` — see
 `res/xml/file_paths.xml` and the `<provider>` entry in `AndroidManifest.xml`); both paths funnel

@@ -1,9 +1,9 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import type { Store } from "../db.js";
+import type { ScopedStore } from "../db.js";
 
-// Bound to one Store instance per server process — see agents/index.ts.
-export function makeDocumentTools(store: Store) {
+// Bound to one user's ScopedStore — see agents/index.ts.
+export function makeDocumentTools(store: ScopedStore) {
   const saveExtraction = tool(
     async ({ documentId, summary, category, importantDates }) => {
       const extracted = {

@@ -14,43 +14,57 @@ import app.familyagent.android.ui.theme.AppAccents
 fun SettingsScreen(
     serverUrl: String,
     connection: ConnectionStatus,
+    userName: String,
+    userRole: String,
     onSave: (String) -> Unit,
+    onSignOut: () -> Unit,
 ) {
     var draft by remember(serverUrl) { mutableStateOf(serverUrl) }
+    var showAdvanced by remember { mutableStateOf(false) }
 
     ScreenScaffold(
         title = "Settings",
-        subtitle = "Point this at the Family Agent desktop app on your home network.",
+        subtitle = "Your account and this device's connection.",
     ) {
         AppCard {
             ConnectionStatusRow(connection)
         }
 
         Spacer(Modifier.height(18.dp))
-        SectionLabel("Desktop server address")
+        SectionLabel("Signed in as")
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { draft = it },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("http://192.168.1.2:4173") },
-            singleLine = true,
-            shape = MaterialTheme.shapes.medium,
-        )
-        Spacer(Modifier.height(10.dp))
-        Button(
-            onClick = { onSave(draft) },
-            enabled = draft.isNotBlank(),
-            shape = MaterialTheme.shapes.medium,
-        ) { Text("Save & reconnect") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(userName, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+            if (userRole.isNotBlank()) {
+                Spacer(Modifier.width(8.dp))
+                Chip(text = userRole)
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = onSignOut, shape = MaterialTheme.shapes.medium) { Text("Sign out") }
 
         Spacer(Modifier.height(24.dp))
-        Text(
-            "Direct LAN address only for now — Tailscale / relay discovery is future work " +
-                "(see docs/DECISIONS.md).",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        TextButton(onClick = { showAdvanced = !showAdvanced }) {
+            Text(if (showAdvanced) "Hide advanced" else "Advanced")
+        }
+        if (showAdvanced) {
+            SectionLabel("Server address")
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("http://192.168.1.2:4173") },
+                singleLine = true,
+                shape = MaterialTheme.shapes.medium,
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = { onSave(draft) },
+                enabled = draft.isNotBlank(),
+                shape = MaterialTheme.shapes.medium,
+            ) { Text("Save & reconnect") }
+        }
     }
 }
 

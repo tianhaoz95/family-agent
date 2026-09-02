@@ -1,7 +1,56 @@
-// agent-core always listens on localhost; the desktop shell spawns it as a
-// child process (see src-tauri/src/main.rs). No tailnet/relay wiring yet —
-// see docs/DECISIONS.md.
+// agent-core listens on the same machine; the desktop shell spawns it as a
+// child process (see src-tauri/src/main.rs). Multi-user now: every request
+// carries a bearer token from the logged-in family member, and a 401 drops
+// the UI back to the login screen.
 const BASE_URL = "http://127.0.0.1:4173";
+
+// ---- session token ----
+// localStorage is per-origin and survives restarts. Guarded because the test
+// env (vitest "node") has no localStorage.
+const TOKEN_KEY = "familyAgent.token";
+let memoryToken: string | null = null;
+
+export function getToken(): string | null {
+  if (memoryToken) return memoryToken;
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+export function setToken(token: string): void {
+  memoryToken = token;
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    /* ignore — memoryToken still holds it for this session */
+  }
+}
+export function clearToken(): void {
+  memoryToken = null;
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Fired when the server rejects our token — main.ts listens and shows login. */
+export const SIGNED_OUT_EVENT = "family-agent:signed-out";
+function emitSignedOut() {
+  try {
+    window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+  } catch {
+    /* no window (tests) */
+  }
+}
+
+export interface User {
+  id: string;
+  username: string;
+  displayName: string;
+  role: "admin" | "member";
+}
 
 export interface Task {
   id: string;
@@ -46,21 +95,35 @@ export interface Tool {
 export interface Health {
   ok: boolean;
   model: string;
-  inboxDir: string;
+  serverName: string;
+  needsSetup: boolean;
   toolsPort: number;
   toolsEnabled: "full" | "static-only" | "off";
 }
 
+export interface AuthStatus {
+  needsSetup: boolean;
+  serverName: string;
+}
+
+function headersFor(hasBody: boolean): Record<string, string> | undefined {
+  const h: Record<string, string> = {};
+  if (hasBody) h["Content-Type"] = "application/json";
+  const token = getToken();
+  if (token) h["Authorization"] = `Bearer ${token}`;
+  return Object.keys(h).length ? h : undefined;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  // Only send Content-Type: application/json when there's actually a JSON body.
-  // Fastify rejects a bodyless request that still declares a JSON content-type
-  // with 400 "Body cannot be empty" — which is every DELETE and the bodyless
-  // retry POST.
-  const headers = init?.body != null ? { "Content-Type": "application/json" } : undefined;
+  const headers = { ...headersFor(init?.body != null), ...(init?.headers as Record<string, string> | undefined) };
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
-    headers,
+    ...(Object.keys(headers).length ? { headers } : {}),
   });
+  if (res.status === 401 && !path.startsWith("/auth/")) {
+    clearToken();
+    emitSignedOut();
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `${res.status} ${res.statusText}`);
@@ -72,10 +135,11 @@ export interface Settings {
   inboxDir: string;
   model: string;
   ollamaBaseUrl: string;
-  /** Ollama vision model used for OCR; "" means the built-in engine. */
   ocrModel: string;
-  /** Fields pinned by an env var — read-only in the UI, and PUT /settings rejects changing them. */
-  envLocked: { model: boolean; ollamaBaseUrl: boolean; inboxDir: boolean; ocrModel: boolean };
+  serverName: string;
+  isAdmin: boolean;
+  /** Fields pinned by an env var — read-only in the UI. */
+  envLocked: { model: boolean; ollamaBaseUrl: boolean; inboxDir: boolean; ocrModel: boolean; serverName: boolean };
 }
 
 export interface SettingsPatch {
@@ -83,15 +147,25 @@ export interface SettingsPatch {
   model?: string;
   ollamaBaseUrl?: string;
   ocrModel?: string;
+  serverName?: string;
 }
 
 // Separate from request() because a file upload must NOT set
-// Content-Type: application/json — the browser needs to set
-// multipart/form-data with its own boundary when given a FormData body.
+// Content-Type: application/json — the browser sets multipart/form-data with
+// its own boundary. Still needs the bearer token.
 async function upload<T>(path: string, file: File): Promise<T> {
   const formData = new FormData();
   formData.append("file", file, file.name);
-  const res = await fetch(`${BASE_URL}${path}`, { method: "POST", body: formData });
+  const token = getToken();
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    body: formData,
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (res.status === 401) {
+    clearToken();
+    emitSignedOut();
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `${res.status} ${res.statusText}`);
@@ -106,6 +180,27 @@ export function toolUrl(toolsPort: number, path: string): string {
 
 export const api = {
   health: () => request<Health>("/health"),
+
+  // ---- auth ----
+  authStatus: () => request<AuthStatus>("/auth/status"),
+  bootstrap: (body: { serverName?: string; username: string; displayName: string; password: string }) =>
+    request<{ token: string; user: User }>("/auth/bootstrap", { method: "POST", body: JSON.stringify(body) }),
+  login: (username: string, password: string) =>
+    request<{ token: string; user: User }>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password, deviceLabel: "desktop" }),
+    }),
+  logout: () => request<{ ok: true }>("/auth/logout", { method: "POST" }),
+  me: () => request<{ user: User }>("/auth/me"),
+
+  // ---- users (admin) ----
+  listUsers: () => request<{ users: User[] }>("/users"),
+  createUser: (body: { username: string; displayName: string; password: string; role: "admin" | "member" }) =>
+    request<{ user: User }>("/users", { method: "POST", body: JSON.stringify(body) }),
+  updateUser: (id: string, patch: { displayName?: string; password?: string; role?: "admin" | "member" }) =>
+    request<{ user: User }>(`/users/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteUser: (id: string) => request<{ deleted: true }>(`/users/${id}`, { method: "DELETE" }),
+
   getSettings: () => request<Settings>("/settings"),
   updateSettings: (patch: SettingsPatch) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(patch) }),

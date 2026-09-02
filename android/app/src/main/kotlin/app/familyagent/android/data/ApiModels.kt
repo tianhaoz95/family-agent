@@ -45,10 +45,36 @@ data class ActivityEntry(
 data class HealthResponse(
     val ok: Boolean,
     val model: String,
-    val ollamaBaseUrl: String,
+    val ollamaBaseUrl: String = "",
+    val serverName: String = "Family Agent",
+    val needsSetup: Boolean = false,
     val toolsPort: Int = 4174,
     val toolsEnabled: String = "off",
 )
+
+@Serializable
+data class User(
+    val id: String,
+    val username: String,
+    val displayName: String,
+    val role: String,
+)
+
+@Serializable
+data class AuthStatusResponse(val needsSetup: Boolean, val serverName: String = "Family Agent")
+
+@Serializable
+data class LoginRequest(
+    val username: String,
+    val password: String,
+    val deviceLabel: String? = null,
+)
+
+@Serializable
+data class LoginResponse(val token: String, val user: User)
+
+@Serializable
+data class MeResponse(val user: User)
 
 @Serializable
 data class Tool(

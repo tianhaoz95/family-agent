@@ -1,13 +1,16 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { unlinkSync } from "node:fs";
-import { Store } from "../src/db.js";
+import { Store, type ScopedStore, LEGACY_USER_ID } from "../src/db.js";
 
-describe("Store", () => {
-  let store: Store;
+describe("Store (scoped to one user)", () => {
+  let raw: Store;
+  let store: ScopedStore;
 
   beforeEach(() => {
-    store = new Store(":memory:");
+    raw = new Store(":memory:");
+    const user = raw.createUser({ username: "owner", displayName: "Owner", password: "sekret123", role: "admin" });
+    store = raw.scoped(user.id);
   });
 
   it("creates and lists tasks", () => {
@@ -61,75 +64,12 @@ describe("Store", () => {
     expect(activity[0].action).toBe("task.created");
   });
 
-  it("upgrades a pre-source_path database instead of failing every document insert", () => {
-    // A database as created by a build before the source_path column existed.
-    const path = `/tmp/family-agent-legacy-${Date.now()}.db`;
-    const legacy = new DatabaseSync(path);
-    legacy.exec(`
-      CREATE TABLE documents (
-        id TEXT PRIMARY KEY,
-        filename TEXT NOT NULL,
-        raw_text TEXT NOT NULL,
-        extracted TEXT,
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE activity (
-        id TEXT PRIMARY KEY, ts TEXT NOT NULL, actor TEXT NOT NULL,
-        action TEXT NOT NULL, detail TEXT NOT NULL
-      );
-    `);
-    legacy.close();
-
-    const legacyDoc = { id: "OLD12345", filename: "old.pdf" };
-    const reopen = new DatabaseSync(path);
-    reopen.prepare(
-      "INSERT INTO documents (id, filename, raw_text, extracted, created_at) VALUES (?, ?, ?, ?, ?)",
-    ).run(legacyDoc.id, legacyDoc.filename, "text", null, new Date().toISOString());
-    reopen.close();
-
-    const store = new Store(path);
-    const doc = store.createDocument({ filename: "bill.pdf", rawText: "Due Oct 3" });
-    expect(doc.sourcePath).toBeNull();
-    expect(doc.extractionStatus).toBe("pending");
-    expect(store.getDocument(doc.id)?.filename).toBe("bill.pdf");
-    // A pre-existing row with no fields is treated as a failed extraction,
-    // not left as an eternal "Extracting…".
-    expect(store.getDocument(legacyDoc.id)?.extractionStatus).toBe("failed");
-    store.close();
-    unlinkSync(path);
-  });
-
   it("deletes a document and logs it", () => {
     const doc = store.createDocument({ filename: "junk.txt", rawText: "x" });
     expect(store.deleteDocument(doc.id)?.id).toBe(doc.id);
     expect(store.getDocument(doc.id)).toBeUndefined();
     expect(store.deleteDocument(doc.id)).toBeUndefined();
     expect(store.listActivity().some((a) => a.action === "document.deleted")).toBe(true);
-  });
-
-  it("fails stale pending extractions on startup", () => {
-    const path = `/tmp/family-agent-pending-${Date.now()}.db`;
-    const s1 = new Store(path);
-    s1.createDocument({ filename: "a.txt", rawText: "x" }); // left pending
-    s1.close();
-
-    const s2 = new Store(path);
-    // Reopening does not itself reset (that's the server's job) — call it.
-    expect(s2.failStalePendingExtractions()).toBe(1);
-    expect(s2.listDocuments()[0].extractionStatus).toBe("failed");
-    s2.close();
-    unlinkSync(path);
-  });
-
-  it("persists to disk and reopens", () => {
-    const path = `/tmp/family-agent-test-${Date.now()}.db`;
-    const s1 = new Store(path);
-    s1.createTask({ title: "Persisted task" });
-    s1.close();
-
-    const s2 = new Store(path);
-    expect(s2.listTasks().map((t) => t.title)).toContain("Persisted task");
-    s2.close();
   });
 
   it("tracks builder tools through their lifecycle", () => {
@@ -145,15 +85,145 @@ describe("Store", () => {
     expect(store.getTool(tool.id)).toBeUndefined();
     expect(store.listActivity().some((a) => a.action === "tool.deleted")).toBe(true);
   });
+});
 
-  it("fails builds left mid-flight on startup", () => {
+describe("Store — users, sessions, isolation", () => {
+  let raw: Store;
+
+  beforeEach(() => {
+    raw = new Store(":memory:");
+  });
+
+  it("creates users, looks them up, hashes the password", () => {
+    const u = raw.createUser({ username: "Dad", displayName: "Dad", password: "hunter22" });
+    expect(u.role).toBe("member");
+    expect(raw.getUserByUsername("dad")?.id).toBe(u.id); // case-insensitive
+    expect(raw.getPasswordHash(u.id)).toMatch(/^scrypt\$/);
+    expect(raw.countUsers()).toBe(1);
+  });
+
+  it("resolves a session token and slides its expiry; rejects a bad one", () => {
+    const u = raw.createUser({ username: "kid", displayName: "Kid", password: "abcdef" });
+    const { token } = raw.createSession(u.id);
+    expect(raw.resolveSession(token)?.id).toBe(u.id);
+    expect(raw.resolveSession("garbage")).toBeUndefined();
+    raw.deleteSession(token);
+    expect(raw.resolveSession(token)).toBeUndefined();
+  });
+
+  it("keeps each user's tasks/documents/activity separate", () => {
+    const a = raw.createUser({ username: "a", displayName: "A", password: "aaaaaa" });
+    const b = raw.createUser({ username: "b", displayName: "B", password: "bbbbbb" });
+    raw.scoped(a.id).createTask({ title: "A's task" });
+    raw.scoped(b.id).createTask({ title: "B's task" });
+
+    expect(raw.scoped(a.id).listTasks().map((t) => t.title)).toEqual(["A's task"]);
+    expect(raw.scoped(b.id).listTasks().map((t) => t.title)).toEqual(["B's task"]);
+    // A can't see or mutate B's task even with the id.
+    const bTaskId = raw.scoped(b.id).listTasks()[0].id;
+    expect(raw.scoped(a.id).getTask(bTaskId)).toBeUndefined();
+    expect(raw.scoped(a.id).updateTaskStatus(bTaskId, "done")).toBeUndefined();
+    expect(raw.scoped(a.id).listActivity().every((e) => !e.detail.includes("B's task"))).toBe(true);
+  });
+
+  it("deleting a user removes all of their data", () => {
+    const a = raw.createUser({ username: "a", displayName: "A", password: "aaaaaa" });
+    raw.scoped(a.id).createTask({ title: "gone soon" });
+    raw.scoped(a.id).createDocument({ filename: "x.txt", rawText: "x" });
+    raw.deleteUser(a.id);
+    expect(raw.getUser(a.id)).toBeUndefined();
+    // A fresh scoped view over the same id sees nothing.
+    expect(raw.scoped(a.id).listTasks()).toHaveLength(0);
+    expect(raw.scoped(a.id).listDocuments()).toHaveLength(0);
+  });
+
+  it("guards the last admin count", () => {
+    raw.createUser({ username: "admin1", displayName: "A1", password: "aaaaaa", role: "admin" });
+    expect(raw.countAdmins()).toBe(1);
+    raw.createUser({ username: "admin2", displayName: "A2", password: "bbbbbb", role: "admin" });
+    expect(raw.countAdmins()).toBe(2);
+  });
+});
+
+describe("Store — migration from a single-user database", () => {
+  it("adds user_id, backfills to the legacy sentinel, and reassigns on setup", () => {
+    const path = `/tmp/family-agent-legacy-${Date.now()}.db`;
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, notes TEXT, due_date TEXT,
+        status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE documents (
+        id TEXT PRIMARY KEY, filename TEXT NOT NULL, raw_text TEXT NOT NULL,
+        extracted TEXT, created_at TEXT NOT NULL
+      );
+      CREATE TABLE activity (
+        id TEXT PRIMARY KEY, ts TEXT NOT NULL, actor TEXT NOT NULL,
+        action TEXT NOT NULL, detail TEXT NOT NULL
+      );
+      CREATE TABLE tools (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, prompt TEXT NOT NULL,
+        kind TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'building', error TEXT, created_at TEXT NOT NULL
+      );
+    `);
+    const now = new Date().toISOString();
+    legacy.prepare("INSERT INTO tasks (id, title, status, created_at, updated_at) VALUES (?, ?, 'open', ?, ?)").run("OLDTASK1", "legacy task", now, now);
+    legacy.prepare("INSERT INTO documents (id, filename, raw_text, extracted, created_at) VALUES (?, ?, ?, ?, ?)").run("OLDDOC01", "old.pdf", "text", null, now);
+    legacy.close();
+
+    const store = new Store(path);
+    // Before setup, the legacy row is owned by the sentinel.
+    expect(store.scoped(LEGACY_USER_ID).listTasks()).toHaveLength(1);
+
+    const admin = store.createUser({ username: "owner", displayName: "Owner", password: "sekret123", role: "admin" });
+    const moved = store.reassignLegacyData(admin.id);
+    expect(moved).toBeGreaterThanOrEqual(2);
+    expect(store.scoped(admin.id).listTasks().map((t) => t.title)).toContain("legacy task");
+    expect(store.scoped(admin.id).getDocument("OLDDOC01")?.extractionStatus).toBe("failed");
+    expect(store.scoped(LEGACY_USER_ID).listTasks()).toHaveLength(0);
+
+    store.close();
+    unlinkSync(path);
+  });
+
+  it("fails stale pending extractions on startup (global)", () => {
+    const path = `/tmp/family-agent-pending-${Date.now()}.db`;
+    const s1 = new Store(path);
+    const u = s1.createUser({ username: "u", displayName: "U", password: "aaaaaa" });
+    s1.scoped(u.id).createDocument({ filename: "a.txt", rawText: "x" }); // left pending
+    s1.close();
+
+    const s2 = new Store(path);
+    expect(s2.failStalePendingExtractions()).toBe(1);
+    expect(s2.scoped(u.id).listDocuments()[0].extractionStatus).toBe("failed");
+    s2.close();
+    unlinkSync(path);
+  });
+
+  it("fails builds left mid-flight on startup (global)", () => {
     const path = `/tmp/family-agent-tools-${Date.now()}.db`;
     const s1 = new Store(path);
-    s1.createTool({ name: "x", description: "x", prompt: "x", kind: "static" });
+    const u = s1.createUser({ username: "u", displayName: "U", password: "aaaaaa" });
+    s1.scoped(u.id).createTool({ name: "x", description: "x", prompt: "x", kind: "static" });
     s1.close();
     const s2 = new Store(path);
     expect(s2.failStaleBuildingTools()).toBe(1);
-    expect(s2.listTools()[0]).toMatchObject({ status: "failed", error: "interrupted" });
+    expect(s2.scoped(u.id).listTools()[0]).toMatchObject({ status: "failed", error: "interrupted" });
+    s2.close();
+    unlinkSync(path);
+  });
+
+  it("persists to disk and reopens", () => {
+    const path = `/tmp/family-agent-test-${Date.now()}.db`;
+    const s1 = new Store(path);
+    const u = s1.createUser({ username: "u", displayName: "U", password: "aaaaaa" });
+    s1.scoped(u.id).createTask({ title: "Persisted task" });
+    s1.close();
+
+    const s2 = new Store(path);
+    const again = s2.getUserByUsername("u")!;
+    expect(s2.scoped(again.id).listTasks().map((t) => t.title)).toContain("Persisted task");
     s2.close();
     unlinkSync(path);
   });

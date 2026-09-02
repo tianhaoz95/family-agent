@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
-import { Store } from "../src/db.js";
+import { Store, type ScopedStore } from "../src/db.js";
 import { config } from "../src/config.js";
+import { seedUser, authInject } from "./helpers.js";
 
 // Real end-to-end tests against the local Ollama model (gemma4:e2b by
 // default). These are slow — gemma4:e2b is a larger multimodal model and a
@@ -26,17 +27,21 @@ const maybe = ready ? describe : describe.skip;
 
 maybe("family agent (live model: " + config.model + ")", () => {
   let app: FastifyInstance;
-  let store: Store;
+  let store: ScopedStore;
+  let inject: ReturnType<typeof authInject>;
 
   beforeAll(() => {
-    store = new Store(":memory:");
-    app = buildServer(store);
+    const raw = new Store(":memory:");
+    app = buildServer(raw);
+    const seeded = seedUser(raw);
+    store = seeded.scoped;
+    inject = authInject(app, seeded.token);
   });
 
   it(
     "creates a task from a natural-language request via /chat",
     async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "POST",
         url: "/chat",
         payload: { message: "Please add a task to renew the car registration by 2026-11-01." },
@@ -57,7 +62,7 @@ maybe("family agent (live model: " + config.model + ")", () => {
       // refuse ("I cannot help you with buying stamps") because the
       // planner's delegation description dropped the "create a task"
       // framing, leaving task-agent a bare action phrase it read literally.
-      const res = await app.inject({
+      const res = await inject({
         method: "POST",
         url: "/chat",
         payload: { message: "Add a task to buy stamps" },
@@ -76,7 +81,7 @@ maybe("family agent (live model: " + config.model + ")", () => {
   it(
     "extracts fields from an ingested document",
     async () => {
-      const ingest = await app.inject({
+      const ingest = await inject({
         method: "POST",
         url: "/documents/ingest",
         payload: {
@@ -108,7 +113,7 @@ maybe("family agent (live model: " + config.model + ")", () => {
     async () => {
       // Regression test: this exact prompt returned "I found no documents"
       // against a real ingested document before list_documents existed.
-      const ingest = await app.inject({
+      const ingest = await inject({
         method: "POST",
         url: "/documents/ingest",
         payload: { filename: "insurance-note.txt", text: "Auto insurance renews 2026-12-01, premium $410." },
@@ -119,7 +124,7 @@ maybe("family agent (live model: " + config.model + ")", () => {
         await new Promise((r) => setTimeout(r, 3000));
       }
 
-      const res = await app.inject({
+      const res = await inject({
         method: "POST",
         url: "/chat",
         payload: { message: "What documents do I have?" },

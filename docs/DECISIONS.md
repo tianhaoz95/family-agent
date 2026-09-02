@@ -350,3 +350,79 @@ model needed) rather than only relying on the live-model test happening to
 reproduce this specific garbled shape again — that test only ever
 exercises whatever a model happens to do on any given run, which is
 exactly what let this slip through once already.
+
+## Multi-user: local accounts + bearer-token sessions
+
+The master node became a real multi-user server. The alternatives considered
+and rejected:
+
+- **OS-account integration / PAM.** Ties the app to how one machine is set up,
+  doesn't survive the account being reached from a phone, and is far more code
+  than the problem needs.
+- **No auth, "trust the LAN".** The whole point of the change is that a kid's
+  tasks and a parent's medical documents are *separate*. "Same LAN" is not that
+  boundary.
+- **Passwordless / magic-link / device-pairing.** Nicer onboarding, but needs
+  either an email path (there is no cloud here) or a pairing UI on the desktop
+  every time; deferred.
+
+What shipped: username + password, hashed with `scrypt` (`auth.ts`,
+`N=2^15`, `maxmem` raised above Node's 32 MB default or `scryptSync` throws).
+Login returns an opaque random token; only its `sha256` is stored in the
+`sessions` table, so a stolen `family-agent.db` can't be replayed. 90-day
+sliding expiry. A `preHandler` hook in `server.ts` resolves the token to a
+user and attaches `req.userStore` (see below); `/health` + `/auth/*` are the
+only public routes. Roles are just `admin` | `member` — admins manage accounts
+and machine settings, nothing finer-grained until sharing exists.
+
+## Data isolation via ScopedStore, not a per-user database
+
+Each account's rows live in the same SQLite file with a `user_id` column, and
+**every** task/document/activity/tool query goes through `ScopedStore`
+(`store.scoped(userId)`), which is the single place that adds `WHERE user_id =
+?`. Chosen over one-DB-file-per-user because: the agent tools, extraction, and
+inbox watcher already took a `Store`-shaped object, so `ScopedStore` with
+identical method names was a near-drop-in; cross-account features (sharing,
+later) need one connection anyway; and a forgotten scope shows up as "no rows"
+in that user's own view rather than a data leak. A migrated single-user DB
+gets `user_id` via `ALTER TABLE ... ADD COLUMN ... DEFAULT '_legacy_'`; the
+first admin created during setup calls `reassignLegacyData()` to claim it.
+
+## One planner + one inbox watcher per user
+
+`buildServer` builds a deepagents planner per user id (lazily, cached), each
+bound to that user's `ScopedStore`, because a shared planner with a shared
+scratch state could mix accounts mid-conversation. `main()` runs one
+`chokidar` watcher per account on `<inboxBase>/<userId>` (or the account's
+`users.inbox_dir` override), added/removed as accounts are created/deleted via
+`server.ts` hooks. The global `config.inboxDir` and its `settings.json` key are
+gone; `settings.json` now holds only machine-wide values (`model`,
+`ollamaBaseUrl`, `ocrModel`, `serverName`).
+
+## Binding 0.0.0.0, and mDNS discovery
+
+`agent-core` (and the tools server) now bind `0.0.0.0`, not `127.0.0.1`: the
+Android app has to reach it from another device, and with bearer-token auth in
+front of every route that exposure is the intended design, not a regression.
+Discovery is `bonjour-service` (pure-JS mDNS, no native build — consistent
+with the `node:sqlite` choice) advertising `_familyagent._tcp`; Android uses
+the framework `NsdManager`. `FAMILY_AGENT_MDNS=0` turns advertising off.
+
+**mDNS alone is not enough on the client side.** The Android emulator does
+not forward multicast to the host LAN, so `NsdManager` finds nothing there —
+and plenty of real home/office Wi-Fi blocks client-to-client mDNS too. So
+`ServerDiscovery` runs an **active address probe** alongside mDNS: it sweeps
+this device's own /24 (from `NetworkInterface`, no extra permission) plus
+`10.0.2.2` (the emulator's alias for the host), hitting `GET /health` on port
+4173, and lists anything that answers with `{ ok: true }`. 40-way concurrency,
+~600 ms connect timeout, so a dark subnet resolves in a few seconds. On the
+emulator the `10.0.2.2` probe is what actually finds the desktop; on a real
+phone the /24 sweep covers mDNS-blocked networks. The manual-address field is
+still there as a last resort, pre-filled with `10.0.2.2:4173` when running on
+an emulator (`ServerDiscovery.isEmulator`).
+
+The tools server (port 4174) is still unauthenticated — it serves a generated
+tool's static assets by globally-unique 8-char id, and the id is the
+capability. On a family LAN that is an accepted (small) downgrade from the
+previous loopback-only bind; revisit if the tool sandbox ever holds anything
+sensitive.

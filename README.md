@@ -4,6 +4,13 @@ A local-first agentic app for organizing a family's documents, schedules, and
 misc to-dos. Everything — the model, the storage, the document processing —
 runs on hardware you own. Nothing is sent to a cloud API.
 
+It's **multi-user**: the home laptop runs the master node, an admin does a
+one-time setup, and each family member gets a local account with their own
+isolated tasks, documents, history, and tools. Clients sign in with a
+username + password; the Android app finds the master node on the LAN
+automatically (mDNS). Sharing things *between* accounts is the next step, not
+built yet.
+
 Three apps share one backend:
 
 - **agent-core** — a Node/TypeScript service that runs a local LLM-backed
@@ -55,17 +62,24 @@ filesystem. It owns:
   directly to the model rather than routed through the planner — a
   deliberate choice after a small model garbled a document id mid-transcription
   when that path went through subagent delegation instead.
-- **A live-editable setting**: the watched folder's location
-  (`GET`/`PUT /settings`), changeable from the desktop Settings page without
-  restarting the app. Model and Ollama URL are env-var-only — swapping a
-  running model client mid-request isn't something to do casually.
+- **Local accounts + sessions** (`auth.ts`, `users`/`sessions` tables) —
+  scrypt-hashed passwords, opaque bearer tokens (only the sha256 is stored).
+  A `preHandler` hook attaches the caller's `ScopedStore`; every
+  task/document/activity/tool query is scoped by `user_id`. One deepagents
+  planner and one watched folder per account. Machine settings (model, Ollama
+  URL, OCR, home name) are admin-only; the watched folder is per-user and
+  live-editable. `GET`/`PUT /settings` and `GET /health` still work the same
+  otherwise.
+- **LAN discovery** — the node advertises itself over mDNS
+  (`_familyagent._tcp`, via `bonjour-service`); binds `0.0.0.0` so phones can
+  reach it. `FAMILY_AGENT_MDNS=0` turns advertising off.
 - **An activity log** that every mutating action writes to itself, so it
   can't drift out of sync with what actually happened.
 
 **desktop** and **android** are both thin HTTP clients over the same API —
-Chat, Tasks, Documents, Activity, and Settings (desktop only; the Android
-equivalent is pointing the app at a server address, since it's the one
-without a local agent-core of its own to configure).
+Chat, Tasks, Documents, Activity, Settings, and (desktop, admin only) a
+Family screen for managing accounts. First launch shows setup (desktop) or
+server-discovery + login (Android).
 
 ## Prerequisites
 
@@ -118,10 +132,16 @@ export ANDROID_HOME=$(pwd)/../.toolchains/android-sdk
 ./gradlew installDebug   # needs a device/emulator already connected (adb devices)
 ```
 
-Once the Android app is running, open **Settings** and point it at
-agent-core's address — `http://10.0.2.2:4173` from an emulator (the
-emulator's alias for the host machine), or `http://<lan-ip>:4173` from a
-real phone on the same network.
+**First launch:**
+
+- **desktop** shows a setup screen (create the owner/admin account, name the
+  home), then the app. Add family members from the **Family** screen.
+- **android** scans the LAN for the master node and lists it; tap it and sign
+  in. If discovery doesn't find it (some networks block mDNS), use "Enter an
+  address manually" — `http://10.0.2.2:4173` from an emulator, or
+  `http://<lan-ip>:4173` from a real phone.
+- A dev/test server can be bootstrapped directly:
+  `curl -XPOST localhost:4173/auth/bootstrap -H 'content-type: application/json' -d '{"username":"me","displayName":"Me","password":"secret123"}'`.
 
 ## Testing
 

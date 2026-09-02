@@ -2,7 +2,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { ChatOllama } from "@langchain/ollama";
-import type { Store } from "../db.js";
+import type { ScopedStore } from "../db.js";
 
 // Deliberately bypasses the deepagents planner/subagent graph for this one
 // step. The planner path (agents/index.ts) is for conversational requests;
@@ -70,7 +70,7 @@ async function attemptExtraction(
 // rates) without masking a real, repeatable failure.
 export async function extractDocument(
   model: ChatOllama,
-  store: Store,
+  store: ScopedStore,
   doc: { id: string; filename: string; rawText: string }
 ): Promise<void> {
   for (let attempt = 1; attempt <= 2; attempt++) {
