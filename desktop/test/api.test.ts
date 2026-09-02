@@ -164,6 +164,13 @@ describe("api client", () => {
     });
   });
 
+  it("chat() forwards an AbortSignal so the caller can cancel it", async () => {
+    const fetchMock = mockFetchOnce(200, { reply: "hi" });
+    const controller = new AbortController();
+    await api.chat("hello", [], controller.signal);
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(controller.signal);
+  });
+
   it("transcribe() POSTs the clip as multipart to /transcribe without a JSON content-type", async () => {
     setToken("tok-voice");
     const fetchMock = mockFetchOnce(200, { text: "buy milk tomorrow" });

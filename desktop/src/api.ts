@@ -243,10 +243,11 @@ export const api = {
   updateSettings: (patch: SettingsPatch) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(patch) }),
   listOllamaModels: () => request<{ models: string[]; reachable: boolean }>("/ollama/models"),
-  chat: (message: string, images: string[] = []) =>
+  chat: (message: string, images: string[] = [], signal?: AbortSignal) =>
     request<{ reply: string }>("/chat", {
       method: "POST",
       body: JSON.stringify(images.length ? { message, images } : { message }),
+      signal,
     }),
   /** Transcribe a recorded voice clip (16 kHz mono WAV) for the chat composer. */
   transcribe: (wav: Blob) => upload<{ text: string }>("/transcribe", wav, "audio", "voice.wav"),

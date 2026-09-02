@@ -17,6 +17,17 @@ import {
   type User,
 } from "./api.js";
 import { startRecording, type Recording } from "./audio.js";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
+
+// The planner model replies in Markdown; render it. Assistant text only —
+// user and system bubbles stay plain text.
+marked.setOptions({ breaks: true, gfm: true });
+function renderMarkdown(text: string): string {
+  return DOMPurify.sanitize(marked.parse(text, { async: false }) as string, {
+    ADD_ATTR: ["target"],
+  });
+}
 
 // ---------- view switching ----------
 const navButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".nav-item"));
@@ -83,6 +94,15 @@ const chatImageInput = document.getElementById("chat-image-input") as HTMLInputE
 const chatAttachBtn = document.getElementById("chat-attach-btn") as HTMLButtonElement;
 const chatMicBtn = document.getElementById("chat-mic-btn") as HTMLButtonElement;
 const chatAttachmentsEl = document.getElementById("chat-attachments")!;
+const chatNewBtn = document.getElementById("chat-new-btn") as HTMLButtonElement;
+const chatSendBtn = document.getElementById("chat-send-btn") as HTMLButtonElement;
+const chatStopBtn = document.getElementById("chat-stop-btn") as HTMLButtonElement;
+
+// The empty-state block, kept so "New chat" can put it back after it's removed.
+const chatEmptyEl = document.getElementById("chat-empty")!;
+
+// Set while a reply is in flight so the Stop button can cancel it.
+let chatAbort: AbortController | null = null;
 
 // Images staged for the next message, as JPEG data URIs.
 let attachedImages: string[] = [];
@@ -91,18 +111,37 @@ const MAX_IMAGES = 4;
 // re-encode as JPEG before sending — a 4000px photo becomes ~150 KB.
 const MAX_IMAGE_EDGE = 1536;
 
+// Links inside a rendered reply must not navigate the Tauri webview away from
+// the app — open them in the user's browser instead.
+chatLog.addEventListener("click", (e) => {
+  const link = (e.target as HTMLElement).closest("a");
+  if (link?.href) {
+    e.preventDefault();
+    window.open(link.href, "_blank", "noopener");
+  }
+});
+
+function hideChatEmpty() {
+  if (chatEmptyEl.isConnected) chatEmptyEl.remove();
+}
+
 function appendBubble(role: "user" | "assistant" | "system", text: string) {
-  document.getElementById("chat-empty")?.remove();
+  hideChatEmpty();
   const el = document.createElement("div");
   el.className = `bubble bubble-${role}`;
-  el.textContent = text;
+  if (role === "assistant") {
+    el.classList.add("bubble-markdown");
+    el.innerHTML = renderMarkdown(text);
+  } else {
+    el.textContent = text;
+  }
   chatLog.appendChild(el);
   chatLog.scrollTop = chatLog.scrollHeight;
   return el;
 }
 
 function appendUserMessage(text: string, images: string[]) {
-  document.getElementById("chat-empty")?.remove();
+  hideChatEmpty();
   const el = document.createElement("div");
   el.className = "bubble bubble-user";
   if (images.length) {
@@ -283,29 +322,77 @@ function emptyState(kind: keyof typeof EMPTY_ICONS, text: string) {
   return `<li class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${EMPTY_ICONS[kind]}</svg><span>${text}</span></li>`;
 }
 
+// Grow the composer with its content, up to the CSS max-height.
+function autoGrowChatInput() {
+  chatInput.style.height = "auto";
+  chatInput.style.height = `${chatInput.scrollHeight}px`;
+}
+chatInput.addEventListener("input", autoGrowChatInput);
+
+// Enter sends; Shift+Enter (or Enter mid-composition, e.g. an IME) inserts a
+// newline. Matches every other chat app.
+chatInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    chatForm.requestSubmit();
+  }
+});
+
+// Toggle the composer between "ready to send" and "reply in flight" (Stop).
+function setChatPending(pending: boolean) {
+  chatSendBtn.hidden = pending;
+  chatStopBtn.hidden = !pending;
+  chatSendBtn.disabled = pending;
+}
+
+// Clear the transcript and cancel anything in flight — a fresh conversation.
+// The agent keeps no server-side history, so this is purely the visible thread.
+function startNewChat() {
+  chatAbort?.abort();
+  chatAbort = null;
+  chatLog.innerHTML = "";
+  chatLog.appendChild(chatEmptyEl);
+  attachedImages = [];
+  renderAttachments();
+  chatInput.value = "";
+  autoGrowChatInput();
+  setChatPending(false);
+  chatInput.focus();
+}
+chatNewBtn.addEventListener("click", startNewChat);
+chatStopBtn.addEventListener("click", () => chatAbort?.abort());
+
 chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (chatAbort) return; // a reply is already in flight
   const typed = chatInput.value.trim();
   const images = attachedImages;
   if (!typed && !images.length) return;
   // The model needs a prompt; supply a default when the user only attached an image.
   const message = typed || "What's in this image?";
   chatInput.value = "";
+  autoGrowChatInput();
   attachedImages = [];
   renderAttachments();
   appendUserMessage(typed, images);
   const pending = appendTypingIndicator();
-  const submitBtn = chatForm.querySelector('button[type="submit"]') as HTMLButtonElement;
-  submitBtn.disabled = true;
+  chatAbort = new AbortController();
+  setChatPending(true);
   try {
-    const { reply } = await api.chat(message, images);
+    const { reply } = await api.chat(message, images, chatAbort.signal);
     pending.remove();
     appendBubble("assistant", reply);
   } catch (err) {
     pending.remove();
-    appendBubble("system", `Error: ${err instanceof Error ? err.message : String(err)}`);
+    if (err instanceof DOMException && err.name === "AbortError") {
+      appendBubble("system", "Stopped.");
+    } else {
+      appendBubble("system", `Error: ${err instanceof Error ? err.message : String(err)}`);
+    }
   } finally {
-    submitBtn.disabled = false;
+    chatAbort = null;
+    setChatPending(false);
+    chatInput.focus();
   }
 });
 
@@ -1276,32 +1363,87 @@ const userPasswordInput = document.getElementById("user-password") as HTMLInputE
 const userRoleSelect = document.getElementById("user-role") as HTMLSelectElement;
 const userStatusEl = document.getElementById("user-status")!;
 const userList = document.getElementById("user-list")!;
+const userCountEl = document.getElementById("user-count")!;
+
+// Up-to-two-letter initials for the avatar.
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+// Deterministic avatar colour per account — pale tint + saturated ink, in the
+// spirit of the DESIGN.md accent cast and the .category-chip pills.
+const AVATAR_TINTS: Array<{ bg: string; fg: string }> = [
+  { bg: "#ffefd0", fg: "#8a5a00" }, // marigold
+  { bg: "#fde2de", fg: "#b5301f" }, // coral
+  { bg: "#e2f0fd", fg: "#1667a8" }, // sky
+  { bg: "#fdeecb", fg: "#8a6100" }, // saffron
+  { bg: "#e5f0ea", fg: "#2f6b4c" }, // green
+  { bg: "#e9e6f7", fg: "#5b4bab" }, // iris
+];
+function avatarTint(seed: string): { bg: string; fg: string } {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return AVATAR_TINTS[h % AVATAR_TINTS.length];
+}
 
 function renderUsers(users: User[]) {
   userList.innerHTML = "";
+  userCountEl.textContent = users.length === 1 ? "1 account" : `${users.length} accounts`;
   for (const user of users) {
     const li = document.createElement("li");
     li.className = "user-row";
+    const isSelf = user.id === currentUser?.id;
 
+    const avatar = document.createElement("span");
+    avatar.className = "user-avatar";
+    const tint = avatarTint(user.username);
+    avatar.style.background = tint.bg;
+    avatar.style.color = tint.fg;
+    avatar.textContent = initials(user.displayName);
+
+    const info = document.createElement("div");
+    info.className = "user-info";
+    const nameRow = document.createElement("div");
+    nameRow.className = "user-name-row";
     const name = document.createElement("span");
     name.className = "user-name";
     name.textContent = user.displayName;
+    nameRow.appendChild(name);
+    if (isSelf) {
+      const you = document.createElement("span");
+      you.className = "user-you";
+      you.textContent = "You";
+      nameRow.appendChild(you);
+    }
+    const role = document.createElement("span");
+    role.className = `user-role-badge${user.role === "admin" ? " is-admin" : ""}`;
+    role.textContent = user.role === "admin" ? "Admin" : "Member";
+    nameRow.appendChild(role);
     const uname = document.createElement("span");
     uname.className = "user-username";
     uname.textContent = `@${user.username}`;
-    const role = document.createElement("span");
-    role.className = "category-chip";
-    role.textContent = user.role;
-    li.append(name, uname, role);
+    info.append(nameRow, uname);
 
-    if (user.id !== currentUser?.id) {
+    li.append(avatar, info);
+
+    if (!isSelf) {
+      const actions = document.createElement("div");
+      actions.className = "user-actions";
+
       const reset = document.createElement("button");
       reset.type = "button";
-      reset.className = "btn-ghost";
+      reset.className = "user-action";
       reset.textContent = "Reset password";
       reset.addEventListener("click", async () => {
         const pw = prompt(`New password for ${user.displayName} (6+ chars):`);
         if (!pw) return;
+        if (pw.length < 6) {
+          userStatusEl.textContent = "Password must be at least 6 characters.";
+          return;
+        }
         try {
           await api.updateUser(user.id, { password: pw });
           userStatusEl.textContent = `Reset ${user.displayName}'s password.`;
@@ -1312,20 +1454,21 @@ function renderUsers(users: User[]) {
 
       const del = document.createElement("button");
       del.type = "button";
-      del.className = "doc-delete";
-      del.title = `Remove ${user.displayName}`;
-      del.innerHTML =
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+      del.className = "user-action user-action-danger";
+      del.textContent = "Remove";
       del.addEventListener("click", async () => {
         if (!confirm(`Remove ${user.displayName}? Their tasks, documents, and history are deleted.`)) return;
         try {
           await api.deleteUser(user.id);
+          userStatusEl.textContent = `Removed ${user.displayName}.`;
           void refreshUsers();
         } catch (err) {
           userStatusEl.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
         }
       });
-      li.append(reset, del);
+
+      actions.append(reset, del);
+      li.appendChild(actions);
     }
     userList.appendChild(li);
   }

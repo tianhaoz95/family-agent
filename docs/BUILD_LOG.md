@@ -380,3 +380,52 @@ OR. Fast suite 130 pass / 1 skip; `dist/` rebuilt.
 
 **The user still needs to restart agent-core** (or the desktop app) to pick up
 any of this — their running process is the pre-search build.
+
+## Markdown rendering in chat (both clients)
+
+The planner model replies in Markdown (bullet lists, `**bold**`, code, the
+occasional table); both chat views were rendering it as plain text, so a list
+came out as `- foo\n- bar` on one line-wrapped blob.
+
+- **desktop:** `marked` + `dompurify` (bundled, no CDN — matches the local-first
+  rule). `appendBubble()` renders the **assistant** role only through
+  `renderMarkdown()` (sanitised HTML) and tags the bubble `.bubble-markdown`;
+  user/system bubbles stay `textContent`. `.bubble-markdown` drops the
+  plain-text `white-space: pre-wrap` and styles the block elements to
+  DESIGN.md tokens. A delegated click handler on `#chat-log` routes any
+  rendered `<a>` through `window.open(_, "_blank")` so a link can't navigate
+  the Tauri webview off the app.
+- **android:** `com.mikepenz:multiplatform-markdown-renderer-m3` (pure Compose,
+  themes off `MaterialTheme`). `ChatBubble` renders the assistant side with
+  `Markdown(...)`, user side stays `Text`.
+- Tests: desktop 21 pass, `assembleDebug` + `testDebugUnitTest` clean. `dist/`
+  rebuilt — the user must restart agent-core/desktop to pick it up.
+
+## Desktop chat controls + a nicer Family tab
+
+Three desktop-only UX fixes, no agent-core changes:
+
+- **New chat / Stop.** The chat header gained a "New chat" ghost button
+  (`startNewChat()` — clears the transcript, restores the empty state, drops
+  staged images, aborts anything in flight). While a reply is pending the Send
+  button swaps to a danger-tinted **Stop** that calls `chatAbort.abort()`;
+  `api.chat()` now takes an optional `AbortSignal` and the submit handler
+  turns an `AbortError` into a quiet "Stopped." system bubble. Note: abort is
+  client-side only — the planner turn keeps running on the server and its
+  reply is discarded (threading an `AbortSignal` through the deepagents
+  `invoke` is a much larger change; the chat is stateless server-side so
+  "New chat" is purely the visible thread).
+- **Enter to send.** `keydown` on the textarea: plain Enter calls
+  `chatForm.requestSubmit()`, Shift+Enter (and `isComposing`, for IMEs)
+  inserts a newline. Added `autoGrowChatInput()` so the composer grows with
+  its content up to the CSS max-height.
+- **Family tab.** Restructured `#view-family`: the add-account form is now a
+  card with a 2-col labelled `.field-grid` and a footer row (status + submit);
+  the members list gets deterministic initial-avatars (tint hashed from the
+  username, DESIGN.md accent cast), a "You" pill on the current user, an
+  admin/member role badge, monospace `@handle`, and hover-revealed
+  text-button actions (Reset password / Remove) instead of a stray ghost
+  button + X icon. `#view-family` scrolls like `#view-settings`.
+- Tests: `typecheck` clean, desktop 21 pass, `vite build` clean. `dist/`
+  not rebuilt here (Tauri `tauri:dev` builds the frontend itself); restart
+  the desktop app to pick it up.

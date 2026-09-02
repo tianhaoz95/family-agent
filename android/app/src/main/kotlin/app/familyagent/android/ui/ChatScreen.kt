@@ -36,6 +36,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import app.familyagent.android.ChatMessage
+import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownColor
+import com.mikepenz.markdown.m3.markdownTypography
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
@@ -319,11 +322,19 @@ private fun ChatBubble(msg: ChatMessage) {
                 }
             }
             if (msg.text.isNotBlank()) {
-                Text(
-                    msg.text,
-                    color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+                val textColor =
+                    if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                if (isUser) {
+                    // The user types plain text — no need to parse it as Markdown.
+                    Text(msg.text, color = textColor, style = MaterialTheme.typography.bodyLarge)
+                } else {
+                    // The planner model replies in Markdown; render it.
+                    Markdown(
+                        content = msg.text,
+                        colors = markdownColor(text = textColor),
+                        typography = markdownTypography(),
+                    )
+                }
             }
         }
     }

@@ -427,6 +427,91 @@ textarea {
   border-bottom-left-radius: 5px;
 }
 
+/* Markdown-rendered assistant replies. The planner model outputs Markdown;
+   main.ts sanitises it and drops it in as HTML, so undo the pre-wrap the
+   plain-text bubbles rely on and give the block elements sane rhythm. */
+.bubble-markdown {
+  white-space: normal;
+}
+.bubble-markdown > :first-child {
+  margin-top: 0;
+}
+.bubble-markdown > :last-child {
+  margin-bottom: 0;
+}
+.bubble-markdown p,
+.bubble-markdown ul,
+.bubble-markdown ol,
+.bubble-markdown pre,
+.bubble-markdown blockquote,
+.bubble-markdown table {
+  margin: 0.5em 0;
+}
+.bubble-markdown ul,
+.bubble-markdown ol {
+  padding-left: 1.4em;
+}
+.bubble-markdown li + li {
+  margin-top: 0.15em;
+}
+.bubble-markdown h1,
+.bubble-markdown h2,
+.bubble-markdown h3,
+.bubble-markdown h4 {
+  margin: 0.8em 0 0.4em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.bubble-markdown h1 { font-size: 1.15rem; }
+.bubble-markdown h2 { font-size: 1.05rem; }
+.bubble-markdown h3,
+.bubble-markdown h4 { font-size: 1rem; }
+.bubble-markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.bubble-markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.bubble-markdown pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.bubble-markdown pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.82em;
+}
+.bubble-markdown blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.8em;
+  color: var(--text-faint);
+}
+.bubble-markdown table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.bubble-markdown th,
+.bubble-markdown td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+.bubble-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0.8em 0;
+}
+
 .bubble-system {
   align-self: center;
   color: var(--text-faint);
@@ -592,6 +677,43 @@ textarea {
 }
 .chat-form textarea::placeholder {
   color: var(--text-faint);
+}
+
+/* "New chat" — ghost button in the chat header, icon + label. */
+.chat-new-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+}
+.chat-new-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* "Stop" — replaces Send while a reply is streaming in. Danger-tinted so it
+   reads as an interrupt, not a primary action. */
+.chat-stop-btn {
+  all: unset;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: var(--r-md);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+}
+.chat-stop-btn:hover {
+  background: #fbdcd8;
+}
+.chat-stop-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* ---------- Buttons --------------------------------------------------- */
@@ -1727,10 +1849,112 @@ input[type="file"]::file-selector-button:hover {
   color: var(--text-strong);
 }
 
-/* Family / users list */
+/* ---------- Family / accounts ----------------------------------- */
+#view-family {
+  overflow-y: auto;
+}
+
+/* "Add a family member" card */
+.family-panel {
+  flex: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 18px 20px 20px;
+}
+
+.family-panel h3 {
+  margin: 0 0 14px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.user-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.field input,
+.field select {
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  padding: 8px 10px;
+}
+.field select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23615d59' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+.field input::placeholder {
+  color: var(--text-faint);
+}
+.field input:focus,
+.field select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.user-form-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.user-form-foot .settings-hint {
+  margin: 0;
+}
+.user-form-foot button[type="submit"] {
+  flex: none;
+}
+
+/* Members list */
+.family-list-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 28px 0 12px;
+}
+.family-list-head h3 {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-faint);
+}
+.family-count {
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
 .user-list {
   list-style: none;
-  margin: 16px 0 0;
+  margin: 0 0 24px;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -1740,27 +1964,110 @@ input[type="file"]::file-selector-button:hover {
 .user-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 12px;
+  padding: 12px 14px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
+  transition: border-color var(--dur) var(--ease);
+}
+.user-row:hover {
+  border-color: var(--border-strong);
+}
+
+.user-avatar {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.user-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.user-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .user-name {
   font-weight: 600;
   color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-you {
+  flex: none;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 6px;
+  border-radius: var(--r-pill);
+}
+
+.user-role-badge {
+  flex: none;
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
+  color: var(--text-muted);
+  background: var(--surface-3);
+}
+.user-role-badge.is-admin {
+  color: rgba(0, 0, 0, 0.7);
+  background: #ffefd0; /* warm marigold tint — matches .category-chip */
 }
 
 .user-username {
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: 0.83rem;
+  font-family: var(--font-mono);
 }
 
-.user-row .btn-ghost {
+.user-actions {
   margin-left: auto;
+  flex: none;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+.user-row:hover .user-actions,
+.user-actions:focus-within {
+  opacity: 1;
 }
 
-.user-row .doc-delete {
-  margin-left: 4px;
+.user-action {
+  all: unset;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.user-action:hover {
+  background: var(--surface-2);
+  color: var(--text-strong);
+}
+.user-action-danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
 }

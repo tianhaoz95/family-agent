@@ -88,9 +88,15 @@
 
       <main class="content">
         <section id="view-chat" class="view is-active" aria-label="Chat">
-          <div class="view-header">
-            <h1>Chat</h1>
-            <p class="view-sub">Ask about tasks, documents, or anything else — routed locally.</p>
+          <div class="view-header view-header--row">
+            <div>
+              <h1>Chat</h1>
+              <p class="view-sub">Ask about tasks, documents, or anything else — routed locally.</p>
+            </div>
+            <button type="button" id="chat-new-btn" class="btn-ghost chat-new-btn" title="Clear this conversation and start fresh">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              <span>New chat</span>
+            </button>
           </div>
           <div id="chat-log" class="chat-log" role="log" aria-live="polite">
             <div class="chat-empty" id="chat-empty">
@@ -113,7 +119,11 @@
               placeholder="Ask a question, or attach a photo or screenshot"
               rows="1"
             ></textarea>
-            <button type="submit">Send</button>
+            <button type="submit" id="chat-send-btn">Send</button>
+            <button type="button" id="chat-stop-btn" class="chat-stop-btn" title="Stop generating" hidden>
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+              <span>Stop</span>
+            </button>
           </form>
         </section>
 
@@ -213,17 +223,32 @@
             <h1>Family</h1>
             <p class="view-sub">Accounts on this home server. Each one keeps its own tasks, documents, and history.</p>
           </div>
-          <form id="user-form" class="inline-form inline-form-stacked">
-            <input id="user-displayname" type="text" placeholder="Name, e.g. Sam" required />
-            <input id="user-username" type="text" placeholder="Username" autocomplete="off" required />
-            <input id="user-password" type="password" placeholder="Temporary password (6+ chars)" autocomplete="new-password" required />
-            <select id="user-role">
-              <option value="member">Member</option>
-              <option value="admin">Admin</option>
-            </select>
-            <button type="submit">Add account</button>
-          </form>
-          <p id="user-status" class="settings-hint" role="status"></p>
+
+          <div class="family-panel">
+            <h3>Add a family member</h3>
+            <form id="user-form" class="user-form">
+              <div class="field-grid">
+                <label class="field">Name<input id="user-displayname" type="text" placeholder="Sam" required /></label>
+                <label class="field">Username<input id="user-username" type="text" placeholder="sam" autocomplete="off" required /></label>
+                <label class="field">Temporary password<input id="user-password" type="password" placeholder="6+ characters" autocomplete="new-password" required /></label>
+                <label class="field">Role
+                  <select id="user-role">
+                    <option value="member">Member</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </label>
+              </div>
+              <div class="user-form-foot">
+                <p id="user-status" class="settings-hint" role="status"></p>
+                <button type="submit">Add account</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="family-list-head">
+            <h3>Members</h3>
+            <span id="user-count" class="family-count"></span>
+          </div>
           <ul id="user-list" class="user-list"></ul>
         </section>
 
