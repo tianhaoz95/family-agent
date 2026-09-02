@@ -77,8 +77,8 @@ class FamilyAgentApi(
 
     suspend fun health(): HealthResponse = json.decodeFromString(get("/health"))
 
-    suspend fun chat(message: String): ChatResponse =
-        json.decodeFromString(send("POST", "/chat", json.encodeToString(ChatRequest(message))))
+    suspend fun chat(message: String, images: List<String> = emptyList()): ChatResponse =
+        json.decodeFromString(send("POST", "/chat", json.encodeToString(ChatRequest(message, images))))
 
     suspend fun listTasks(): List<Task> = json.decodeFromString<TasksResponse>(get("/tasks")).tasks
 
@@ -107,6 +107,16 @@ class FamilyAgentApi(
         json.decodeFromString<DocumentResponse>(sendNoBody("POST", "/documents/$id/retry-extraction")).document
 
     suspend fun listActivity(): List<ActivityEntry> = json.decodeFromString<ActivityResponse>(get("/activity")).activity
+
+    suspend fun listTools(): List<Tool> = json.decodeFromString<ToolsResponse>(get("/tools")).tools
+
+    suspend fun buildTool(prompt: String) {
+        send("POST", "/tools", json.encodeToString(BuildToolRequest(prompt)))
+    }
+
+    suspend fun deleteTool(id: String) {
+        sendNoBody("DELETE", "/tools/$id")
+    }
 
     /** Uploads a PDF, photo, or camera scan — the actual "scan a document" path. */
     suspend fun uploadDocument(filename: String, bytes: ByteArray, mimeType: String?): Document =

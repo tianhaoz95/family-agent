@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { createWorker } from "tesseract.js";
 import { PDFParse } from "pdf-parse";
 import { config } from "./config.js";
+import { ocrImageViaOllama } from "./ollamaOcr.js";
 
 // Shared by both ingestion paths (POST /documents/upload and the inbox
 // watcher) so "what file types does this app understand" is defined once.
@@ -26,6 +27,7 @@ const PDF_TEXT_LAYER_MIN_CHARS = 24;
 // per page on CPU; without a cap a 40-page scan would hang the request for
 // minutes. Family documents are near-always a handful of pages.
 const PDF_OCR_MAX_PAGES = 10;
+
 
 /**
  * Extracts plain text from a file's raw bytes, dispatching on extension.
@@ -101,23 +103,60 @@ function looksLikeImage(buffer: Buffer, ext: string): boolean {
   return false;
 }
 
-// OCR via tesseract.js. The English language model (~4MB) is fetched from a
-// CDN on the very first OCR call and then cached under
-// `<dataDir>/tessdata/` — cachePath is set explicitly rather than left at
-// tesseract.js's default (the process's current working directory, which is
-// an unpredictable place to silently write a cache file). Every OCR call
-// after the first one is fully offline, reading from that local cache. This
-// is the one deliberate exception to "nothing leaves the machine" in this
-// codebase — flagged here and in docs/DECISIONS.md, not hidden.
 async function extractImageText(buffer: Buffer): Promise<string> {
   return ocrImages([buffer]);
 }
 
-// OCR one or more encoded (PNG/JPEG) images with a single shared worker —
-// creating a worker loads the ~4MB language model, so a multi-page scan
-// reuses one rather than paying that per page.
+// OCR one or more encoded (PNG/JPEG) page images. Routes to the configured
+// Ollama vision model (config.ocrModel, e.g. "glm-ocr:latest") when set, else
+// the built-in tesseract.js engine. A model that's missing, unreachable, or
+// too slow falls back to tesseract rather than sinking the whole ingest.
 async function ocrImages(images: Buffer[]): Promise<string> {
   if (images.length === 0) return "";
+  if (config.ocrModel) {
+    try {
+      return await ocrViaModel(images, config.ocrModel);
+    } catch (err) {
+      console.error(
+        `OCR model "${config.ocrModel}" failed — falling back to the built-in engine:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+  return ocrViaTesseract(images);
+}
+
+async function ocrViaModel(images: Buffer[], model: string): Promise<string> {
+  const budgetMs = config.ocrModelTimeoutMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), budgetMs);
+  const parts: string[] = [];
+  try {
+    for (const image of images) {
+      parts.push(await ocrImageViaOllama(image, controller.signal));
+    }
+  } catch (err) {
+    // Out of time but some pages are done — a partial transcript still beats
+    // nothing (and beats a slower re-run through tesseract).
+    if (controller.signal.aborted && parts.length > 0) {
+      console.error(`OCR model "${model}" hit the ${budgetMs / 1000}s budget after ${parts.length} page(s)`);
+      return parts.join("\n\n").trim();
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+  return parts.join("\n\n").trim();
+}
+
+// Built-in OCR via tesseract.js. One shared worker for a multi-page scan —
+// creating a worker loads the ~4MB English model, paid once not per page.
+// That model is fetched from a CDN on the very first OCR call and then cached
+// under `<dataDir>/tessdata/` (cachePath set explicitly, not left at
+// tesseract.js's default of the process CWD). Every call after the first is
+// fully offline. This CDN fetch is the one deliberate exception to "nothing
+// leaves the machine" — flagged here and in docs/DECISIONS.md, not hidden.
+async function ocrViaTesseract(images: Buffer[]): Promise<string> {
   const cachePath = `${config.dataDir}/tessdata`;
   // tesseract.js's Node cache writer is a plain fs.writeFile — it doesn't
   // create the directory itself, and fails (silently swallowed upstream)

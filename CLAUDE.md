@@ -98,8 +98,10 @@ agent-core (Node/TS, port 4173)  <--HTTP-->  desktop (Tauri, spawns agent-core a
   it). If you add a route using a new HTTP method, add it here too, or it'll work in every test
   and every curl check while being broken in the actual browser.
 - `fileExtract.ts` — `extractText(filename, buffer)` dispatches by extension: `.txt`/`.md` as
-  plain utf8, `.pdf` via `pdf-parse` (text-layer only, no OCR fallback for scanned PDFs), images
-  (`.jpg`/`.jpeg`/`.png`/`.webp`) via `tesseract.js` OCR. Two non-obvious things here: (1) OCR's
+  plain utf8, `.pdf` via `pdf-parse` (text layer if present, else OCR the embedded page images —
+  scanned PDFs work), images (`.jpg`/`.jpeg`/`.png`/`.webp`) via OCR. OCR is `tesseract.js` by
+  default, or an Ollama vision model when `config.ocrModel` is set (`FAMILY_AGENT_OCR_MODEL` /
+  Settings), falling back to tesseract on any failure. Two non-obvious things here: (1) OCR's
   language-model cache path is set explicitly to `<dataDir>/tessdata/` and the directory is
   `mkdir`'d first — tesseract.js's Node cache writer is a plain `fs.writeFile` that silently fails
   if the dir doesn't exist, so without this every OCR call re-downloads from the CDN instead of
@@ -107,10 +109,15 @@ agent-core (Node/TS, port 4173)  <--HTTP-->  desktop (Tauri, spawns agent-core a
   tesseract.js (`looksLikeImage`) — feeding it a file that's merely *named* `.jpg` but isn't
   really an image can crash the whole process from inside the worker thread, not just reject one
   promise; a normal try/catch around `recognize()` doesn't stop that.
-- `settingsFile.ts` — persists the one setting the desktop Settings page can change
-  (`inboxDir`) to `<dataDir>/settings.json`. Precedence in `config.ts`:
-  `FAMILY_AGENT_INBOX_DIR` env var > persisted file > derived default — the env var always wins
-  so an operator's explicit override can't be shadowed by something saved from the UI earlier.
+- `settingsFile.ts` — persists the settings the desktop Settings page can change
+  (`inboxDir`, `model`, `ollamaBaseUrl`, `ocrModel`) to `<dataDir>/settings.json` as one
+  merged JSON object. Precedence in `config.ts` for each: env var > persisted file > default —
+  the env var always wins so an operator's explicit override can't be shadowed by something
+  saved from the UI earlier, and when an env var is set that field is `envLocked` (UI shows it
+  read-only, `PUT /settings` refuses to change it). Changing `model`/`ollamaBaseUrl` at runtime
+  rebuilds the agent + extraction model clients in `server.ts` and, via the `onModelChange`
+  callback, restarts the inbox watcher with a fresh client — a langchain `ChatOllama` binds its
+  URL and model at construction, so hot-patching isn't possible.
 - `agents/index.ts` — the deepagents planner (`buildFamilyAgent`) plus its two subagents,
   `task-agent` and `document-agent`. Notable non-obvious things in this file:
   - deepagents bakes in generic `ls`/`read_file`/`write_file` tools for its own scratch
@@ -119,7 +126,10 @@ agent-core (Node/TS, port 4173)  <--HTTP-->  desktop (Tauri, spawns agent-core a
     app's domain concept) with "files" (deepagents' concept) otherwise.
   - `askFamilyAgent()` retries once on an empty reply *or* a reply containing raw tool-call
     syntax (`LOOKS_MALFORMED` regex) — both are real small-model failure modes, not
-    hypothetical.
+    hypothetical. It also takes an optional `images: string[]` (data URIs) — the chat UI in
+    both apps can attach photos/screenshots, and it builds a multimodal `HumanMessage`
+    content array for the (multimodal) planner model. Subagents only ever get a text
+    `description`, so an image never propagates past the planner turn.
   - System prompts contain worked examples, not just abstract instructions — abstract phrasing
     alone was proven insufficient to get reliable tool delegation out of small models.
 - `agents/extraction.ts` — document field extraction **deliberately bypasses the planner**. It
@@ -160,9 +170,13 @@ into `FamilyAgentApi.uploadDocument()`, an OkHttp `MultipartBody` POST to the sa
 
 ## Scope notes
 
-Two domain subagents ship (`task-agent`, `document-agent`); the brainstormed architecture
-describes more (a builder/sandboxed scratch-tool agent, a compute mesh, Tailscale transport, a
-bundled managed-model runtime) — none of that is implemented. The sandboxed builder agent in
-particular was deliberately deferred: it implies arbitrary local code execution, and that's not
-something to stand up without a human reviewing the sandbox boundary. Full reasoning for every
-scope cut is in `docs/DECISIONS.md`.
+Three subagents ship: `task-agent`, `document-agent`, and `builder-agent`. The last one
+generates small self-contained web tools (`agent-core/src/tools/*`, and a "Tools" screen in
+both apps) — see `docs/STATUS.md` for the architecture. Static tools are plain inline HTML
+served with a strict CSP from a dedicated port (default 4174); a tool that needs shared state
+gets a Deno backend in a deny-by-default sandbox (`ToolSupervisor`), with the model only ever
+writing `handler.ts`. `FAMILY_AGENT_TOOLS=0` disables the whole feature.
+
+Still not implemented from the brainstormed architecture: the compute mesh, Tailscale
+transport, and the bundled managed-model runtime. Full reasoning for every scope cut is in
+`docs/DECISIONS.md`.

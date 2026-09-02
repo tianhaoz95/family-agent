@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import PDFDocument from "pdfkit";
+import { config } from "../src/config.js";
 import { extractText, SUPPORTED_EXTENSIONS, UnsupportedFileTypeError } from "../src/fileExtract.js";
 
 // PDF and OCR both take real (if brief) work — a few seconds is normal for
@@ -67,6 +68,57 @@ describe("extractText", () => {
 
   it("rejects a file with a .png name that isn't actually a PNG, without crashing", async () => {
     await expect(extractText("fake.png", Buffer.from("not a real png"))).rejects.toThrow(/doesn't look like/);
+  });
+
+  describe("with an OCR model configured (config.ocrModel)", () => {
+    const realFetch = globalThis.fetch;
+    const realTimeout = config.ocrModelTimeoutMs;
+    afterEach(() => {
+      config.ocrModel = "";
+      config.ocrModelTimeoutMs = realTimeout;
+      globalThis.fetch = realFetch;
+    });
+
+    it("routes image OCR through the Ollama vision model", async () => {
+      config.ocrModel = "glm-ocr:test";
+      const calls: string[] = [];
+      globalThis.fetch = (async (url: any, init: any) => {
+        calls.push(String(url));
+        expect(String(url)).toContain("/api/generate");
+        expect(JSON.parse(init.body).model).toBe("glm-ocr:test");
+        return new Response(JSON.stringify({ response: "# Water bill\n\nDue $63.20 on 2026-10-15" }), { status: 200 });
+      }) as typeof fetch;
+
+      const png = Buffer.from(FIXTURE_PNG_BASE64, "base64");
+      const text = await extractText("receipt.png", png);
+      expect(text).toContain("Water bill");
+      expect(calls).toHaveLength(1);
+    });
+
+    it("falls back to the built-in engine when the model call fails", async () => {
+      config.ocrModel = "glm-ocr:test";
+      globalThis.fetch = (async () => new Response("model not found", { status: 404 })) as typeof fetch;
+
+      const png = Buffer.from(FIXTURE_PNG_BASE64, "base64");
+      const text = await extractText("scan.png", png);
+      // tesseract still ran on the fixture
+      expect(text.toUpperCase()).toContain("TEST");
+    }, SLOW);
+
+    it("falls back to the built-in engine when the model exceeds its time budget", async () => {
+      config.ocrModel = "glm-ocr:test";
+      config.ocrModelTimeoutMs = 40;
+      globalThis.fetch = ((_url: any, init: any) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted", "AbortError"))
+          );
+        })) as typeof fetch;
+
+      const png = Buffer.from(FIXTURE_PNG_BASE64, "base64");
+      const text = await extractText("scan.png", png);
+      expect(text.toUpperCase()).toContain("TEST");
+    }, SLOW);
   });
 
   it("OCRs a real PNG containing text", async () => {

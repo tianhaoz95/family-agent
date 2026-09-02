@@ -1,4 +1,6 @@
 import { createDeepAgent, createFilesystemMiddleware } from "deepagents";
+import { tool } from "@langchain/core/tools";
+import { z } from "zod";
 import { createLocalModel } from "../model.js";
 import type { Store } from "../db.js";
 import { makeTaskTools } from "./taskTools.js";
@@ -13,10 +15,16 @@ insurance, medical, receipts, tax paperwork, anything a family member scanned
 or pasted in). "Documents" always means that — family paperwork — it never
 refers to your own scratch files.
 
+There is also a "builder-agent" subagent: it generates a small custom web
+tool (a checklist, planner, tracker, calculator, comparison table, form,
+countdown — anything interactive) when the user needs something to *do* a
+task that task-agent and document-agent can't. Route requests like "build
+me a…", "make a tool/page/app to…", "I need something to help me…", "can
+you create a…" to it.
+
 To delegate, call the tool named "task" with two arguments: subagent_type set
-to "task-agent" or "document-agent", and description set to what you need
-done. task-agent and document-agent are NOT themselves callable tools — there
-is no tool literally named "task-agent" or "document-agent". Calling "task"
+to "task-agent", "document-agent", or "builder-agent", and description set to
+what you need done. These are NOT themselves callable tools — calling "task"
 with the right subagent_type is the only way to reach them.
 
 Example — user asks "what documents do I have?": call task with
@@ -27,6 +35,10 @@ yourself; you have no way to know the answer without asking document-agent.
 Example — user asks "remind me to renew the car registration": call task
 with subagent_type "task-agent" and description "Create a task to renew the
 car registration."
+
+Example — user asks "build me a tool to split our vacation budget": call
+task with subagent_type "builder-agent" and description "Build a tool to
+split a vacation budget between family members."
 
 Keep replies short and concrete. If a request needs no tool at all (a plain
 question with nothing to look up, like "what can you help with?"), answer
@@ -51,8 +63,32 @@ always call save_extraction with a category, a one-line summary, and any
 important dates you find (due dates, expirations, appointment dates). Confirm
 what you did in one sentence.`;
 
-export function buildFamilyAgent(store: Store) {
+const BUILDER_AGENT_PROMPT = `You build small custom web tools for the family.
+When you get a request, call start_build exactly once with a clear one-line
+description of the tool to make (rephrase the user's ask into "Build a tool
+to …"). You do not write any code yourself — start_build hands it to the
+generator, which takes a minute. After calling it, tell the user in one
+sentence that their tool is being built and will show up in the Tools tab.`;
+
+export interface FamilyAgentDeps {
+  /** Fire-and-forget: kick off generating a tool from this description. */
+  startToolBuild?: (description: string) => void;
+}
+
+export function buildFamilyAgent(store: Store, deps: FamilyAgentDeps = {}) {
   const model = createLocalModel();
+
+  const startBuild = tool(
+    async ({ description }) => {
+      deps.startToolBuild?.(description);
+      return `Started building: ${description}. It will appear in the Tools tab shortly.`;
+    },
+    {
+      name: "start_build",
+      description: "Kick off generating a small web tool. Takes a one-line description of what to build.",
+      schema: z.object({ description: z.string().min(3).describe("What to build, e.g. 'Build a tool to plan weekly meals'") }),
+    }
+  );
 
   return createDeepAgent({
     name: "family-planner",
@@ -87,6 +123,14 @@ export function buildFamilyAgent(store: Store) {
         model,
         tools: makeDocumentTools(store),
       },
+      {
+        name: "builder-agent",
+        description:
+          "Generates a small custom web tool (checklist, planner, tracker, calculator, form) to help do a task the other agents can't.",
+        systemPrompt: BUILDER_AGENT_PROMPT,
+        model,
+        tools: [startBuild],
+      },
     ],
   });
 }
@@ -106,10 +150,24 @@ const LOOKS_MALFORMED = /<\|.*?\|>|<tool_call|subagent_type\s*:|^call:/i;
 // most of those. Kept even after switching to gemma4:e2b, since the
 // failure mode is about small-model reliability in general, not specific
 // to the model that first surfaced it.
-export async function askFamilyAgent(agent: FamilyAgent, message: string): Promise<string> {
+export async function askFamilyAgent(
+  agent: FamilyAgent,
+  message: string,
+  images: string[] = []
+): Promise<string> {
+  // Multimodal turn: gemma4:e2b (the default) takes text + images. The
+  // planner sees them directly and can answer about a photo/screenshot, or
+  // pull details out and delegate. Subagents only ever get a text
+  // description, so an image never leaves the planner step.
+  const content = images.length
+    ? [
+        { type: "text", text: message },
+        ...images.map((url) => ({ type: "image_url", image_url: { url } })),
+      ]
+    : message;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const result = await agent.invoke({
-      messages: [{ role: "user", content: message }],
+      messages: [{ role: "user", content }],
     });
     const last = result.messages.at(-1);
     const text = last ? (typeof last.content === "string" ? last.content : JSON.stringify(last.content)) : "";

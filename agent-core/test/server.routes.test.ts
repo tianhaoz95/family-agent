@@ -3,7 +3,7 @@ import { existsSync, rmSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { Store } from "../src/db.js";
-import { config } from "../src/config.js";
+import { config, envLocked } from "../src/config.js";
 
 // These exercise the HTTP contract without requiring a live model — /chat and
 // the async extraction leg of /documents/ingest are covered separately in
@@ -225,10 +225,197 @@ describe("HTTP API", () => {
     }
   });
 
+  // These stub fetch so they don't depend on whether this machine happens to
+  // have Ollama running (it does in CI-less local dev, it doesn't in CI).
+  function stubOllamaTags(models: string[] | null) {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).endsWith("/api/tags")) {
+        if (models === null) throw new Error("ECONNREFUSED");
+        return new Response(JSON.stringify({ models: models.map((name) => ({ name })) }), { status: 200 });
+      }
+      return realFetch(url, init);
+    }) as typeof fetch;
+    return () => {
+      globalThis.fetch = realFetch;
+    };
+  }
+
+  it("PUT /settings saves an OCR model Ollama has, and can clear it", async () => {
+    const original = config.ocrModel;
+    const settingsFilePath = `${config.dataDir}/settings.json`;
+    const restore = stubOllamaTags(["gemma4:e2b", "glm-ocr:latest"]);
+    try {
+      expect((await app.inject({ method: "GET", url: "/settings" })).json().ocrModel).toBe("");
+
+      const set = await app.inject({ method: "PUT", url: "/settings", payload: { ocrModel: "glm-ocr:latest" } });
+      expect(set.statusCode).toBe(200);
+      expect(set.json().ocrModel).toBe("glm-ocr:latest");
+      expect(config.ocrModel).toBe("glm-ocr:latest");
+
+      const cleared = await app.inject({ method: "PUT", url: "/settings", payload: { ocrModel: "" } });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().ocrModel).toBe("");
+      expect(config.ocrModel).toBe("");
+    } finally {
+      restore();
+      config.ocrModel = original;
+      if (existsSync(settingsFilePath)) rmSync(settingsFilePath);
+    }
+  });
+
+  it("PUT /settings rejects an OCR model Ollama doesn't have (when Ollama is reachable)", async () => {
+    const original = config.ocrModel;
+    const settingsFilePath = `${config.dataDir}/settings.json`;
+    const restore = stubOllamaTags(["gemma4:e2b"]);
+    try {
+      const res = await app.inject({ method: "PUT", url: "/settings", payload: { ocrModel: "not-pulled:latest" } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/ollama pull not-pulled:latest/);
+      expect(config.ocrModel).toBe(original);
+    } finally {
+      restore();
+      config.ocrModel = original;
+      if (existsSync(settingsFilePath)) rmSync(settingsFilePath);
+    }
+  });
+
+  it("PUT /settings saves the OCR model unchecked when Ollama is unreachable", async () => {
+    const original = config.ocrModel;
+    const settingsFilePath = `${config.dataDir}/settings.json`;
+    const restore = stubOllamaTags(null);
+    try {
+      const res = await app.inject({ method: "PUT", url: "/settings", payload: { ocrModel: "glm-ocr:latest" } });
+      expect(res.statusCode).toBe(200);
+      expect(config.ocrModel).toBe("glm-ocr:latest");
+    } finally {
+      restore();
+      config.ocrModel = original;
+      if (existsSync(settingsFilePath)) rmSync(settingsFilePath);
+    }
+  });
+
+  it("PUT /settings with an empty body is a 400", async () => {
+    const res = await app.inject({ method: "PUT", url: "/settings", payload: {} });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("GET /ollama/models lists the models and whether Ollama is reachable", async () => {
+    const restore = stubOllamaTags(["gemma4:e2b", "glm-ocr:latest"]);
+    try {
+      const ok = await app.inject({ method: "GET", url: "/ollama/models" });
+      expect(ok.json()).toEqual({ models: ["gemma4:e2b", "glm-ocr:latest"], reachable: true });
+    } finally {
+      restore();
+    }
+    const down = stubOllamaTags(null);
+    try {
+      const res = await app.inject({ method: "GET", url: "/ollama/models" });
+      expect(res.json()).toEqual({ models: [], reachable: false });
+    } finally {
+      down();
+    }
+  });
+
+  it("PUT /settings changes the chat model and Ollama address (validating the model against the new address)", async () => {
+    const origModel = config.model;
+    const origUrl = config.ollamaBaseUrl;
+    const settingsFilePath = `${config.dataDir}/settings.json`;
+    let modelChangeCalls = 0;
+    const testApp = buildServer(new Store(":memory:"), undefined, async () => {
+      modelChangeCalls++;
+    });
+    // model check hits the *new* base URL — return the model only for that host.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url) === "http://10.0.0.9:11434/api/tags") {
+        return new Response(JSON.stringify({ models: [{ name: "llama3.1:8b" }] }), { status: 200 });
+      }
+      if (String(url).endsWith("/api/tags")) return new Response(JSON.stringify({ models: [] }), { status: 200 });
+      return realFetch(url, init);
+    }) as typeof fetch;
+    try {
+      const res = await testApp.inject({
+        method: "PUT",
+        url: "/settings",
+        payload: { model: "llama3.1:8b", ollamaBaseUrl: "http://10.0.0.9:11434" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ model: "llama3.1:8b", ollamaBaseUrl: "http://10.0.0.9:11434" });
+      expect(config.model).toBe("llama3.1:8b");
+      expect(config.ollamaBaseUrl).toBe("http://10.0.0.9:11434");
+      expect(modelChangeCalls).toBe(1);
+
+      const health = await testApp.inject({ method: "GET", url: "/health" });
+      expect(health.json()).toMatchObject({ model: "llama3.1:8b", ollamaBaseUrl: "http://10.0.0.9:11434" });
+    } finally {
+      globalThis.fetch = realFetch;
+      config.model = origModel;
+      config.ollamaBaseUrl = origUrl;
+      if (existsSync(settingsFilePath)) rmSync(settingsFilePath);
+      await testApp.close();
+    }
+  });
+
+  it("PUT /settings rejects a non-URL Ollama address", async () => {
+    const res = await app.inject({ method: "PUT", url: "/settings", payload: { ollamaBaseUrl: "not a url" } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("PUT /settings refuses to change an env-pinned field", async () => {
+    const locked = envLocked as { -readonly [K in keyof typeof envLocked]: boolean };
+    locked.model = true;
+    try {
+      const res = await app.inject({ method: "PUT", url: "/settings", payload: { model: "whatever:latest" } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/environment variable/);
+      const payload = (await app.inject({ method: "GET", url: "/settings" })).json();
+      expect(payload.envLocked.model).toBe(true);
+    } finally {
+      locked.model = false;
+    }
+  });
+
   it("GET /activity reflects task and document mutations", async () => {
     await app.inject({ method: "POST", url: "/tasks", payload: { title: "X" } });
     const res = await app.inject({ method: "GET", url: "/activity" });
     const activity = res.json().activity;
     expect(activity.some((a: any) => a.action === "task.created")).toBe(true);
+  });
+
+  it("GET/DELETE /tools list and remove a tool", async () => {
+    // Create directly (POST /tools kicks off a slow model build with disk I/O).
+    const t = store.createTool({ name: "Chore chart", description: "who does what", prompt: "chore chart", kind: "static" });
+    store.setToolStatus(t.id, "ready");
+
+    const list = await app.inject({ method: "GET", url: "/tools" });
+    expect(list.json().tools[0]).toMatchObject({ id: t.id, name: "Chore chart", status: "ready", path: `/${t.id}/` });
+
+    const one = await app.inject({ method: "GET", url: `/tools/${t.id}` });
+    expect(one.statusCode).toBe(200);
+
+    const del = await app.inject({ method: "DELETE", url: `/tools/${t.id}` });
+    expect(del.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/tools" })).json().tools).toHaveLength(0);
+    expect((await app.inject({ method: "GET", url: `/tools/${t.id}` })).statusCode).toBe(404);
+  });
+
+  it("POST /tools validates the prompt and reports when disabled", async () => {
+    expect((await app.inject({ method: "POST", url: "/tools", payload: { prompt: "hi" } })).statusCode).toBe(400);
+
+    const originalEnabled = config.toolsEnabled;
+    (config as { toolsEnabled: boolean }).toolsEnabled = false;
+    try {
+      const res = await app.inject({ method: "POST", url: "/tools", payload: { prompt: "a budget splitter" } });
+      expect(res.statusCode).toBe(403);
+    } finally {
+      (config as { toolsEnabled: boolean }).toolsEnabled = originalEnabled;
+    }
+  });
+
+  it("GET /health advertises the tools port", async () => {
+    const h = (await app.inject({ method: "GET", url: "/health" })).json();
+    expect(typeof h.toolsPort).toBe("number");
+    expect(["full", "static-only", "off"]).toContain(h.toolsEnabled);
   });
 });

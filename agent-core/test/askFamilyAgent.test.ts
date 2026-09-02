@@ -7,7 +7,7 @@ import { askFamilyAgent } from "../src/agents/index.js";
 // that depends on when the model happens to misbehave.
 function stubAgent(replies: string[]) {
   let call = 0;
-  const invoke = vi.fn(async () => {
+  const invoke = vi.fn(async (_input: unknown) => {
     const content = replies[Math.min(call, replies.length - 1)];
     call++;
     return { messages: [{ content }] };
@@ -43,5 +43,28 @@ describe("askFamilyAgent retry logic", () => {
     const { agent } = stubAgent(["", ""]);
     const reply = await askFamilyAgent(agent, "hi");
     expect(reply).toContain("didn't return a clean response");
+  });
+
+  it("passes plain string content when there are no images", async () => {
+    const { agent, invoke } = stubAgent(["ok"]);
+    await askFamilyAgent(agent, "hello");
+    expect(invoke.mock.calls[0][0]).toEqual({ messages: [{ role: "user", content: "hello" }] });
+  });
+
+  it("builds a multimodal content array when images are attached", async () => {
+    const { agent, invoke } = stubAgent(["That's a cat."]);
+    const img = "data:image/png;base64,AAAA";
+    await askFamilyAgent(agent, "what is this?", [img]);
+    expect(invoke.mock.calls[0][0]).toEqual({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "what is this?" },
+            { type: "image_url", image_url: { url: img } },
+          ],
+        },
+      ],
+    });
   });
 });

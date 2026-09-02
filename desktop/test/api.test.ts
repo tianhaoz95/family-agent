@@ -79,6 +79,40 @@ describe("api client", () => {
     expect((init as RequestInit).headers).toBeUndefined();
   });
 
+  it("updateSettings() PUTs only the fields in the patch", async () => {
+    const fetchMock = mockFetchOnce(200, { inboxDir: "/x", model: "m", ollamaBaseUrl: "u", ocrModel: "glm-ocr:latest" });
+    await api.updateSettings({ model: "llama3.1:8b", ollamaBaseUrl: "http://10.0.0.2:11434" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/settings");
+    expect((init as RequestInit).method).toBe("PUT");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      model: "llama3.1:8b",
+      ollamaBaseUrl: "http://10.0.0.2:11434",
+    });
+  });
+
+  it("chat() sends message only when there are no images", async () => {
+    const fetchMock = mockFetchOnce(200, { reply: "hi" });
+    await api.chat("hello");
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({ message: "hello" });
+  });
+
+  it("chat() includes images when attached", async () => {
+    const fetchMock = mockFetchOnce(200, { reply: "a cat" });
+    await api.chat("what is this?", ["data:image/jpeg;base64,AAAA"]);
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      message: "what is this?",
+      images: ["data:image/jpeg;base64,AAAA"],
+    });
+  });
+
+  it("listOllamaModels() GETs /ollama/models", async () => {
+    const fetchMock = mockFetchOnce(200, { models: ["gemma4:e2b"], reachable: true });
+    const res = await api.listOllamaModels();
+    expect(res).toEqual({ models: ["gemma4:e2b"], reachable: true });
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/ollama/models");
+  });
+
   it("retryExtraction() POSTs the retry path with no body or content-type", async () => {
     const fetchMock = mockFetchOnce(200, { document: { id: "DOC1", extractionStatus: "pending" } });
     await api.retryExtraction("DOC1");

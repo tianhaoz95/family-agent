@@ -8,6 +8,8 @@ import app.familyagent.android.data.Document
 import app.familyagent.android.data.FamilyAgentApi
 import app.familyagent.android.data.SettingsStore
 import app.familyagent.android.data.Task
+import app.familyagent.android.data.Tool
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,7 +22,7 @@ sealed interface ConnectionStatus {
     data class Unreachable(val message: String) : ConnectionStatus
 }
 
-data class ChatMessage(val role: String, val text: String)
+data class ChatMessage(val role: String, val text: String, val images: List<String> = emptyList())
 
 @Immutable
 data class AppUiState(
@@ -32,6 +34,10 @@ data class AppUiState(
     val documents: List<Document> = emptyList(),
     val activity: List<ActivityEntry> = emptyList(),
     val documentUploadStatus: String? = null,
+    val tools: List<Tool> = emptyList(),
+    val toolStatus: String? = null,
+    /** Base URL of the tools server, derived from serverUrl + /health's toolsPort. */
+    val toolsBaseUrl: String? = null,
 )
 
 class AppViewModel(
@@ -61,22 +67,64 @@ class AppViewModel(
 
     fun refreshStatus() {
         viewModelScope.launch {
-            _state.value = _state.value.copy(
-                connection = runCatching { api.health() }
-                    .fold(
-                        onSuccess = { ConnectionStatus.Connected(it.model) },
-                        onFailure = { ConnectionStatus.Unreachable(it.message ?: "unreachable") },
+            runCatching { api.health() }
+                .onSuccess { h ->
+                    _state.value = _state.value.copy(
+                        connection = ConnectionStatus.Connected(h.model),
+                        toolsBaseUrl = toolsBaseUrl(_state.value.serverUrl, h.toolsPort),
                     )
-            )
+                }
+                .onFailure {
+                    _state.value = _state.value.copy(
+                        connection = ConnectionStatus.Unreachable(it.message ?: "unreachable"),
+                    )
+                }
         }
     }
 
-    fun sendChat(message: String) {
-        if (message.isBlank()) return
+    private fun toolsBaseUrl(serverUrl: String, toolsPort: Int): String? = runCatching {
+        val u = java.net.URI(serverUrl.trimEnd('/'))
+        "${u.scheme}://${u.host}:$toolsPort"
+    }.getOrNull()
+
+    fun refreshTools() {
         viewModelScope.launch {
-            val withUser = _state.value.chatMessages + ChatMessage("user", message)
+            runCatching { api.listTools() }.onSuccess { _state.value = _state.value.copy(tools = it) }
+        }
+    }
+
+    fun buildTool(prompt: String) {
+        if (prompt.isBlank()) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(toolStatus = "Building — this takes a minute or two.")
+            runCatching { api.buildTool(prompt) }
+                .onSuccess {
+                    refreshActivity()
+                    repeat(60) {
+                        delay(4000)
+                        val tools = runCatching { api.listTools() }.getOrNull() ?: return@repeat
+                        _state.value = _state.value.copy(tools = tools)
+                        if (tools.none { t -> t.status == "building" }) return@launch
+                    }
+                }
+                .onFailure { _state.value = _state.value.copy(toolStatus = "Error: ${it.message}") }
+        }
+    }
+
+    fun deleteTool(id: String) {
+        viewModelScope.launch {
+            runCatching { api.deleteTool(id) }.onSuccess { refreshTools() }
+        }
+    }
+
+    fun sendChat(message: String, images: List<String> = emptyList()) {
+        if (message.isBlank() && images.isEmpty()) return
+        // The model needs a prompt; supply a default when it's an image only.
+        val prompt = message.ifBlank { "What's in this image?" }
+        viewModelScope.launch {
+            val withUser = _state.value.chatMessages + ChatMessage("user", message, images)
             _state.value = _state.value.copy(chatMessages = withUser, chatSending = true)
-            val reply = runCatching { api.chat(message) }
+            val reply = runCatching { api.chat(prompt, images) }
                 .fold(
                     onSuccess = { it.reply },
                     onFailure = { "Error: ${it.message}" },

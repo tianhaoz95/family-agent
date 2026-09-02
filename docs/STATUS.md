@@ -148,6 +148,59 @@ second machine.
 Later changes (not part of the original autonomous session):
 - UI redesign of the desktop and Android apps ("Clean & calm" design system,
   shared tokens — `desktop/src/style.css` and `android/.../ui/theme/Theme.kt`).
+- Desktop Settings are now fully live-editable: chat **model** (dropdown
+  populated from `GET /ollama/models`), **Ollama address** (text), **watched
+  folder** (text + a native directory picker via `tauri-plugin-dialog`, shown
+  only when running as the Tauri app), and **OCR engine** (dropdown). Changing
+  model / Ollama URL rebuilds the in-process agent + extraction clients and
+  restarts the inbox watcher — no app restart. Any setting pinned by its env
+  var (`FAMILY_AGENT_MODEL`, `OLLAMA_BASE_URL`, …) stays read-only in the UI
+  and `PUT /settings` refuses to change it (`envLocked` in the payload).
+- Extraction poll in the desktop Documents view now runs until nothing is
+  `pending` instead of a fixed 18s, so the "Extracting…" spinner no longer
+  sticks until a tab switch.
+- **Multimodal chat**: both apps can attach images to a chat message (desktop:
+  attach button, paste, drag-drop; Android: photo library or camera). Images
+  are downscaled to ≤1536px and JPEG-encoded client-side, sent to `POST /chat`
+  as `images: [data-uri]` (max 4), and passed straight to the planner model
+  (gemma4:e2b is multimodal) as a `HumanMessage` content array. Subagents only
+  ever get text, so an image never leaves the planner step. `/chat` body limit
+  raised to 24 MB. Verified end-to-end: a photo of text → model transcribes it.
+- Dropped `android.permission.CAMERA` from the manifest — camera capture goes
+  through the system camera app (`TakePicture`), which needs no app-side
+  permission; declaring it would have *required* a runtime grant. Fixes a
+  latent issue in the Documents "Scan" button too.
+- **Builder tools shipped** (the §03 "sandboxed scratch-tool builder" that the
+  original session deferred). The planner has a third subagent, `builder-agent`;
+  "build me a…" in chat, or the Tools tab, generates a small self-contained web
+  tool (checklist / planner / tracker / calculator / form). Architecture:
+  - Codegen (`agent-core/src/tools/builder.ts`) talks straight to the model
+    (like extraction) — 1–2 completions for a full inline HTML doc; no plan
+    step (a small model couldn't do the structured call reliably). Name comes
+    from the HTML `<title>`.
+  - Tools are served from a **separate HTTP server** (`tools/server.ts`, port
+    `FAMILY_AGENT_TOOLS_PORT`, default 4174) with a strict CSP — a tool page
+    cannot reach agent-core's routes, Ollama, or the internet.
+  - "Open" runs the tool **inside the app** — single window, no external
+    browser. Desktop embeds it in a full-window `<iframe>` (cross-origin +
+    `sandbox` attr; the tools server's CSP `frame-ancestors` allows only the
+    local app / localhost, nothing remote). Android loads it in an in-app
+    `WebView` (`ToolWebViewScreen`, JS + DOM storage on so localStorage tools
+    work). No Tauri window/webview IPC — the only Tauri capability the app
+    uses is the directory picker.
+  - A tool that needs cross-device shared state ("the whole family can…") gets
+    a **Deno backend** run by `ToolSupervisor` under a deny-by-default sandbox:
+    `--no-prompt --deny-import --allow-net=127.0.0.1:<own port>
+    --allow-read=<tool dir> --allow-write=<tool dir>/data`, plus a v8 heap cap,
+    stdin-EOF self-exit, and an idle sweep. Verified in `test/tools.test.ts`: a
+    handler cannot read `/etc/hostname` or reach `:11434`. The model only ever
+    writes `handler.ts`; the harness is ours. `.toolchains/deno/` holds the
+    binary (auto-detected; `FAMILY_AGENT_DENO_PATH` overrides). No Deno → static
+    tools still work, shared-state ones fail with a clear message.
+  - Kill switch: `FAMILY_AGENT_TOOLS=0`.
+  - Reliability caveat: `gemma4:e2b` produces a working simple HTML tool most of
+    the time but not always; a bad build is marked `failed` with the error, and
+    a broken custom backend falls back to the built-in `/__state` persistence.
 - `db.ts` now runs column migrations on startup (an older DB missing a newer
   column no longer breaks every write).
 - Documents can be deleted, and a failed field-extraction shows a retry
@@ -155,3 +208,17 @@ Later changes (not part of the original autonomous session):
 - Scanned PDFs (no text layer) are now OCR'd page-by-page via the same
   tesseract.js path as a photo, capped at `PDF_OCR_MAX_PAGES`
   (`fileExtract.ts`). Text-layer PDFs still use the text layer.
+- Optional OCR upgrade: set `FAMILY_AGENT_OCR_MODEL` (or the desktop Settings
+  → "Document OCR" field) to a local Ollama vision model — `glm-ocr:latest`
+  is the tested one (`ollama pull glm-ocr:latest`, ~2.2 GB). When set,
+  scans/photos/image-PDFs are transcribed to Markdown by that model instead
+  of tesseract; a missing/unreachable/over-budget model falls back to
+  tesseract (verified: 404 and abort/timeout both fall back). Budget is
+  `FAMILY_AGENT_OCR_TIMEOUT_MS`, default 180s.
+  **Reality check:** on *this* CPU-only box GLM-OCR via Ollama 0.32.6 is
+  impractically slow — a trivial 300×80 test image did not finish a single
+  `/api/generate` call in 150s. The plumbing is correct and the fallback
+  works, but this needs a GPU to be usable. The setting defaults to blank
+  (built-in engine) for that reason. Also: OCR still runs on the synchronous
+  upload path, so with a vision model set an upload blocks up to the budget;
+  moving it to the background extraction pass is the real next step.

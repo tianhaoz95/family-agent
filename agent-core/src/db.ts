@@ -53,6 +53,22 @@ export interface ActivityRecord {
   detail: string;
 }
 
+export type ToolKind = "static" | "server";
+export type ToolStatus = "building" | "ready" | "failed";
+
+export interface ToolRecord {
+  id: string;
+  name: string;
+  description: string;
+  /** The user's original request, kept so a tool can be rebuilt/iterated on. */
+  prompt: string;
+  kind: ToolKind;
+  status: ToolStatus;
+  /** Failure detail when status === "failed". */
+  error: string | null;
+  createdAt: string;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -80,6 +96,17 @@ CREATE TABLE IF NOT EXISTS activity (
   actor TEXT NOT NULL,
   action TEXT NOT NULL,
   detail TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tools (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'building',
+  error TEXT,
+  created_at TEXT NOT NULL
 );
 `;
 
@@ -294,6 +321,73 @@ export class Store {
     const rows = this.db.prepare("SELECT * FROM documents ORDER BY created_at DESC").all() as any[];
     return rows.map(rowToDocument);
   }
+
+  // ---- builder tools ----
+  createTool(input: { name: string; description: string; prompt: string; kind: ToolKind }): ToolRecord {
+    const rec: ToolRecord = {
+      id: shortId(),
+      name: input.name,
+      description: input.description,
+      prompt: input.prompt,
+      kind: input.kind,
+      status: "building",
+      error: null,
+      createdAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare(
+        "INSERT INTO tools (id, name, description, prompt, kind, status, created_at) VALUES (?, ?, ?, ?, ?, 'building', ?)"
+      )
+      .run(rec.id, rec.name, rec.description, rec.prompt, rec.kind, rec.createdAt);
+    this.logActivity("builder-agent", "tool.building", `Building tool "${rec.name}"`);
+    return rec;
+  }
+
+  renameTool(id: string, name: string, description: string, kind: ToolKind): ToolRecord | undefined {
+    this.db
+      .prepare("UPDATE tools SET name = ?, description = ?, kind = ? WHERE id = ?")
+      .run(name, description, kind, id);
+    return this.getTool(id);
+  }
+
+  setToolStatus(id: string, status: ToolStatus, error?: string | null): ToolRecord | undefined {
+    this.db
+      .prepare("UPDATE tools SET status = ?, error = ? WHERE id = ?")
+      .run(status, error ?? null, id);
+    const tool = this.getTool(id);
+    if (tool && status === "ready") {
+      this.logActivity("builder-agent", "tool.ready", `Built tool "${tool.name}"`);
+    } else if (tool && status === "failed") {
+      this.logActivity("builder-agent", "tool.failed", `Could not build "${tool.name}": ${error ?? "unknown error"}`);
+    }
+    return tool;
+  }
+
+  getTool(id: string): ToolRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM tools WHERE id = ?").get(id) as any;
+    return row ? rowToTool_(row) : undefined;
+  }
+
+  listTools(): ToolRecord[] {
+    const rows = this.db.prepare("SELECT * FROM tools ORDER BY created_at DESC").all() as any[];
+    return rows.map(rowToTool_);
+  }
+
+  deleteTool(id: string): ToolRecord | undefined {
+    const tool = this.getTool(id);
+    if (!tool) return undefined;
+    this.db.prepare("DELETE FROM tools WHERE id = ?").run(id);
+    this.logActivity("user", "tool.deleted", `Deleted tool "${tool.name}"`);
+    return tool;
+  }
+
+  // A build that was still "building" when the process died will never finish.
+  failStaleBuildingTools(): number {
+    const info = this.db
+      .prepare("UPDATE tools SET status = 'failed', error = 'interrupted' WHERE status = 'building'")
+      .run();
+    return Number(info.changes ?? 0);
+  }
 }
 
 function rowToTask(r: any): TaskRecord {
@@ -317,5 +411,18 @@ function rowToDocument(r: any): DocumentRecord {
     createdAt: r.created_at,
     sourcePath: r.source_path ?? null,
     extractionStatus: (r.extraction_status as ExtractionStatus) ?? "pending",
+  };
+}
+
+function rowToTool_(r: any): ToolRecord {
+  return {
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    prompt: r.prompt,
+    kind: (r.kind as ToolKind) ?? "static",
+    status: (r.status as ToolStatus) ?? "failed",
+    error: r.error ?? null,
+    createdAt: r.created_at,
   };
 }

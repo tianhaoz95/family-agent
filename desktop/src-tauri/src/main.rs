@@ -50,6 +50,7 @@ fn spawn_agent_core() -> std::io::Result<Child> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AgentCoreProcess(Mutex::new(None)))
         .setup(|app| {
             match spawn_agent_core() {

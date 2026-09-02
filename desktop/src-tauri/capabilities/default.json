@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for the main window. The frontend only talks to agent-core over plain fetch() to localhost, so no Tauri IPC permissions beyond the core window are needed yet.",
+  "description": "Default capabilities for the single app window. The frontend talks to agent-core over plain fetch() to localhost; its only Tauri IPC is the native directory picker (dialog). Generated tools open in an in-window <iframe>, not a new window — no window/webview IPC needed.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-open"]
 }

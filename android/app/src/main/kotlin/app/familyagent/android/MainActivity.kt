@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.History
@@ -33,6 +34,8 @@ import app.familyagent.android.ui.ChatScreen
 import app.familyagent.android.ui.DocumentsScreen
 import app.familyagent.android.ui.SettingsScreen
 import app.familyagent.android.ui.TasksScreen
+import app.familyagent.android.ui.ToolWebViewScreen
+import app.familyagent.android.ui.ToolsScreen
 import app.familyagent.android.ui.theme.FamilyAgentTheme
 import kotlinx.coroutines.flow.first
 
@@ -40,6 +43,7 @@ private enum class Destination(val route: String, val label: String, val icon: a
     Chat("chat", "Chat", Icons.AutoMirrored.Filled.Chat),
     Tasks("tasks", "Tasks", Icons.Filled.CheckCircle),
     Documents("documents", "Documents", Icons.Filled.Description),
+    Tools("tools", "Tools", Icons.Filled.Build),
     Activity("activity", "Activity", Icons.Filled.History),
     Settings("settings", "Settings", Icons.Filled.Settings),
 }
@@ -118,6 +122,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                             when (dest) {
                                 Destination.Tasks -> viewModel.refreshTasks()
                                 Destination.Documents -> viewModel.refreshDocuments()
+                                Destination.Tools -> viewModel.refreshTools()
                                 Destination.Activity -> viewModel.refreshActivity()
                                 else -> {}
                             }
@@ -150,6 +155,20 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                     onDelete = viewModel::deleteDocument,
                     onRetry = viewModel::retryExtraction,
                 )
+            }
+            composable(Destination.Tools.route) {
+                ToolsScreen(
+                    tools = state.tools,
+                    status = state.toolStatus,
+                    toolsBaseUrl = state.toolsBaseUrl,
+                    onBuild = viewModel::buildTool,
+                    onDelete = viewModel::deleteTool,
+                    onOpen = { url -> navController.navigate("toolview/" + android.net.Uri.encode(url)) },
+                )
+            }
+            composable("toolview/{url}") { entry ->
+                val url = android.net.Uri.decode(entry.arguments?.getString("url") ?: "")
+                ToolWebViewScreen(url = url, onClose = { navController.popBackStack() })
             }
             composable(Destination.Activity.route) {
                 ActivityScreen(state.activity)

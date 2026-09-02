@@ -65,6 +65,19 @@ class FamilyAgentApiTest {
     }
 
     @Test
+    fun `chat omits images when none attached, includes them when present`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"reply":"hi"}"""))
+        api.chat("hello")
+        val plain = server.takeRequest().body.readUtf8()
+        assertEquals("""{"message":"hello"}""", plain)
+
+        server.enqueue(MockResponse().setBody("""{"reply":"a cat"}"""))
+        api.chat("what is this?", listOf("data:image/jpeg;base64,AAAA"))
+        val withImg = server.takeRequest().body.readUtf8()
+        assertTrue(withImg.contains(""""images":["data:image/jpeg;base64,AAAA"]"""))
+    }
+
+    @Test
     fun `non-2xx response throws ApiException with useful message`() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
         try {

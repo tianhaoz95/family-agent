@@ -26,6 +26,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg>
             <span class="nav-label">Documents</span>
           </button>
+          <button class="nav-item" data-view="tools" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/></svg>
+            <span class="nav-label">Tools</span>
+          </button>
           <button class="nav-item" data-view="activity" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
             <span class="nav-label">Activity</span>
@@ -56,12 +60,16 @@
               <p class="chat-empty-hint">Try “Remind me to renew the car registration by Nov 1” or “What documents do I have?”</p>
             </div>
           </div>
+          <div id="chat-attachments" class="chat-attachments" hidden></div>
           <form id="chat-form" class="chat-form">
+            <input id="chat-image-input" type="file" accept="image/*" multiple hidden />
+            <button type="button" id="chat-attach-btn" class="chat-attach-btn" title="Attach image" aria-label="Attach image">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
             <textarea
               id="chat-input"
-              placeholder="e.g. Remind me to renew the car registration by Nov 1"
+              placeholder="Ask a question, or attach a photo or screenshot"
               rows="1"
-              required
             ></textarea>
             <button type="submit">Send</button>
           </form>
@@ -114,6 +122,22 @@
           <ul id="document-list" class="document-list"></ul>
         </section>
 
+        <section id="view-tools" class="view" aria-label="Tools">
+          <div class="view-header">
+            <h1>Tools</h1>
+            <p class="view-sub">
+              Ask the agent to build a small web tool to help finish a task — a checklist,
+              planner, tracker, calculator. Generated locally, runs locally.
+            </p>
+          </div>
+          <form id="tool-form" class="inline-form">
+            <input id="tool-prompt" type="text" placeholder="e.g. a tool to split our vacation budget between 4 people" required />
+            <button type="submit">Build</button>
+          </form>
+          <p id="tool-status" class="settings-hint" role="status"></p>
+          <ul id="tool-list" class="tool-list"></ul>
+        </section>
+
         <section id="view-activity" class="view" aria-label="Activity">
           <div class="view-header">
             <h1>Activity</h1>
@@ -129,13 +153,26 @@
           </div>
 
           <div class="settings-section">
-            <h3>Model</h3>
-            <p class="settings-readonly" id="settings-model">—</p>
-            <p class="settings-hint">Set via <code>FAMILY_AGENT_MODEL</code>; restart the app to change.</p>
+            <h3>Chat model</h3>
+            <p class="settings-hint">
+              The Ollama model the assistant thinks with. Must support tool-calling.
+            </p>
+            <form id="settings-model-form" class="inline-form">
+              <select id="settings-model-select"></select>
+              <button type="submit">Save</button>
+            </form>
+            <p id="settings-model-status" class="settings-hint" role="status"></p>
 
             <h3>Ollama address</h3>
-            <p class="settings-readonly" id="settings-ollama-url">—</p>
-            <p class="settings-hint">Set via <code>OLLAMA_BASE_URL</code>; restart the app to change.</p>
+            <p class="settings-hint">
+              Where Ollama is running. Usually <code>http://127.0.0.1:11434</code>; point
+              it at another machine on your home network to run inference there.
+            </p>
+            <form id="settings-ollama-form" class="inline-form">
+              <input id="settings-ollama-url-input" type="url" placeholder="http://127.0.0.1:11434" required />
+              <button type="submit">Save</button>
+            </form>
+            <p id="settings-ollama-status" class="settings-hint" role="status"></p>
 
             <h3>Watched folder</h3>
             <p class="settings-hint">
@@ -144,13 +181,51 @@
             </p>
             <form id="settings-form" class="inline-form">
               <input id="settings-inbox-dir" type="text" placeholder="/path/to/watched-folder" required />
+              <button type="button" id="settings-inbox-browse" class="btn-ghost" hidden>Browse…</button>
               <button type="submit">Save</button>
             </form>
             <p id="settings-status" class="settings-hint" role="status"></p>
+
+            <h3>Document OCR</h3>
+            <p class="settings-hint">
+              Currently: <strong id="settings-ocr-active">built-in engine</strong>.
+              The built-in engine (Tesseract) needs no setup. For higher-quality OCR of
+              scans and photos, pick a local Ollama vision model such as
+              <code>glm-ocr:latest</code> (pull it first with
+              <code>ollama pull glm-ocr:latest</code>). Nothing leaves your machine either
+              way. Best on a machine with a GPU: without one a page can take minutes, and
+              an upload that runs over budget falls back to the built-in engine.
+            </p>
+            <form id="settings-ocr-form" class="inline-form">
+              <select id="settings-ocr-model-select"></select>
+              <button type="submit">Save</button>
+            </form>
+            <p id="settings-ocr-status" class="settings-hint" role="status"></p>
           </div>
         </section>
+
+        <!-- A generated tool opens here, filling the content area — the
+             sidebar stays visible and usable. The iframe is a cross-origin
+             sandbox, so the tool can't touch the app. -->
+        <div id="tool-viewer" class="tool-viewer" hidden>
+          <header class="tool-viewer-bar">
+            <button id="tool-viewer-close" type="button" class="tool-viewer-back">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+              <span>Tools</span>
+            </button>
+            <span id="tool-viewer-title" class="tool-viewer-title"></span>
+          </header>
+          <iframe
+            id="tool-frame"
+            class="tool-frame"
+            title="Tool"
+            sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-same-origin"
+            referrerpolicy="no-referrer"
+          ></iframe>
+        </div>
       </main>
     </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

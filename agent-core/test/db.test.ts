@@ -131,4 +131,30 @@ describe("Store", () => {
     expect(s2.listTasks().map((t) => t.title)).toContain("Persisted task");
     s2.close();
   });
+
+  it("tracks builder tools through their lifecycle", () => {
+    const tool = store.createTool({ name: "Packing list", description: "pack a bag", prompt: "make me a packing list", kind: "static" });
+    expect(tool.status).toBe("building");
+    expect(store.listTools()).toHaveLength(1);
+
+    store.renameTool(tool.id, "Beach Packing", "for the beach", "static");
+    store.setToolStatus(tool.id, "ready");
+    expect(store.getTool(tool.id)).toMatchObject({ name: "Beach Packing", status: "ready" });
+
+    expect(store.deleteTool(tool.id)?.id).toBe(tool.id);
+    expect(store.getTool(tool.id)).toBeUndefined();
+    expect(store.listActivity().some((a) => a.action === "tool.deleted")).toBe(true);
+  });
+
+  it("fails builds left mid-flight on startup", () => {
+    const path = `/tmp/family-agent-tools-${Date.now()}.db`;
+    const s1 = new Store(path);
+    s1.createTool({ name: "x", description: "x", prompt: "x", kind: "static" });
+    s1.close();
+    const s2 = new Store(path);
+    expect(s2.failStaleBuildingTools()).toBe(1);
+    expect(s2.listTools()[0]).toMatchObject({ status: "failed", error: "interrupted" });
+    s2.close();
+    unlinkSync(path);
+  });
 });
