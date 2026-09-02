@@ -30,6 +30,13 @@ export const config = {
   // Mutated at runtime by PUT /settings when not env-locked — read fresh.
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? persisted.ollamaBaseUrl ?? "http://127.0.0.1:11434",
   model: process.env.FAMILY_AGENT_MODEL ?? persisted.model ?? "gemma4:e2b",
+  // How long Ollama keeps the model resident in memory after a request
+  // (same knob as Ollama's own OLLAMA_KEEP_ALIVE, read here for the client
+  // param). The first chat after an idle gap pays a multi-second model
+  // reload once this expires, so we hold it a good while; "-1" never
+  // unloads (RAM/VRAM pinned while idle), "0" unloads immediately.
+  // Accepts a Go duration string or a number of seconds.
+  ollamaKeepAlive: process.env.OLLAMA_KEEP_ALIVE ?? "30m",
   dataDir,
   // Display name for this master node, shown on the login screen and
   // advertised over mDNS so a phone can pick the right family server.

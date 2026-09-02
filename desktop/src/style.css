@@ -608,7 +608,6 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   padding: 8px 8px 8px 8px;
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 
 .chat-attach-btn {
@@ -656,10 +655,8 @@ textarea {
   cursor: default;
 }
 
-.chat-form:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-ring);
-}
+/* No focus ring on the composer — the caret in the field is enough, and the
+   blue glow read as noisy against the warm-paper canvas. */
 
 .chat-form textarea {
   flex: 1;
@@ -672,8 +669,10 @@ textarea {
   padding: 7px 0;
   max-height: 7rem;
 }
-.chat-form textarea:focus {
+.chat-form textarea:focus,
+.chat-form textarea:focus-visible {
   outline: none;
+  box-shadow: none;
 }
 .chat-form textarea::placeholder {
   color: var(--text-faint);

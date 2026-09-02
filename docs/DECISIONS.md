@@ -579,3 +579,38 @@ search box is wired into either UI — that needs a design pass against the two
 independent design systems and live-app verification, which is a poor fit for
 an unattended session. The agent path — the thing actually asked about — is
 complete end to end.
+
+## Warming the model so the first chat isn't slow
+
+The first chat turn after launching was noticeably slower than every turn
+after it. Two separate one-time costs, both on Ollama's side:
+
+1. **Model cold-load.** Ollama unloads an idle model after `keep_alive`
+   (default 5 min). The next request reloads it — several seconds for
+   gemma4:e2b, more on a CPU-only box.
+2. **System-prompt prefill.** The planner prompt (~700 tokens) plus the
+   deepagents tool schemas get run through the model before the first token.
+   Ollama (llama.cpp) caches the KV for a matching prompt *prefix* and reuses
+   it on the next request automatically — so this is paid once, then skipped,
+   until the slot is evicted.
+
+Nothing to "enable" — prefix caching is already on. Two changes make the
+first real turn fast instead:
+
+- **`config.ollamaKeepAlive`** (`OLLAMA_KEEP_ALIVE`, default `"30m"`) is
+  passed as `keepAlive` on every `ChatOllama` (`model.ts`). Holds the model
+  resident across an interactive session; `"-1"` never unloads (RAM/VRAM
+  pinned while idle), `"0"` reverts to unload-immediately.
+- **`warmup.ts`** — on startup (and after a model change, via the
+  `onModelChange` hook) `main()` fires one throwaway `POST /api/chat` with
+  the planner system prompt and `num_predict: 1`. That loads the model and
+  primes the prefix KV cache before anyone sends a message. Fire-and-forget
+  and fully best-effort: if Ollama isn't up yet or the model is still
+  pulling, it logs and moves on — startup never blocks on it, and the first
+  turn is just back to being slow.
+
+The warmup uses the planner prompt only. deepagents appends its tool schemas
+after it and each subagent has its own system prompt; those tails still
+prefill on first use, but they're small next to the base prompt and the
+model itself is already resident by then. Warming all four prompts would
+just thrash a single KV slot at startup for no real gain.

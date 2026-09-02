@@ -9,5 +9,8 @@ export function createLocalModel(temperature = 0): ChatOllama {
     baseUrl: config.ollamaBaseUrl,
     model: config.model,
     temperature,
+    // Keep the model loaded between turns so only the very first chat after
+    // a cold start pays the load cost — see warmup.ts, which primes that.
+    keepAlive: config.ollamaKeepAlive,
   });
 }

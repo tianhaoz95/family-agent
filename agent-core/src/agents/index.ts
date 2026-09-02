@@ -6,7 +6,7 @@ import type { ScopedStore } from "../db.js";
 import { makeTaskTools } from "./taskTools.js";
 import { makeDocumentTools } from "./documentTools.js";
 
-const PLANNER_PROMPT = `You are the coordinating agent for a local-first family
+export const PLANNER_PROMPT = `You are the coordinating agent for a local-first family
 organization assistant. You never see raw documents or personal detail yourself
 if you can help it — delegate to the "task-agent" subagent for anything to do
 with to-dos/reminders, and to the "document-agent" subagent for anything to do

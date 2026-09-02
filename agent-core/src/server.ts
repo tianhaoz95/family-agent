@@ -7,6 +7,7 @@ import { config, dbPath, envLocked, userInboxDir } from "./config.js";
 import { buildFamilyAgent, askFamilyAgent, type FamilyAgent } from "./agents/index.js";
 import { extractDocument } from "./agents/extraction.js";
 import { createLocalModel } from "./model.js";
+import { warmModel } from "./warmup.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { persistSettings } from "./settingsFile.js";
 import { verifyPassword, bearerToken } from "./auth.js";
@@ -702,6 +703,7 @@ async function main() {
       watcherModel = createLocalModel();
       for (const userId of [...watchers.keys()]) await startWatcherFor(userId);
       console.log(`model config changed — now using ${config.model} at ${config.ollamaBaseUrl}`);
+      void warmModel(); // re-prime: the new model is cold and its prefix uncached
     },
     onUserCreated: async (user: UserRecord) => {
       await startWatcherFor(user.id);
@@ -752,6 +754,10 @@ async function main() {
   for (const user of store.listUsers()) await startWatcherFor(user.id);
   console.log(`watching ${watchers.size} account inbox folder(s)`);
   await publishMdns();
+
+  // Load + prefill the planner prompt now so the first chat turn is fast.
+  // Fire-and-forget — startup must not block on Ollama being reachable.
+  void warmModel();
 
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, async () => {
