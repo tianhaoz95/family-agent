@@ -154,6 +154,9 @@ export interface StickyNote {
   userId: string;
   text: string;
   color: string;
+  /** Position on the corkboard, CSS px from its top-left. */
+  x: number;
+  y: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -406,9 +409,12 @@ export const api = {
 
   // ---- sticky notes ----
   listNotes: (scope: NoteScope) => request<{ notes: StickyNote[] }>(`/notes?scope=${scope}`),
-  createNote: (scope: NoteScope, text: string, color?: string) =>
-    request<{ note: StickyNote }>("/notes", { method: "POST", body: JSON.stringify({ scope, text, color }) }),
-  updateNote: (id: string, patch: { text?: string; color?: string }) =>
+  createNote: (scope: NoteScope, text: string, color?: string, pos?: { x: number; y: number }) =>
+    request<{ note: StickyNote }>("/notes", {
+      method: "POST",
+      body: JSON.stringify({ scope, text, color, ...pos }),
+    }),
+  updateNote: (id: string, patch: { text?: string; color?: string; x?: number; y?: number }) =>
     request<{ note: StickyNote }>(`/notes/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteNote: (id: string) => request<{ note: StickyNote }>(`/notes/${id}`, { method: "DELETE" }),
   listTools: () => request<{ tools: Tool[] }>("/tools"),

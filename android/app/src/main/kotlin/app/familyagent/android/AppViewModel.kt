@@ -594,20 +594,32 @@ class AppViewModel(
         refreshNotes(scope)
     }
 
-    fun addNote(text: String, color: String) {
-        if (text.isBlank()) return
+    /** "+ Add" — pins a blank note the user then fills in. [onCreated] gets the new note. */
+    fun addBlankNote(x: Float, y: Float, onCreated: (StickyNote) -> Unit) {
         viewModelScope.launch {
-            apiCall { api.createNote(_state.value.noteScope, text.trim(), color) }.onSuccess { refreshNotes() }
+            apiCall { api.createNote(_state.value.noteScope, "", null, x, y) }.onSuccess { note ->
+                _state.value = _state.value.copy(notes = _state.value.notes + note)
+                onCreated(note)
+            }
         }
     }
 
     fun editNote(id: String, text: String?, color: String?) {
         viewModelScope.launch {
-            apiCall { api.updateNote(id, text, color) }.onSuccess { refreshNotes() }
+            apiCall { api.updateNote(id, text = text, color = color) }.onSuccess { refreshNotes() }
         }
     }
 
+    /** A drag ended — persist the new position, keeping the local copy in step. */
+    fun moveNote(id: String, x: Float, y: Float) {
+        _state.value = _state.value.copy(
+            notes = _state.value.notes.map { if (it.id == id) it.copy(x = x, y = y) else it },
+        )
+        viewModelScope.launch { apiCall { api.updateNote(id, x = x, y = y) } }
+    }
+
     fun deleteNote(id: String) {
+        _state.value = _state.value.copy(notes = _state.value.notes.filterNot { it.id == id })
         viewModelScope.launch {
             apiCall { api.deleteNote(id) }.onSuccess { refreshNotes() }
         }

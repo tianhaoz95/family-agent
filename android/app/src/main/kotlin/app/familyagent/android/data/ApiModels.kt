@@ -274,6 +274,9 @@ data class StickyNote(
     val userId: String,
     val text: String,
     val color: String = "butter",
+    /** Position on the corkboard, in dp from its top-left. */
+    val x: Float = 0f,
+    val y: Float = 0f,
     val createdAt: String,
     val updatedAt: String,
 )
@@ -285,7 +288,18 @@ data class NotesResponse(val notes: List<StickyNote>)
 data class NoteResponse(val note: StickyNote)
 
 @Serializable
-data class CreateNoteRequest(val scope: String, val text: String, val color: String? = null)
+data class CreateNoteRequest(
+    val scope: String,
+    val text: String,
+    val color: String? = null,
+    val x: Float? = null,
+    val y: Float? = null,
+)
 
 @Serializable
-data class UpdateNoteRequest(val text: String? = null, val color: String? = null)
+data class UpdateNoteRequest(
+    val text: String? = null,
+    val color: String? = null,
+    val x: Float? = null,
+    val y: Float? = null,
+)

@@ -951,4 +951,31 @@ describe("HTTP API", () => {
     ).toBe(404);
     expect((await asKid({ method: "DELETE", url: `/notes/${privId}` })).statusCode).toBe(404);
   });
+
+  it("POST /notes accepts a blank note; PATCH /notes moves it by position", async () => {
+    const created = await inject({
+      method: "POST",
+      url: "/notes",
+      payload: { scope: "shared", x: 40, y: 60 },
+    });
+    expect(created.statusCode).toBe(200);
+    const note = created.json().note;
+    expect(note.text).toBe("");
+    expect({ x: note.x, y: note.y }).toEqual({ x: 40, y: 60 });
+
+    const moved = await inject({
+      method: "PATCH",
+      url: `/notes/${note.id}`,
+      payload: { x: 200, y: 150 },
+    });
+    expect(moved.statusCode).toBe(200);
+    expect({ x: moved.json().note.x, y: moved.json().note.y }).toEqual({ x: 200, y: 150 });
+
+    // Empty patch is still rejected.
+    expect((await inject({ method: "PATCH", url: `/notes/${note.id}`, payload: {} })).statusCode).toBe(400);
+    // Non-finite coordinates are rejected.
+    expect(
+      (await inject({ method: "PATCH", url: `/notes/${note.id}`, payload: { x: 1e9 } })).statusCode
+    ).toBe(400);
+  });
 });

@@ -204,6 +204,9 @@ export interface StickyNoteRecord {
   userId: string;
   text: string;
   color: string;
+  /** Position on the corkboard, in CSS px from the board's top-left. */
+  x: number;
+  y: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -308,6 +311,8 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
   user_id TEXT NOT NULL,
   text TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT 'butter',
+  pos_x REAL NOT NULL DEFAULT 0,
+  pos_y REAL NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -344,6 +349,17 @@ const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   // Original-file preview: uploads keep their bytes on disk; this records the
   // MIME so the preview route can serve the right Content-Type.
   { table: "documents", column: "original_mime", ddl: "ALTER TABLE documents ADD COLUMN original_mime TEXT" },
+  // Corkboard: sticky notes carry an (x, y) position. A DB from before this
+  // has none — add both columns and scatter the existing notes so they don't
+  // all land on top of each other at (0, 0).
+  {
+    table: "sticky_notes",
+    column: "pos_x",
+    ddl:
+      "ALTER TABLE sticky_notes ADD COLUMN pos_x REAL NOT NULL DEFAULT 0; " +
+      "ALTER TABLE sticky_notes ADD COLUMN pos_y REAL NOT NULL DEFAULT 0; " +
+      "UPDATE sticky_notes SET pos_x = (abs(random()) % 460) + 16, pos_y = (abs(random()) % 320) + 16",
+  },
 ];
 
 export class Store {
@@ -1472,15 +1488,18 @@ export class ScopedStore {
   // `user_id` column just records who authored each note.
 
   listStickyNotes(scope: NoteScope): StickyNoteRecord[] {
+    // Ascending by updated_at: on a corkboard the render order *is* the
+    // stacking order, so the note you most recently touched (moved or edited)
+    // paints last — on top — which is the physical behaviour.
     const rows = (
       scope === "private"
         ? this.db
             .prepare(
-              "SELECT * FROM sticky_notes WHERE scope = 'private' AND user_id = ? ORDER BY updated_at DESC"
+              "SELECT * FROM sticky_notes WHERE scope = 'private' AND user_id = ? ORDER BY updated_at ASC"
             )
             .all(this.userId)
         : this.db
-            .prepare("SELECT * FROM sticky_notes WHERE scope = 'shared' ORDER BY updated_at DESC")
+            .prepare("SELECT * FROM sticky_notes WHERE scope = 'shared' ORDER BY updated_at ASC")
             .all()
     ) as any[];
     return rows.map(rowToStickyNote);
@@ -1495,37 +1514,54 @@ export class ScopedStore {
     return note;
   }
 
-  createStickyNote(input: { scope: NoteScope; text: string; color?: string }): StickyNoteRecord {
+  createStickyNote(input: {
+    scope: NoteScope;
+    text: string;
+    color?: string;
+    x?: number;
+    y?: number;
+  }): StickyNoteRecord {
     const now = new Date().toISOString();
+    // No position given (a fresh "+ Add" note, or a note the agent pinned) —
+    // scatter it near the top-left so it's on-screen at any board width, but
+    // not exactly on top of the last one.
+    const scatter = (span: number) => Math.round(16 + Math.random() * span);
     const rec: StickyNoteRecord = {
       id: shortId(),
       scope: input.scope,
       userId: this.userId,
       text: input.text,
       color: input.color?.trim() || "butter",
+      x: input.x ?? scatter(460),
+      y: input.y ?? scatter(320),
       createdAt: now,
       updatedAt: now,
     };
     this.db
       .prepare(
-        "INSERT INTO sticky_notes (id, scope, user_id, text, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO sticky_notes (id, scope, user_id, text, color, pos_x, pos_y, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
       )
-      .run(rec.id, rec.scope, rec.userId, rec.text, rec.color, rec.createdAt, rec.updatedAt);
+      .run(rec.id, rec.scope, rec.userId, rec.text, rec.color, rec.x, rec.y, rec.createdAt, rec.updatedAt);
     this.logActivity(
       "user",
       "note.created",
-      `Added a ${rec.scope} sticky note: "${rec.text.slice(0, 80)}"`
+      rec.text.trim()
+        ? `Added a ${rec.scope} sticky note: "${rec.text.slice(0, 80)}"`
+        : `Added a blank ${rec.scope} sticky note`
     );
     return rec;
   }
 
-  updateStickyNote(id: string, patch: { text?: string; color?: string }): StickyNoteRecord | undefined {
+  updateStickyNote(
+    id: string,
+    patch: { text?: string; color?: string; x?: number; y?: number }
+  ): StickyNoteRecord | undefined {
     const note = this.getStickyNote(id);
     if (!note) return undefined;
     // Shared notes: any member can edit. Private notes: getStickyNote already
     // guaranteed ownership.
     const sets: string[] = [];
-    const values: string[] = [];
+    const values: (string | number)[] = [];
     if (patch.text !== undefined) {
       sets.push("text = ?");
       values.push(patch.text);
@@ -1534,12 +1570,23 @@ export class ScopedStore {
       sets.push("color = ?");
       values.push(patch.color.trim() || "butter");
     }
+    if (patch.x !== undefined) {
+      sets.push("pos_x = ?");
+      values.push(patch.x);
+    }
+    if (patch.y !== undefined) {
+      sets.push("pos_y = ?");
+      values.push(patch.y);
+    }
     if (sets.length === 0) return note;
     const now = new Date().toISOString();
     sets.push("updated_at = ?");
     values.push(now);
     this.db.prepare(`UPDATE sticky_notes SET ${sets.join(", ")} WHERE id = ?`).run(...values, id);
-    this.logActivity("user", "note.updated", `Edited a ${note.scope} sticky note`);
+    // A drag (position only) isn't worth an activity-log line — it'd flood it.
+    if (patch.text !== undefined || patch.color !== undefined) {
+      this.logActivity("user", "note.updated", `Edited a ${note.scope} sticky note`);
+    }
     return this.getStickyNote(id);
   }
 
@@ -1628,6 +1675,8 @@ function rowToStickyNote(r: any): StickyNoteRecord {
     userId: r.user_id,
     text: r.text,
     color: r.color ?? "butter",
+    x: typeof r.pos_x === "number" ? r.pos_x : 0,
+    y: typeof r.pos_y === "number" ? r.pos_y : 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };

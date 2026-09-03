@@ -269,22 +269,18 @@
           <div class="view-header view-header--row">
             <div>
               <h1>Board</h1>
-              <p class="view-sub">Sticky notes for the whole family, or just for you. The assistant can read and add notes.</p>
+              <p class="view-sub">A corkboard of sticky notes for the whole family, or just for you. Drag notes to rearrange them; the assistant can read and add notes.</p>
             </div>
-            <div class="seg-toggle" role="tablist" aria-label="Which board">
-              <button type="button" data-board="shared" class="is-active" role="tab">Shared</button>
-              <button type="button" data-board="private" role="tab">Mine</button>
+            <div class="board-actions">
+              <div class="seg-toggle" role="tablist" aria-label="Which board">
+                <button type="button" data-board="shared" class="is-active" role="tab">Shared</button>
+                <button type="button" data-board="private" role="tab">Mine</button>
+              </div>
+              <button type="button" id="note-add" class="board-add">+ Add note</button>
             </div>
           </div>
-          <form id="note-form" class="note-form">
-            <textarea id="note-text" placeholder="Write a note…" rows="2" required></textarea>
-            <div class="note-form-foot">
-              <div class="note-colors" id="note-colors" role="radiogroup" aria-label="Note colour"></div>
-              <button type="submit">Add note</button>
-            </div>
-          </form>
           <p id="note-status" class="settings-hint" role="status"></p>
-          <ul id="note-grid" class="note-grid"></ul>
+          <div id="note-board" class="note-board"></div>
         </section>
 
         <section id="view-documents" class="view" aria-label="Documents">

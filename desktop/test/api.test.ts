@@ -286,6 +286,25 @@ describe("api client", () => {
     expect(String(get.mock.calls[0][0])).toContain("/notes?scope=private");
   });
 
+  it("createNote() forwards a position; updateNote() sends x/y for a drag", async () => {
+    const post = mockFetchOnce(200, { note: { id: "n1" } });
+    await api.createNote("shared", "", "sky", { x: 40, y: 60 });
+    expect(JSON.parse((post.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      scope: "shared",
+      text: "",
+      color: "sky",
+      x: 40,
+      y: 60,
+    });
+    vi.unstubAllGlobals();
+    const patch = mockFetchOnce(200, { note: { id: "n1" } });
+    await api.updateNote("n1", { x: 200, y: 150 });
+    const [url, init] = patch.mock.calls[0];
+    expect(String(url)).toContain("/notes/n1");
+    expect((init as RequestInit).method).toBe("PATCH");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ x: 200, y: 150 });
+  });
+
   it("chat() surfaces references from the response", async () => {
     mockFetchOnce(200, { reply: "here", references: [{ type: "document", id: "d1", label: "bill.txt" }] });
     const res = await api.chat("what's the bill");

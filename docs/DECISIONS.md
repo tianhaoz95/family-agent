@@ -882,3 +882,39 @@ name, by)` records `by` in the activity log so an agent-sourced name is
 distinguishable from a hand-typed one. The FTS mirror follows the rename
 through the existing `documents` update trigger. Original bytes on disk are
 keyed by doc id, not filename, so a rename doesn't disturb the preview path.
+
+## Sticky board → physical corkboard
+
+v1 of the board was a CSS grid of cards with a "write a note" textarea above
+it. The ask was for something that feels like a real board.
+
+- **Position is a first-class field.** `sticky_notes` gains `pos_x` / `pos_y`
+  (REAL, px from the board's top-left). A DB from before this has the columns
+  added and its notes **scattered** (`UPDATE … random()`) rather than stacked
+  at (0, 0). `createStickyNote` scatters any note given no position (a fresh
+  "+ Add", or one the `notes-agent` pins). A position-only `updateStickyNote`
+  (a drag) is **not** written to the activity log — a drag every few px would
+  bury everything else.
+- **No text input.** "+ Add note" `POST`s a **blank** note (`text: ""` — the
+  route's min-length is gone) that opens straight into an in-place editor.
+  Blur it while still blank and the client deletes it, so the board doesn't
+  fill with empty squares.
+- **Stacking = recency.** `listStickyNotes` switched to `ORDER BY updated_at
+  ASC`; the client paints in that order, so the note you most recently moved or
+  edited ends up on top — the physical behaviour.
+- **The one shadow in the app.** `DESIGN.md` is hairline-border / no-shadow.
+  A sticky note that doesn't lift off the board doesn't read as a physical
+  object, so `.note-card` (desktop) and the Compose note (Android) carry a
+  small drop shadow + a deterministic ±2.7° tilt + a drawn pin. This is a
+  deliberate, contained exception to the no-shadow rule — nothing else gains a
+  shadow.
+- **Coordinates are shared as-is** between desktop (px) and Android (dp). They
+  don't map perfectly across very different screen widths, so each client
+  clamps a note into its own board on load (and on resize/rotation). Good
+  enough for a family board; a per-device layout would be overkill.
+- Desktop drag is pointer-events with a 4px move threshold that doubles as
+  click-to-edit; a poll mid-drag/edit is suppressed (`boardBusy`). Android uses
+  `detectDragGestures` with optimistic local state so the note doesn't snap
+  back before the `PATCH` lands. `test/stickyNotes.test.ts` +
+  `server.routes.test.ts` cover blank notes, position round-trips, the
+  no-log-on-drag rule, and coordinate validation.

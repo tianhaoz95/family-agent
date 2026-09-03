@@ -251,14 +251,26 @@ class FamilyAgentApi(
     suspend fun listNotes(scope: String): List<StickyNote> =
         json.decodeFromString<NotesResponse>(get("/notes?scope=${scope.encodeQuery()}")).notes
 
-    suspend fun createNote(scope: String, text: String, color: String?): StickyNote =
+    suspend fun createNote(
+        scope: String,
+        text: String,
+        color: String?,
+        x: Float? = null,
+        y: Float? = null,
+    ): StickyNote =
         json.decodeFromString<NoteResponse>(
-            send("POST", "/notes", json.encodeToString(CreateNoteRequest(scope, text, color)))
+            send("POST", "/notes", json.encodeToString(CreateNoteRequest(scope, text, color, x, y)))
         ).note
 
-    suspend fun updateNote(id: String, text: String?, color: String?): StickyNote =
+    suspend fun updateNote(
+        id: String,
+        text: String? = null,
+        color: String? = null,
+        x: Float? = null,
+        y: Float? = null,
+    ): StickyNote =
         json.decodeFromString<NoteResponse>(
-            send("PATCH", "/notes/$id", json.encodeToString(UpdateNoteRequest(text, color)))
+            send("PATCH", "/notes/$id", json.encodeToString(UpdateNoteRequest(text, color, x, y)))
         ).note
 
     suspend fun deleteNote(id: String) {

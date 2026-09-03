@@ -220,6 +220,41 @@ class FamilyAgentApiTest {
     }
 
     @Test
+    fun `createNote sends a blank note with a position`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"note":{"id":"N0000001","scope":"shared","userId":"U1","text":"","color":"butter","x":24.0,"y":24.0,"createdAt":"2026-09-01T00:00:00.000Z","updatedAt":"2026-09-01T00:00:00.000Z"}}"""
+            )
+        )
+        val note = api.createNote("shared", "", null, 24f, 24f)
+        assertEquals(24f, note.x)
+
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/notes", recorded.path)
+        val body = recorded.body.readUtf8()
+        assertTrue(body.contains("\"x\":24"))
+        assertTrue(body.contains("\"y\":24"))
+    }
+
+    @Test
+    fun `updateNote PATCHes only the position for a drag`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"note":{"id":"N0000001","scope":"shared","userId":"U1","text":"hi","color":"butter","x":120.0,"y":80.0,"createdAt":"2026-09-01T00:00:00.000Z","updatedAt":"2026-09-01T00:00:00.000Z"}}"""
+            )
+        )
+        api.updateNote("N0000001", x = 120f, y = 80f)
+
+        val recorded = server.takeRequest()
+        assertEquals("PATCH", recorded.method)
+        assertEquals("/notes/N0000001", recorded.path)
+        val body = recorded.body.readUtf8()
+        assertTrue(body.contains("\"x\":120"))
+        assertTrue(!body.contains("\"text\""))
+    }
+
+    @Test
     fun `documents response decodes extraction fields`() = runBlocking {
         server.enqueue(
             MockResponse().setBody(

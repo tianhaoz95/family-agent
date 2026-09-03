@@ -2135,12 +2135,12 @@ function autoGrow(ta: HTMLTextAreaElement) {
   });
 }
 
-// ---------- Board (sticky notes) ----------
+// ---------- Board (physical corkboard of sticky notes) ----------
 const NOTE_COLORS = ["butter", "mint", "sky", "blush", "lilac"] as const;
-const noteGrid = document.getElementById("note-grid")!;
-const noteForm = document.getElementById("note-form") as HTMLFormElement;
-const noteText = document.getElementById("note-text") as HTMLTextAreaElement;
-const noteColorsEl = document.getElementById("note-colors")!;
+const NOTE_W = 176; // keep in sync with .note-card width in style.css
+const NOTE_H = 176;
+const noteBoard = document.getElementById("note-board")!;
+const noteAddBtn = document.getElementById("note-add") as HTMLButtonElement;
 const noteStatus = document.getElementById("note-status")!;
 const boardToggle = Array.from(
   document.querySelectorAll<HTMLButtonElement>('.seg-toggle [data-board]')
@@ -2148,22 +2148,12 @@ const boardToggle = Array.from(
 
 let boardScope: NoteScope = "shared";
 let notes: StickyNote[] = [];
-let newNoteColor: string = NOTE_COLORS[0];
 let boardPollTimer: number | null = null;
-
-for (const color of NOTE_COLORS) {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.className = `note-swatch note-${color}` + (color === newNoteColor ? " is-active" : "");
-  b.dataset.color = color;
-  b.setAttribute("role", "radio");
-  b.setAttribute("aria-label", color);
-  b.addEventListener("click", () => {
-    newNoteColor = color;
-    for (const s of noteColorsEl.children) s.classList.toggle("is-active", (s as HTMLElement).dataset.color === color);
-  });
-  noteColorsEl.appendChild(b);
-}
+// A drag or an in-place edit is in progress — don't let a poll wipe the DOM
+// out from under it.
+let boardBusy = false;
+// A note we just created and want to drop straight into edit mode.
+let autoEditId: string | null = null;
 
 for (const btn of boardToggle) {
   btn.addEventListener("click", () => {
@@ -2173,91 +2163,210 @@ for (const btn of boardToggle) {
   });
 }
 
-function renderNotes() {
-  noteGrid.innerHTML = "";
-  if (notes.length === 0) {
-    noteGrid.innerHTML = `<li class="empty-state"><span>No notes on this board yet.</span></li>`;
-    return;
-  }
-  for (const n of notes) {
-    const li = document.createElement("li");
-    li.className = `note-card note-${n.color}`;
-    const body = document.createElement("div");
-    body.className = "note-card-text";
-    body.textContent = n.text;
-    body.title = "Click to edit";
-    body.addEventListener("click", () => startEditNote(li, n));
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "note-card-del";
-    del.setAttribute("aria-label", "Delete note");
-    del.innerHTML =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
-    del.addEventListener("click", async () => {
-      await api.deleteNote(n.id).catch(() => {});
-      await refreshNotes();
-    });
-    li.append(body, del);
-    noteGrid.appendChild(li);
-  }
+/** Deterministic small tilt (deg) so the board looks pinned-on, not gridded. */
+function noteTilt(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return ((h % 7) - 3) * 0.9; // -2.7°..+2.7°
 }
 
-function startEditNote(li: HTMLElement, n: StickyNote) {
-  li.innerHTML = "";
+function clampToBoard(x: number, y: number): { x: number; y: number } {
+  const maxX = Math.max(0, noteBoard.clientWidth - NOTE_W);
+  const maxY = Math.max(0, noteBoard.clientHeight - NOTE_H);
+  return { x: Math.min(Math.max(0, x), maxX), y: Math.min(Math.max(0, y), maxY) };
+}
+
+function renderBoard() {
+  if (boardBusy) return;
+  noteBoard.innerHTML = "";
+  if (notes.length === 0) {
+    const hint = document.createElement("p");
+    hint.className = "note-board-empty";
+    hint.textContent = 'Nothing pinned up yet. Hit "+ Add note".';
+    noteBoard.appendChild(hint);
+    return;
+  }
+  for (const n of notes) noteBoard.appendChild(makeNoteEl(n));
+}
+
+function makeNoteEl(n: StickyNote): HTMLElement {
+  const card = document.createElement("div");
+  card.className = `note-card note-${n.color}`;
+  card.dataset.id = n.id;
+  const { x, y } = clampToBoard(n.x, n.y);
+  card.style.left = `${x}px`;
+  card.style.top = `${y}px`;
+  card.style.setProperty("--tilt", `${noteTilt(n.id)}deg`);
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "note-card-del";
+  del.setAttribute("aria-label", "Remove note");
+  del.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    notes = notes.filter((m) => m.id !== n.id);
+    renderBoard();
+    await api.deleteNote(n.id).catch(() => {});
+    void refreshNotes();
+  });
+
+  const body = document.createElement("div");
+  body.className = "note-card-text";
+  if (n.text) {
+    body.textContent = n.text;
+  } else {
+    body.classList.add("is-placeholder");
+    body.textContent = "Type here…";
+  }
+
+  const palette = document.createElement("div");
+  palette.className = "note-card-palette";
+  for (const color of NOTE_COLORS) {
+    const sw = document.createElement("button");
+    sw.type = "button";
+    sw.className = `note-swatch note-${color}` + (color === n.color ? " is-active" : "");
+    sw.setAttribute("aria-label", color);
+    sw.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      n.color = color;
+      card.className = `note-card note-${color}`;
+      for (const s of palette.children) s.classList.toggle("is-active", s === sw);
+      await api.updateNote(n.id, { color }).catch(() => {});
+    });
+    palette.appendChild(sw);
+  }
+
+  card.append(del, body, palette);
+  wireNoteDrag(card, n, body);
+  if (autoEditId === n.id) {
+    autoEditId = null;
+    // Let the element land in the DOM before focusing the editor.
+    queueMicrotask(() => startEditNote(card, n, body));
+  }
+  return card;
+}
+
+// Pointer-drag that also acts as a click-to-edit when the pointer barely moves.
+function wireNoteDrag(card: HTMLElement, n: StickyNote, body: HTMLElement) {
+  card.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    if (t.closest(".note-card-del, .note-card-palette, textarea")) return;
+
+    const boardRect = noteBoard.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const originX = n.x;
+    const originY = n.y;
+    const grabX = e.clientX - boardRect.left - n.x;
+    const grabY = e.clientY - boardRect.top - n.y;
+    let moved = false;
+
+    boardBusy = true;
+    card.setPointerCapture(e.pointerId);
+    card.classList.add("is-dragging");
+
+    const onMove = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+      moved = true;
+      const p = clampToBoard(ev.clientX - boardRect.left - grabX, ev.clientY - boardRect.top - grabY);
+      n.x = p.x;
+      n.y = p.y;
+      card.style.left = `${p.x}px`;
+      card.style.top = `${p.y}px`;
+    };
+    const onUp = async (ev?: PointerEvent) => {
+      card.removeEventListener("pointermove", onMove);
+      card.removeEventListener("pointerup", onUp);
+      card.removeEventListener("pointercancel", onUp);
+      card.classList.remove("is-dragging");
+      boardBusy = false;
+      if (!moved) {
+        if (ev?.type !== "pointercancel") startEditNote(card, n, body);
+        return;
+      }
+      // Move to the end so it renders on top next time.
+      notes = notes.filter((m) => m.id !== n.id).concat(n);
+      if (n.x !== originX || n.y !== originY) {
+        await api.updateNote(n.id, { x: Math.round(n.x), y: Math.round(n.y) }).catch(() => {});
+      }
+    };
+    card.addEventListener("pointermove", onMove);
+    card.addEventListener("pointerup", onUp);
+    card.addEventListener("pointercancel", onUp);
+  });
+}
+
+function startEditNote(card: HTMLElement, n: StickyNote, body: HTMLElement) {
+  if (card.querySelector("textarea")) return;
+  boardBusy = true;
   const ta = document.createElement("textarea");
   ta.className = "note-card-edit";
   ta.value = n.text;
-  const save = async () => {
+  ta.placeholder = "Type here…";
+  body.replaceWith(ta);
+
+  let done = false;
+  const finish = async (commit: boolean) => {
+    if (done) return;
+    done = true;
+    boardBusy = false;
     const text = ta.value.trim();
-    if (text && text !== n.text) await api.updateNote(n.id, { text }).catch(() => {});
+    if (commit && text !== n.text) {
+      n.text = text;
+      await api.updateNote(n.id, { text }).catch(() => {});
+    }
+    // A note left completely blank is clutter on a real board — clear it away.
+    if (!n.text.trim()) {
+      notes = notes.filter((m) => m.id !== n.id);
+      await api.deleteNote(n.id).catch(() => {});
+    }
     await refreshNotes();
   };
-  ta.addEventListener("blur", () => void save());
+
+  ta.addEventListener("blur", () => void finish(true));
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      void save();
+      ta.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      void finish(false);
     }
-    if (e.key === "Escape") void refreshNotes();
   });
-  const colors = document.createElement("div");
-  colors.className = "note-colors";
-  for (const color of NOTE_COLORS) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = `note-swatch note-${color}` + (color === n.color ? " is-active" : "");
-    b.addEventListener("click", async () => {
-      await api.updateNote(n.id, { color }).catch(() => {});
-      await refreshNotes();
-    });
-    colors.appendChild(b);
-  }
-  li.append(ta, colors);
   ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
 }
 
-async function refreshNotes() {
-  try {
-    notes = (await api.listNotes(boardScope)).notes;
-    renderNotes();
-  } catch {
-    /* ignore */
-  }
-}
-
-noteForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const text = noteText.value.trim();
-  if (!text) return;
+noteAddBtn.addEventListener("click", async () => {
   noteStatus.textContent = "";
+  // Cascade new notes from the top-left so repeated adds don't stack exactly.
+  const n = notes.length;
+  const pos = clampToBoard(24 + (n % 6) * 26, 24 + (n % 6) * 26);
+  const color = NOTE_COLORS[Math.floor(Math.random() * NOTE_COLORS.length)];
   try {
-    await api.createNote(boardScope, text, newNoteColor);
-    noteText.value = "";
+    const { note } = await api.createNote(boardScope, "", color, pos);
+    autoEditId = note.id;
     await refreshNotes();
   } catch (err) {
     noteStatus.textContent = err instanceof Error ? err.message : String(err);
   }
 });
+
+async function refreshNotes(force = false) {
+  // A background poll must not pull the notes array out from under an active
+  // drag or in-place edit. An explicit refresh (after our own mutation) passes
+  // force.
+  if (boardBusy && !force) return;
+  try {
+    notes = (await api.listNotes(boardScope)).notes;
+    renderBoard();
+  } catch {
+    /* ignore */
+  }
+}
 
 function stopBoardPolling() {
   if (boardPollTimer !== null) {

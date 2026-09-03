@@ -1,24 +1,33 @@
 package app.familyagent.android.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.data.StickyNote
+import kotlin.math.roundToInt
 
 private val NOTE_COLORS = listOf(
     "butter" to Color(0xFFFDF1C4),
@@ -28,84 +37,92 @@ private val NOTE_COLORS = listOf(
     "lilac" to Color(0xFFE6E0F2),
 )
 
-private fun noteColor(name: String): Color = NOTE_COLORS.firstOrNull { it.first == name }?.second ?: NOTE_COLORS[0].second
+private const val NOTE_SIZE_DP = 148
+
+private fun noteColor(name: String): Color =
+    NOTE_COLORS.firstOrNull { it.first == name }?.second ?: NOTE_COLORS[0].second
+
+/** Deterministic small tilt so the board looks pinned-on, not gridded. */
+private fun noteTilt(id: String): Float {
+    var h = 0
+    for (c in id) h = h * 31 + c.code
+    return ((h % 7) - 3) * 0.9f
+}
 
 @Composable
 fun BoardScreen(
     notes: List<StickyNote>,
     scope: String,
     onScope: (String) -> Unit,
-    onAdd: (String, String) -> Unit,
-    onEdit: (String, String?, String?) -> Unit,
+    onAddBlank: (x: Float, y: Float, onCreated: (StickyNote) -> Unit) -> Unit,
+    onEdit: (id: String, text: String?, color: String?) -> Unit,
+    onMove: (id: String, x: Float, y: Float) -> Unit,
     onDelete: (String) -> Unit,
     onRefresh: () -> Unit,
 ) {
     LaunchedEffect(Unit) { onRefresh() }
-    var draft by remember { mutableStateOf("") }
-    var draftColor by remember { mutableStateOf(NOTE_COLORS[0].first) }
     var editing by remember { mutableStateOf<StickyNote?>(null) }
+    var boardSize by remember { mutableStateOf(IntSize.Zero) }
+    val density = LocalDensity.current
+    val notePx = with(density) { NOTE_SIZE_DP.dp.toPx() }
 
     ScreenScaffold(
         title = "Board",
-        subtitle = "Sticky notes for the whole family, or just for you.",
+        subtitle = "A corkboard of sticky notes. Drag to rearrange; tap to edit.",
     ) {
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            listOf("shared" to "Shared", "private" to "Mine").forEachIndexed { i, (key, label) ->
-                SegmentedButton(
-                    selected = scope == key,
-                    onClick = { onScope(key) },
-                    shape = SegmentedButtonDefaults.itemShape(i, 2),
-                ) { Text(label) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SingleChoiceSegmentedButtonRow(Modifier.weight(1f)) {
+                listOf("shared" to "Shared", "private" to "Mine").forEachIndexed { i, (key, label) ->
+                    SegmentedButton(
+                        selected = scope == key,
+                        onClick = { onScope(key) },
+                        shape = SegmentedButtonDefaults.itemShape(i, 2),
+                    ) { Text(label) }
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            FilledTonalButton(
+                onClick = {
+                    val n = notes.size
+                    val cascade = 24f + (n % 6) * 24f
+                    onAddBlank(cascade, cascade) { editing = it }
+                },
+            ) {
+                Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Add note")
             }
         }
 
         Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { draft = it },
-            label = { Text("Write a note…") },
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 2,
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            NOTE_COLORS.forEach { (name, color) ->
-                Box(
-                    Modifier
-                        .padding(end = 8.dp)
-                        .size(24.dp)
-                        .clip(CircleShape)
-                        .background(color)
-                        .then(
-                            if (name == draftColor) Modifier.padding(2.dp) else Modifier,
-                        )
-                        .clickable { draftColor = name },
+
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0xFFEFE7D6))
+                .cork()
+                .onSizeChanged { boardSize = it },
+        ) {
+            if (notes.isEmpty()) {
+                Text(
+                    "Nothing pinned up yet. Tap \"Add note\".",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0x800F172A),
+                    modifier = Modifier.align(Alignment.Center),
                 )
             }
-            Spacer(Modifier.weight(1f))
-            Button(
-                onClick = {
-                    if (draft.isNotBlank()) {
-                        onAdd(draft.trim(), draftColor)
-                        draft = ""
-                    }
-                },
-                enabled = draft.isNotBlank(),
-            ) { Text("Add") }
-        }
-
-        Spacer(Modifier.height(16.dp))
-        if (notes.isEmpty()) {
-            EmptyState(text = "No notes on this board yet.", modifier = Modifier.weight(1f))
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(150.dp),
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                items(notes, key = { it.id }) { note ->
-                    NoteCard(note, onClick = { editing = note }, onDelete = { onDelete(note.id) })
+            for (note in notes) {
+                key(note.id) {
+                    DraggableNote(
+                        note = note,
+                        boardSize = boardSize,
+                        notePx = notePx,
+                        onTap = { editing = note },
+                        onMoved = { x, y -> onMove(note.id, x, y) },
+                        onDelete = { onDelete(note.id) },
+                    )
                 }
             }
         }
@@ -114,41 +131,108 @@ fun BoardScreen(
     editing?.let { note ->
         EditNoteDialog(
             note = note,
-            onDismiss = { editing = null },
+            onDismiss = {
+                // A note left blank is clutter on a real board — clear it away.
+                if (note.text.isBlank()) onDelete(note.id)
+                editing = null
+            },
             onSave = { text, color ->
-                onEdit(note.id, text.takeIf { it != note.text }, color.takeIf { it != note.color })
+                if (text.isBlank()) {
+                    onDelete(note.id)
+                } else {
+                    onEdit(note.id, text.takeIf { it != note.text }, color.takeIf { it != note.color })
+                }
                 editing = null
             },
         )
     }
 }
 
+/** Faint speckle so the panel reads as a pin board. */
+private fun Modifier.cork(): Modifier = drawBehind {
+    val step = 18.dp.toPx()
+    val dot = 1.4.dp.toPx()
+    var y = step / 2
+    while (y < size.height) {
+        var x = step / 2
+        while (x < size.width) {
+            drawCircle(Color(0x24785836), radius = dot, center = Offset(x, y))
+            x += step
+        }
+        y += step
+    }
+}
+
 @Composable
-private fun NoteCard(note: StickyNote, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun DraggableNote(
+    note: StickyNote,
+    boardSize: IntSize,
+    notePx: Float,
+    onTap: () -> Unit,
+    onMoved: (Float, Float) -> Unit,
+    onDelete: () -> Unit,
+) {
+    val density = LocalDensity.current
+    // Position in px; seeded from the note's stored dp position, kept across
+    // recomposition (key() above scopes it per note).
+    var pos by remember { mutableStateOf(with(density) { Offset(note.x.dp.toPx(), note.y.dp.toPx()) }) }
+    var dragging by remember { mutableStateOf(false) }
+
+    fun clamp(o: Offset): Offset {
+        val maxX = (boardSize.width - notePx).coerceAtLeast(0f)
+        val maxY = (boardSize.height - notePx).coerceAtLeast(0f)
+        return Offset(o.x.coerceIn(0f, maxX), o.y.coerceIn(0f, maxY))
+    }
+
+    // Once the board has a size (and whenever it changes), pull a note that
+    // would sit off-screen — e.g. placed on a wider desktop board — into view.
+    LaunchedEffect(boardSize) {
+        if (boardSize != IntSize.Zero) pos = clamp(pos)
+    }
+
     Box(
         Modifier
-            .clip(RoundedCornerShape(14.dp))
+            .offset { IntOffset(pos.x.roundToInt(), pos.y.roundToInt()) }
+            .size(NOTE_SIZE_DP.dp)
+            .rotate(if (dragging) 0f else noteTilt(note.id))
+            .shadow(if (dragging) 12.dp else 4.dp, RoundedCornerShape(3.dp))
+            .clip(RoundedCornerShape(3.dp))
             .background(noteColor(note.color))
-            .clickable(onClick = onClick)
-            .padding(12.dp)
-            .heightIn(min = 110.dp)
-            .fillMaxWidth(),
+            .pointerInput(note.id) {
+                detectTapGestures(onTap = { onTap() })
+            }
+            .pointerInput(note.id, boardSize) {
+                detectDragGestures(
+                    onDragStart = { dragging = true },
+                    onDragEnd = {
+                        dragging = false
+                        val p = clamp(pos)
+                        pos = p
+                        onMoved(with(density) { p.x.toDp().value }, with(density) { p.y.toDp().value })
+                    },
+                    onDragCancel = { dragging = false },
+                ) { change, drag ->
+                    change.consume()
+                    pos = clamp(pos + drag)
+                }
+            }
+            .padding(12.dp),
     ) {
         Text(
-            note.text,
+            note.text.ifBlank { "Tap to write…" },
             style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFF0F172A),
-            modifier = Modifier.padding(end = 20.dp),
+            color = if (note.text.isBlank()) Color(0x660F172A) else Color(0xFF33302A),
+            modifier = Modifier.padding(top = 6.dp, end = 14.dp),
         )
         Icon(
             Icons.Rounded.Close,
-            contentDescription = "Delete note",
+            contentDescription = "Remove note",
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .size(18.dp)
                 .clip(CircleShape)
-                .clickable(onClick = onDelete),
-            tint = Color(0x660F172A),
+                .pointerInput(note.id) { detectTapGestures(onTap = { onDelete() }) },
+            tint = Color(0x800F172A),
         )
     }
 }
@@ -163,7 +247,7 @@ private fun EditNoteDialog(
     var color by remember { mutableStateOf(note.color) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit note") },
+        title = { Text(if (note.text.isBlank()) "New note" else "Edit note") },
         text = {
             Column {
                 OutlinedTextField(
@@ -171,6 +255,7 @@ private fun EditNoteDialog(
                     onValueChange = { text = it },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 3,
+                    placeholder = { Text("Write a note…") },
                 )
                 Spacer(Modifier.height(10.dp))
                 Row {
@@ -181,7 +266,7 @@ private fun EditNoteDialog(
                                 .size(26.dp)
                                 .clip(CircleShape)
                                 .background(swatch)
-                                .clickable { color = name }
+                                .pointerInput(Unit) { detectTapGestures(onTap = { color = name }) }
                                 .then(if (name == color) Modifier.padding(2.dp) else Modifier),
                             contentAlignment = Alignment.Center,
                         ) {
@@ -191,7 +276,7 @@ private fun EditNoteDialog(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(text.trim(), color) }, enabled = text.isNotBlank()) { Text("Save") } },
+        confirmButton = { TextButton(onClick = { onSave(text.trim(), color) }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

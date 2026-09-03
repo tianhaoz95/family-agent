@@ -774,10 +774,15 @@ export function buildServer(
     return { notes: req.userStore.listStickyNotes(scope) };
   });
 
+  // A fresh "+ Add" note starts blank (text ""), so no min length here — the
+  // note is a real object on the board the moment you add it, edited in place.
+  const coord = z.number().finite().min(-2000).max(20000);
   const CreateNoteBody = z.object({
     scope: z.enum(["shared", "private"]),
-    text: z.string().trim().min(1).max(2000),
+    text: z.string().trim().max(2000).default(""),
     color: z.string().trim().max(24).optional(),
+    x: coord.optional(),
+    y: coord.optional(),
   });
   app.post("/notes", async (req, reply) => {
     const parsed = CreateNoteBody.safeParse(req.body);
@@ -787,10 +792,12 @@ export function buildServer(
 
   const UpdateNoteBody = z
     .object({
-      text: z.string().trim().min(1).max(2000).optional(),
+      text: z.string().trim().max(2000).optional(),
       color: z.string().trim().max(24).optional(),
+      x: coord.optional(),
+      y: coord.optional(),
     })
-    .refine((b) => b.text !== undefined || b.color !== undefined, { message: "Nothing to update." });
+    .refine((b) => Object.values(b).some((v) => v !== undefined), { message: "Nothing to update." });
   app.patch("/notes/:id", async (req, reply) => {
     const parsed = UpdateNoteBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });

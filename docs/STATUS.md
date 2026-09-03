@@ -392,8 +392,15 @@ Later changes (not part of the original autonomous session):
     `sticky_notes` on `ScopedStore` (private scoped by `user_id`, shared open
     to every member). Routes `GET/POST /notes`, `PATCH/DELETE /notes/:id`. A
     new `notes-agent` subagent (`list_sticky_notes`, `add_sticky_note`) lets
-    the planner read the board and pin notes on request. v1 is a card grid,
-    not a drag-position corkboard.
+    the planner read the board and pin notes on request.
+  - **The board is now a draggable corkboard.** Notes carry an `(x, y)`
+    position (`sticky_notes.pos_x/pos_y`, migrated + scattered for an existing
+    DB). Both clients drop the "write a note" text input: **+ Add note** pins a
+    **blank** note that you edit in place (a note left blank is deleted).
+    Dragging a note `PATCH`es `{x, y}` (no activity-log line — it'd flood).
+    `listStickyNotes` orders by `updated_at ASC` so the note you last touched
+    renders on top. See `docs/DECISIONS.md` → "Sticky board → physical
+    corkboard".
   - Clients: desktop gets **Messages** + **Board** nav items and views;
     Android gets `Destination.Messages` (+ a nested `conversation/{id}` route)
     and `Destination.Board`, with an unread badge on the drawer item.

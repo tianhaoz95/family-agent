@@ -240,8 +240,9 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         notes = state.notes,
                         scope = state.noteScope,
                         onScope = viewModel::setNoteScope,
-                        onAdd = viewModel::addNote,
+                        onAddBlank = viewModel::addBlankNote,
                         onEdit = viewModel::editNote,
+                        onMove = viewModel::moveNote,
                         onDelete = viewModel::deleteNote,
                         onRefresh = { viewModel.refreshNotes() },
                     )
