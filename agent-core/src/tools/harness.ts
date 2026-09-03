@@ -6,12 +6,21 @@
 //     --allow-net=127.0.0.1:<port>          (its own port only — can't reach
 //                                            agent-core, Ollama, or the internet)
 //     --allow-read=<toolDir>
-//     --allow-write=<toolDir>/data          (scratch only)
+//     --allow-write=<toolDir>/data          (scratch + its SQLite db)
 //     server.ts <port>
 //
 // It also exits when its stdin closes, so a dead agent-core can't orphan it.
+//
+// Persistence is a real SQLite database (`node:sqlite`, a Deno builtin — no
+// extra permission, and ATTACH is hard-disabled so it can't be pointed
+// anywhere else) at `<toolDir>/data/tool.db`. Because `--allow-write` is
+// scoped to `<toolDir>/data` and every tool has its own directory, that file
+// is fully isolated per tool: no other tool's backend can open it. The handler
+// gets the raw `db` handle for relational data; the simpler key/value `store`
+// (also what `GET/PUT /__state` uses) is now a thin table on top of it.
 
 export const HARNESS = String.raw`// AUTO-GENERATED — do not edit. See agent-core/src/tools/harness.ts.
+import { DatabaseSync } from "node:sqlite";
 import { handler } from "./handler.ts";
 
 const here = new URL(".", import.meta.url).pathname;
@@ -20,6 +29,36 @@ try {
   await Deno.mkdir(DATA, { recursive: true });
 } catch {
   /* already exists */
+}
+
+// One private SQLite database per tool. --allow-write is scoped to DATA, so
+// this file and its journal are the only things this process can persist to,
+// and no other tool can reach it.
+const db = new DatabaseSync(DATA + "tool.db");
+// Guard against a runaway tool filling the user's disk (~64 MB at the default
+// 4 KB page size). A write past this fails with SQLITE_FULL rather than growing.
+db.exec("PRAGMA max_page_count = 16384");
+db.exec("CREATE TABLE IF NOT EXISTS _kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+
+// Older server tools kept each key as a JSON file in data/. Import any that
+// predate the database so an upgrade doesn't lose their state. The files are
+// left in place (harmless, and a safety net for a downgrade).
+try {
+  for (const entry of Deno.readDirSync(DATA)) {
+    if (!entry.isFile || !entry.name.endsWith(".json")) continue;
+    const key = entry.name.slice(0, -5);
+    if (db.prepare("SELECT 1 FROM _kv WHERE key = ?").get(key)) continue;
+    try {
+      db.prepare("INSERT INTO _kv (key, value) VALUES (?, ?)").run(
+        key,
+        Deno.readTextFileSync(DATA + entry.name),
+      );
+    } catch {
+      /* skip an unreadable legacy file */
+    }
+  }
+} catch {
+  /* data/ unreadable — nothing to migrate */
 }
 
 function safeKey(k: unknown): string {
@@ -31,8 +70,12 @@ const MAX_VALUE_BYTES = 512 * 1024;
 
 const store = {
   async get(key: string = "state"): Promise<unknown> {
+    const row = db.prepare("SELECT value FROM _kv WHERE key = ?").get(safeKey(key)) as
+      | { value: string }
+      | undefined;
+    if (!row) return null;
     try {
-      return JSON.parse(await Deno.readTextFile(DATA + safeKey(key) + ".json"));
+      return JSON.parse(row.value);
     } catch {
       return null;
     }
@@ -40,7 +83,9 @@ const store = {
   async set(key: string, value: unknown): Promise<void> {
     const body = JSON.stringify(value ?? null);
     if (body.length > MAX_VALUE_BYTES) throw new Error("value too large (max 512 KB)");
-    await Deno.writeTextFile(DATA + safeKey(key) + ".json", body);
+    db.prepare(
+      "INSERT INTO _kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(safeKey(key), body);
   },
 };
 
@@ -78,7 +123,7 @@ Deno.serve(
     }
 
     try {
-      const out = await handler(req, { store });
+      const out = await handler(req, { store, db });
       return out instanceof Response ? out : Response.json(out ?? null);
     } catch (e) {
       return new Response("tool error: " + (e instanceof Error ? e.message : String(e)), { status: 500 });

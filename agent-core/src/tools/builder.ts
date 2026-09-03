@@ -44,15 +44,24 @@ const HTML_SYSTEM = `You write one complete, self-contained HTML document for a 
   fetch('/__state').then(r=>r.json()) and save with fetch('/__state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(data)}). Treat a null response as "no data yet".
 - Keep it focused and functional. No login, no settings pages, no external anything.`;
 
-const HANDLER_SYSTEM = `You write a Deno request handler for a small family tool's backend. Output ONLY TypeScript, no markdown fences. It runs sandboxed (no network, no filesystem beyond the store, no subprocesses). Shape:
+const HANDLER_SYSTEM = `You write a Deno request handler for a small family tool's backend. Output ONLY TypeScript, no markdown fences. It runs sandboxed (no network, no filesystem, no subprocesses) with one private SQLite database. Shape:
 
-export async function handler(request: Request, ctx: { store: { get(key?: string): Promise<unknown>; set(key: string, value: unknown): Promise<void> } }): Promise<Response> {
+export async function handler(request: Request, ctx: {
+  store: { get(key?: string): Promise<unknown>; set(key: string, value: unknown): Promise<void> };
+  db: import("node:sqlite").DatabaseSync;
+}): Promise<Response> {
   const url = new URL(request.url);
-  // handle your API routes here; use ctx.store for persistence
+  // ctx.db is a real SQLite database, private to THIS tool. Run your schema at
+  // the top of the handler — it is safe to run every request:
+  //   ctx.db.exec("CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, text TEXT NOT NULL, done INTEGER DEFAULT 0)");
+  //   ctx.db.prepare("INSERT INTO items (text) VALUES (?)").run(text);
+  //   const rows = ctx.db.prepare("SELECT * FROM items ORDER BY id").all();
+  // ctx.store is a simpler key/value store (get/set one JSON blob) — fine for a
+  // single piece of whole-app state.
   return new Response("not found", { status: 404 });
 }
 
-The frontend can also just use the built-in GET/PUT /__state — only write a handler if the tool needs real server-side logic (computing something, enforcing rules). Keep it short.`;
+Use ctx.db when the tool has many rows or needs queries/filtering; use ctx.store for one small blob of state. The frontend can also just use the built-in GET/PUT /__state (backed by ctx.store). Only write a handler if the tool needs real server-side logic. Keep it short.`;
 
 function stripFences(s: string): string {
   return s

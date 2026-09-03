@@ -1582,14 +1582,38 @@ const railUserName = document.getElementById("rail-user-name")!;
 const signOutBtn = document.getElementById("signout-btn") as HTMLButtonElement;
 const navFamily = document.getElementById("nav-family")!;
 
-function showGate(mode: "setup" | "login", serverName: string) {
+const connError = document.getElementById("conn-error")!;
+const connErrorDetail = document.getElementById("conn-error-detail")!;
+const connRetry = document.getElementById("conn-retry") as HTMLButtonElement;
+
+// agent-core is spawned by the shell on launch, so the first few boot() calls
+// can race its startup. Retry a bounded number of times, then show a visible
+// error instead of leaving the window blank forever (the old behaviour).
+let bootAttempt = 0;
+const BOOT_MAX_ATTEMPTS = 8; // ~12s at 1.5s spacing
+let bootTimer: ReturnType<typeof setTimeout> | undefined;
+
+function showGate(mode: "setup" | "login" | "conn-error", serverName: string, detail?: string) {
   appEl.hidden = true;
   gate.hidden = false;
   setupForm.hidden = mode !== "setup";
   loginForm.hidden = mode !== "login";
+  connError.hidden = mode !== "conn-error";
   loginTitle.textContent = serverName ? `Sign in to ${serverName}` : "Sign in";
-  (mode === "setup" ? setupForm : loginForm).querySelector("input")?.focus();
+  if (mode === "conn-error" && detail) connErrorDetail.textContent = detail;
+  if (mode !== "conn-error") {
+    (mode === "setup" ? setupForm : loginForm).querySelector("input")?.focus();
+  }
 }
+
+connRetry.addEventListener("click", () => {
+  connRetry.disabled = true;
+  connErrorDetail.textContent = "Reconnecting…";
+  bootAttempt = 0;
+  void boot().finally(() => {
+    connRetry.disabled = false;
+  });
+});
 
 function enterApp(user: User) {
   currentUser = user;
@@ -1605,8 +1629,10 @@ function enterApp(user: User) {
 }
 
 async function boot() {
+  bootAttempt++;
   try {
     const status = await api.authStatus();
+    bootAttempt = 0;
     if (status.needsSetup) return showGate("setup", status.serverName);
     try {
       enterApp((await api.me()).user);
@@ -1615,9 +1641,20 @@ async function boot() {
       showGate("login", status.serverName);
     }
   } catch {
-    // agent-core isn't up yet (desktop spawns it on launch) — retry.
+    if (bootAttempt >= BOOT_MAX_ATTEMPTS) {
+      showGate(
+        "conn-error",
+        "",
+        "The Family Agent background service isn't responding on this machine. " +
+          "It may still be starting up, or another copy may be holding its port."
+      );
+      return;
+    }
+    // agent-core isn't up yet — retry. statusText lives inside the (hidden) app
+    // shell, so this line is only visible once we're past the gate.
     statusText.textContent = "starting agent-core…";
-    setTimeout(() => void boot(), 1500);
+    clearTimeout(bootTimer);
+    bootTimer = setTimeout(() => void boot(), 1500);
   }
 }
 
@@ -2293,3 +2330,11 @@ function appendReferences(afterEl: HTMLElement, references: ChatReference[]) {
 }
 
 void boot();
+
+// Tell the index.html watchdog the module evaluated — no reload needed.
+(window as unknown as Record<string, unknown>).__mainLoaded = true;
+try {
+  sessionStorage.removeItem("familyAgent.reloadedOnce");
+} catch {
+  /* private mode / disabled storage */
+}

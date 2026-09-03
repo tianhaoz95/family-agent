@@ -58,7 +58,7 @@ function mimeFromFilename(filename: string): string {
 
 // Routes reachable without a bearer token: discovery, and the auth handshake
 // itself. Everything else 401s without a valid session.
-const PUBLIC_ROUTES = new Set(["/health", "/auth/status", "/auth/login", "/auth/bootstrap"]);
+const PUBLIC_ROUTES = new Set(["/health", "/_diag", "/auth/status", "/auth/login", "/auth/bootstrap"]);
 
 export interface ServerHooks {
   /** A user changed their watched folder — restart just their watcher. */
@@ -202,6 +202,11 @@ export function buildServer(
     // Both chat UIs hide the mic button when this is false.
     asrEnabled: config.asrEnabled,
   }));
+
+  app.post("/_diag", async (req) => {
+    console.log("[DIAG]", JSON.stringify(req.body));
+    return { ok: true };
+  });
 
   // zod's `error.message` is a JSON dump — fine for a dev, ugly in the UI.
   const firstIssue = (err: z.ZodError) => {
@@ -947,14 +952,23 @@ async function main() {
     const { resolveDenoPath } = await import("./tools/supervisor.js");
     try {
       toolsServer = await startToolsServer(store, supervisor);
+      console.log(
+        `tools server on http://127.0.0.1:${config.toolsPort}` +
+          (resolveDenoPath() || supervisor.denoAvailable() ? " (Deno backend available)" : " (static tools only — Deno not found)")
+      );
     } catch (err) {
-      console.error((err as Error).message ?? err);
-      process.exit(1);
+      // The tools server is a secondary feature; the core API on config.port is
+      // what every client actually needs to function. A stale process holding
+      // config.toolsPort (e.g. an unclean shutdown of a previous run) used to
+      // take the whole process down with process.exit(1) here — which showed up
+      // as a permanently blank desktop window, since the app can never reach
+      // agent-core. Degrade instead: log it and keep serving the API.
+      console.error(
+        `tools server could not start (${(err as Error).message ?? err}) — ` +
+          `continuing without the Tools feature. Free the port and restart to re-enable it.`
+      );
+      toolsServer = undefined;
     }
-    console.log(
-      `tools server on http://127.0.0.1:${config.toolsPort}` +
-        (resolveDenoPath() || supervisor.denoAvailable() ? " (Deno backend available)" : " (static tools only — Deno not found)")
-    );
   }
 
   // mDNS: advertise this node so the Android app can discover it. Dynamic

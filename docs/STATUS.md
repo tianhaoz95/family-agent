@@ -149,6 +149,16 @@ the legacy in-repo `agent-core/data/`):
 
 A proper `agent-core` reset command is a worthwhile follow-up.
 
+## Desktop opens to a blank window
+
+If a previous run left an orphaned `node dist/server.js` holding port 4174 (the
+tools server), the newly spawned `agent-core` used to `exit(1)` and the app sat
+blank forever. Now: `agent-core` keeps serving the API without Tools, and after
+~12s the window shows a "Can't reach the local service" card with **Try again**
+instead of staying blank. To clear it manually: `kill $(lsof -ti tcp:4173
+tcp:4174)` then relaunch. Full write-up in `docs/DECISIONS.md` → "Blank desktop
+window when the tools port was busy".
+
 ## Reproducing the toolchain
 
 `.toolchains/` (JDK 17, Android SDK, a bootstrap Gradle) is gitignored and
@@ -270,6 +280,17 @@ Later changes (not part of the original autonomous session):
     writes `handler.ts`; the harness is ours. `.toolchains/deno/` holds the
     binary (auto-detected; `FAMILY_AGENT_DENO_PATH` overrides). No Deno → static
     tools still work, shared-state ones fail with a clear message.
+  - Each server tool gets its **own SQLite database** (`node:sqlite`, a Deno
+    builtin — no extra permission) at `<tool dir>/data/tool.db`, created and
+    opened by the harness. It's isolated per tool: `--allow-write` only covers
+    that tool's `data/` dir and `node:sqlite` disables `ATTACH`. The handler is
+    passed `ctx.db` (raw `DatabaseSync`) for relational data and `ctx.store`
+    (get/set a JSON blob, also backing `GET/PUT /__state`) which is now a `_kv`
+    table on the same DB. A pre-SQLite tool's `data/<key>.json` files are
+    imported into `_kv` on first start. Size is capped at ~64 MB
+    (`PRAGMA max_page_count`). Tool deletion `rm -rf`s the dir, DB included.
+    Verified in `test/tools.test.ts` (persists across a backend restart; legacy
+    JSON blob migrates).
   - Kill switch: `FAMILY_AGENT_TOOLS=0`.
   - Reliability caveat: `gemma4:e2b` produces a working simple HTML tool most of
     the time but not always; a bad build is marked `failed` with the error, and

@@ -739,3 +739,81 @@ would wipe it, and it risked being committed. A dev box with an old
 (or points the env var back at the old path). The settings-file route tests
 now redirect `config.dataDir` to a temp dir so a test run can't touch a real
 local store.
+
+## Generated tools get a real SQLite database, one per tool
+
+A "server"-kind tool's backend originally persisted through a tiny key/value
+helper in the harness that wrote each key as a JSON file under
+`<tool dir>/data/`. Fine for a checklist's single blob of state; useless the
+moment a tool wants many rows, a query, or a filter — the model would have to
+hand-roll all of that on top of `get`/`set` a whole array every write.
+
+The harness now opens a **SQLite database per tool** at
+`<tool dir>/data/tool.db` and passes the handler `ctx.db` (a raw
+`node:sqlite` `DatabaseSync`) alongside the unchanged `ctx.store`.
+
+Why this was low-risk:
+
+- **`node:sqlite` is a Deno builtin.** It needs no new sandbox permission (not
+  even `--allow-ffi` — the implementation is native Rust), and `--deny-import`
+  doesn't touch `node:` specifiers. Confirmed against `.toolchains/deno`
+  (2.9.6): the existing flag set (`--deny-import --allow-read=<dir>
+  --allow-write=<dir>/data`) is enough.
+- **Isolation is already structural.** Each tool has its own directory,
+  `--allow-write` is scoped to that tool's `data/`, and every tool runs as its
+  own pooled process. On top of that, Deno's `node:sqlite` hard-disables
+  `ATTACH` (`SQLITE_LIMIT_ATTACHED = 0`), so a handler can't point the
+  connection at another path even within its writable dir. No tool can read
+  another tool's DB.
+- **It's still our code.** The model only ever writes `handler.ts`; the harness
+  (`agent-core/src/tools/harness.ts`) owns the connection, the schema for the
+  `_kv` compatibility table, and the size cap.
+- **The `store` contract didn't change.** `ctx.store.get/set` and the
+  `GET/PUT /__state` endpoint behave exactly as before — they're now a `_kv`
+  table instead of JSON files. Existing tools' `data/<key>.json` blobs are
+  imported into `_kv` on first start (files left in place for a downgrade).
+
+Guards: `PRAGMA max_page_count = 16384` (~64 MB) so a runaway tool can't fill
+the user's disk — a write past it fails with `SQLITE_FULL` rather than growing.
+Tool deletion already `rm -rf`s the whole tool dir (`server.ts`), so the DB is
+cleaned up with everything else. `test/tools.test.ts` covers persistence across
+a backend restart and the legacy-JSON migration.
+
+Not done: no schema-versioning / migration framework for the model's own
+tables. A regenerated `handler.ts` is expected to use `CREATE TABLE IF NOT
+EXISTS` (the builder prompt says so and shows it); a model that renames a
+column on an existing tool's DB will silently read nothing from the old one.
+Acceptable for a family-scale tool that can be rebuilt from scratch.
+
+## Blank desktop window when the tools port was busy
+
+**Symptom:** the desktop app opened to a permanently blank (`#f6f5f4`) window
+on some launches — no login screen, no error.
+
+**Cause:** `agent-core`'s `main()` starts the tools HTTP server
+(`config.toolsPort`, default 4174) before the core API (`config.port`, 4173),
+and used to `process.exit(1)` if that bind failed after its 8s retry. When a
+previous desktop session didn't shut its `node dist/server.js` child down
+cleanly (a crash, `kill -9`, an OOM, or a `tauri dev` rebuild race) the orphan
+kept 4174, so the freshly-spawned `agent-core` killed itself on startup. The
+desktop's `boot()` then retried `GET /auth/status` every 1.5s **forever**,
+silently, with both `#gate` and `#app` still `hidden`. `main.rs`'s
+`kill_stale_agent_core()` is meant to prevent the orphan but only slept a fixed
+800ms before spawning the replacement — not long enough for the kernel to
+release the socket (no `SO_REUSEADDR` on the Node side).
+
+**Fixes (three layers, all kept):**
+1. `agent-core` no longer exits when the tools server can't bind — it logs
+   "continuing without the Tools feature" and serves the API anyway. The API
+   is what every client needs; Tools is secondary and returns on the next clean
+   restart. (`server.ts` `main()`.)
+2. `boot()` in the desktop retries a bounded 8 times (~12s) then shows a
+   visible "Can't reach the local service" card with a **Try again** button
+   (`#conn-error` in `index.html`), instead of retrying invisibly — a blank
+   window with no feedback was the actual reported bug.
+3. `kill_stale_agent_core()` now polls: waits up to 3s for the SIGTERM'd
+   process to exit (SIGKILL if not), then up to 5s for *both* ports to accept a
+   bind before spawning the replacement.
+
+Reproduce: hold 4174 with a listener, then launch — before: blank; after: the
+login screen, with Tools disabled until the next clean restart.

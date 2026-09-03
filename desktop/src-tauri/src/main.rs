@@ -55,15 +55,36 @@ fn kill_stale_agent_core() {
         eprintln!("family-agent-desktop: reaping stale agent-core (pid {pid})");
         unsafe { libc::kill(pid, libc::SIGTERM) };
     }
-    std::thread::sleep(std::time::Duration::from_millis(600));
+    // Wait for a graceful exit (agent-core's SIGTERM handler tears down the Deno
+    // tool supervisor and inbox watchers, which takes a moment), then escalate.
+    let pid_alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+    for _ in 0..30 {
+        if !pids.iter().any(|&p| pid_alive(p)) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     for &pid in &pids {
-        // Still alive? escalate. `kill(pid, 0)` returns 0 while the pid exists.
-        if unsafe { libc::kill(pid, 0) } == 0 {
+        if pid_alive(pid) {
+            eprintln!("family-agent-desktop: stale agent-core (pid {pid}) didn't exit — SIGKILL");
             unsafe { libc::kill(pid, libc::SIGKILL) };
         }
     }
-    // Give the OS a beat to release the socket before we spawn a replacement.
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // The kernel can hold the listening sockets briefly after the process dies
+    // (no SO_REUSEADDR on the Node side). agent-core exits(1) if its tools
+    // server can't bind config.toolsPort — which surfaced as a permanently
+    // blank window — so wait until *both* ports actually accept a bind before
+    // spawning the replacement.
+    for _ in 0..50 {
+        if AGENT_CORE_PORTS
+            .iter()
+            .all(|&p| std::net::TcpListener::bind(("0.0.0.0", p)).is_ok())
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    eprintln!("family-agent-desktop: agent-core ports still busy after cleanup — starting anyway");
 }
 
 /// Guard against killing an unrelated process that happens to hold the port:

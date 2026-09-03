@@ -4,6 +4,30 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Family Agent</title>
+    <script>
+      // Watchdog for a broken first paint. The Linux webview (WebKitGTK) can
+      // abort the initial module load if Vite starts (re-)optimizing deps
+      // mid-load — the HMR client's reload doesn't always land, leaving a
+      // blank window. If main.ts hasn't finished evaluating a few seconds in,
+      // force one reload; the second load hits warm, optimized deps.
+      (function () {
+        var KEY = "familyAgent.reloadedOnce";
+        function d(o){try{fetch("http://localhost:4173/_diag",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(o)}).catch(function(){})}catch(e){}}
+        try { d({ ev: "html-load", nav: performance.getEntriesByType ? (performance.getEntriesByType("navigation")[0]||{}).type : "?", reloadedFlag: sessionStorage.getItem(KEY) }); } catch(e){ d({ev:"html-load"}); }
+        function snap(t){var g=document.getElementById("gate"),a=document.getElementById("app");d({ev:"snap"+t,mainLoaded:!!window.__mainLoaded,gateHidden:g&&g.hidden,appHidden:a&&a.hidden,connHidden:(document.getElementById("conn-error")||{}).hidden});}
+        setTimeout(function(){snap("-3s");},3000);
+        setTimeout(function () {
+          if (window.__mainLoaded) { snap("-4s-ok"); return; }
+          snap("-4s-RELOAD");
+          try {
+            if (sessionStorage.getItem(KEY)) return;
+            sessionStorage.setItem(KEY, "1");
+          } catch (e) {}
+          location.reload();
+        }, 4000);
+        setTimeout(function(){snap("-12s");},12000);
+      })();
+    </script>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -35,6 +59,17 @@
           <button type="submit">Sign in</button>
           <p id="login-error" class="gate-error" role="alert"></p>
         </form>
+
+        <!-- Shown when agent-core (the local service the shell starts) can't be
+             reached at all — otherwise the window would just sit blank. -->
+        <div id="conn-error" class="gate-form" hidden>
+          <h1>Can't reach the local service</h1>
+          <p class="gate-sub" id="conn-error-detail">
+            The Family Agent background service isn't responding on this machine.
+            It may still be starting up.
+          </p>
+          <button type="button" id="conn-retry">Try again</button>
+        </div>
       </div>
     </div>
 

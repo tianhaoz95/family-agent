@@ -302,7 +302,12 @@ generates small self-contained web tools (`agent-core/src/tools/*`, and a "Tools
 both apps) — see `docs/STATUS.md` for the architecture. Static tools are plain inline HTML
 served with a strict CSP from a dedicated port (default 4174); a tool that needs shared state
 gets a Deno backend in a deny-by-default sandbox (`ToolSupervisor`), with the model only ever
-writing `handler.ts`. `FAMILY_AGENT_TOOLS=0` disables the whole feature.
+writing `handler.ts`. That backend's harness (`agent-core/src/tools/harness.ts`, our code)
+opens one private SQLite database per tool at `<dataDir>/tools/<id>/data/tool.db` via
+`node:sqlite` — isolated because `--allow-write` is scoped to that tool's `data/` dir and
+ATTACH is disabled; the handler gets the raw `db` handle plus a key/value `store` facade (also
+what `GET/PUT /__state` uses) layered on a `_kv` table. `FAMILY_AGENT_TOOLS=0` disables the
+whole feature.
 
 Still not implemented from the brainstormed architecture: the compute mesh, Tailscale
 transport, and the bundled managed-model runtime. Full reasoning for every scope cut is in
