@@ -989,3 +989,115 @@ it. The ask was for something that feels like a real board.
   back before the `PATCH` lands. `test/stickyNotes.test.ts` +
   `server.routes.test.ts` cover blank notes, position round-trips, the
   no-log-on-drag rule, and coordinate validation.
+
+## Tool database inspector
+
+Every "server"-kind builder tool persists to exactly one SQLite file —
+`<dataDir>/tools/<id>/data/tool.db` (`tools/harness.ts`) — always with the same
+baseline shape (a `_kv` table plus whatever the handler's own `CREATE TABLE`s
+made). That uniformity made a generic read-only inspector cheap, so tool data
+is no longer a black box you can only reach by using the tool's own UI.
+
+- **agent-core reads the file directly, read-only.** `tools/dbInspect.ts` opens
+  the db with `new DatabaseSync(path, { readOnly: true })` — no proxy through
+  the tool's sandboxed Deno backend, because agent-core already has full disk
+  access (the deny-by-default sandbox only constrains the *Deno* process). The
+  `readOnly` open is the hard safety boundary: nothing the inspector does —
+  browsing a table, running a typed query — can mutate a tool's data, even if
+  the SQL allow-list below were bypassed. A `PRAGMA busy_timeout = 3000` rides
+  out the brief write lock a running tool backend may hold.
+- **Three routes, all scoped to the caller's own tools** via
+  `req.userStore.getTool(id)` (a stranger gets 404, same as the rest of
+  `/tools`): `GET /tools/:id/db` (schema + row counts for every table/view),
+  `GET /tools/:id/db/rows?table=&limit=&offset=&orderBy=&dir=` (one page, with
+  an optional sort — `orderBy` is validated against the real column list and
+  every identifier is `"`-quoted, so free text can't break out), and
+  `POST /tools/:id/db/query` for an ad-hoc statement. A non-server tool
+  reports `exists:false` rather than erroring.
+- **The query box is SELECT-only.** `query()` rejects anything not starting
+  `select|with|explain|pragma`, and any statement containing a `;` (no
+  multi-statement). This is defence-in-depth and, mostly, better error
+  messages — the read-only connection already refuses writes. Results are
+  capped at 500 rows (`truncated` flag), BLOBs are returned as
+  `{__blob, bytes, preview}` (first 24 bytes hex) rather than dumped, and
+  `bigint` values outside safe-integer range serialize as strings.
+- **Static tools are covered too.** A static (non-server) tool has no SQLite db
+  — it persists small JSON blobs through `GET/PUT /<id>/__state`, which the
+  tools server writes as one `data/<key>.json` file per key. `GET /tools/:id/db`
+  on a static tool returns `{ kind:"static", stateEntries:[{key,bytes}] }` and
+  `GET /tools/:id/db/state?key=` hands back the parsed JSON. This keeps the
+  "Inspect data" affordance on **every** ready tool, not just the rarer
+  server-kind ones (a tool is only built `server` when its prompt trips the
+  shared-state keyword check in `tools/builder.ts`), which is what the feature
+  request actually assumed ("they all use the same … database").
+- **Desktop UI** is a full-area overlay (`#db-inspector`) that mirrors the tool
+  viewer. Server tools: a left rail of tables (name + row count), a monospace
+  row grid with click-to-sort headers and prev/next paging, and the SQL query
+  input above it. Static tools: the rail lists the saved `__state` keys
+  (`__ls` shown as "browser storage") and the pane shows pretty-printed JSON;
+  the query box is hidden. An "Inspect data" button appears on each ready tool
+  in the Tools list. Android was left out for now — the routes are there when
+  it's wanted.
+- Covered in `test/server.routes.test.ts`: schema/row-count shape, pagination
+  + sort, `exists:false` for a fresh server tool, static-tool `stateEntries` +
+  `/db/state` round-trip, the write-refusal of the query route (and that the
+  blocked write didn't land), and the cross-user 404s.
+
+## Tools as an agent API (MCP)
+
+A "server" tool used to be a standalone web app the chat agent knew nothing
+about. Now each one exposes its operations to the planner, so "where did we put
+the passport?" is answered inline in chat — the same data the tool's own UI
+shows, without opening it.
+
+- **The model writes a dumb `operations` array, not MCP.** `operations.ts`
+  (replaces `handler.ts`): `[{ name, description, access: "read"|"write",
+  inputSchema (JSON Schema), async run(input, ctx) }]`. `ctx` is the same
+  `{ db, store }` the old handler got. The model never touches HTTP, routing,
+  or `Response` — the harness does all of it. That was the single biggest
+  source of broken generated backends, independent of model size.
+- **MCP lives in the harness, as a real protocol.** `tools/harness.ts` serves
+  `POST /mcp` — JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`, `ping`,
+  notification ack. Stateless (no session id — allowed for a stateless server),
+  so agent-core just POSTs `initialize` then the call. The same `operations`
+  array also drives `GET|POST /api/<name>` (the tool's *own frontend* calls
+  these now — one dataset, not `/__state` for the UI and SQL for the agent) and
+  `GET /__manifest` (plain JSON for the desktop). Why hand-roll instead of the
+  MCP SDK: `--deny-import` blocks importing it into the Deno sandbox, and the
+  stateless subset is ~90 lines. Why bother with MCP at all vs. a bespoke
+  contract: the same endpoint is reachable at `:4174/<id>/mcp` through the
+  tools server, so an external MCP client (Claude Desktop, etc.) can use a
+  family's tools later — that just needs auth added to the tools server.
+- **agent-core is the MCP client** (`tools/toolMcp.ts`) — speaks JSON-RPC to
+  the tool's loopback port via `supervisor.portFor`. `refreshManifest()` boots
+  the backend once at build time and caches `tools/list` to
+  `<toolDir>/mcp.json`, so the planner can enumerate a family's tools without
+  booting every backend. `callOperation()` does `tools/call` and clamps the
+  result (100 array items / 8 KB) before it re-enters the planner context.
+- **Planner integration is a static graph + generic dispatch — no rebuild when
+  a tool changes.** A `tools-agent` subagent (alongside task/document/notes)
+  gets two tools: `list_family_tools` (renders the catalog live from the
+  on-disk manifests) and `call_family_tool` (resolves the tool + operation,
+  validates the input against `inputSchema` with a small
+  `validateInput`, calls over MCP, logs a `tool.invoked` activity line for
+  writes, records a `type:"tool"` chat reference). The catalog is read fresh
+  every turn via a `getCatalog` callback, so an added/rebuilt/deleted tool is
+  picked up without reconstructing the langgraph graph. The planner cache
+  (`agents` map) is still busted on build/delete so the prompt paragraph and
+  subagent wiring refresh. With `gemma4:26b` the model reliably picks the right
+  tool + operation from the catalog — the concrete-per-operation-tool approach
+  the small-model era would have required isn't needed.
+- **`wantsBackend` replaces `wantsSharedState`** and is broader — a tracker /
+  inventory / log / catalog / "where is…" prompt now gets a backend (and thus
+  an agent API), not just an explicitly "shared" one. Falls back to a static
+  tool when Deno isn't installed rather than failing the build.
+- Not done: MCP **resources** (reads are all `tools/call` for now), Streamable
+  HTTP transport + auth for external clients, Android surfacing of a tool's
+  operations. `docs/STATUS.md` has the shipped scope.
+- Tests: `test/toolMcp.test.ts` (harness MCP endpoint + `/api` + `/__manifest`,
+  JSON-RPC error codes, an operation that throws, the legacy `handler.ts`
+  fallback, `refreshManifest`/`callOperation` round-trip, `validateInput`,
+  `clampResult`, the `tools-agent` tools); `test/server.routes.test.ts`
+  (`/tools/:id/operations`); `test/agents.integration.test.ts` (a live
+  `gemma4:26b` turn: "record X" then "where is X" → tool call → answer + tool
+  reference — gated on the model being reachable and Deno present).

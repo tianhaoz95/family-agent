@@ -1,8 +1,12 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { Store, type ScopedStore } from "../src/db.js";
-import { config } from "../src/config.js";
+import { config, toolsDir } from "../src/config.js";
+import { HARNESS } from "../src/tools/harness.js";
+import { resolveDenoPath } from "../src/tools/supervisor.js";
 import { seedUser, authInject } from "./helpers.js";
 
 // Real end-to-end tests against the local Ollama model (gemma4:e2b by
@@ -179,3 +183,92 @@ if (!ready) {
     it.skip(`skipped: ${config.model} not available at ${config.ollamaBaseUrl}`, () => {});
   });
 }
+
+// The tools-agent path needs a live model AND Deno (to run the tool backend).
+const toolsMaybe = ready && resolveDenoPath() ? describe : describe.skip;
+
+toolsMaybe("family agent → tools-agent (live model + Deno)", () => {
+  let app: FastifyInstance;
+  let store: ScopedStore;
+  let inject: ReturnType<typeof authInject>;
+  let toolDir = "";
+
+  const OPS = `export const operations = [
+    {
+      name: "find_item", description: "Find where an item is stored", access: "read",
+      inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      async run(input, ctx) {
+        ctx.db.exec("CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT, location TEXT)");
+        return ctx.db.prepare("SELECT name, location FROM items WHERE name LIKE ?").all("%" + (input.query ?? "") + "%");
+      },
+    },
+    {
+      name: "save_item", description: "Record where an item is stored", access: "write",
+      inputSchema: { type: "object", properties: { name: { type: "string" }, location: { type: "string" } }, required: ["name", "location"] },
+      async run(input, ctx) {
+        ctx.db.exec("CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT, location TEXT)");
+        ctx.db.prepare("INSERT INTO items (name, location) VALUES (?, ?)").run(input.name, input.location);
+        return { ok: true };
+      },
+    },
+  ];`;
+
+  beforeAll(() => {
+    const raw = new Store(":memory:");
+    app = buildServer(raw);
+    const seeded = seedUser(raw);
+    store = seeded.scoped;
+    inject = authInject(app, seeded.token);
+
+    const t = store.createTool({
+      name: "Item Tracker",
+      description: "where the family's stuff is",
+      prompt: "an item tracker",
+      kind: "server",
+    });
+    store.setToolStatus(t.id, "ready");
+    toolDir = join(toolsDir(), t.id);
+    mkdirSync(join(toolDir, "data"), { recursive: true });
+    writeFileSync(join(toolDir, "server.ts"), HARNESS);
+    writeFileSync(join(toolDir, "operations.ts"), OPS);
+    // The build-time MCP manifest cache the planner's catalog reads.
+    writeFileSync(
+      join(toolDir, "mcp.json"),
+      JSON.stringify({
+        name: "Item Tracker",
+        operations: [
+          { name: "find_item", description: "Find where an item is stored", access: "read", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
+          { name: "save_item", description: "Record where an item is stored", access: "write", inputSchema: { type: "object", properties: { name: { type: "string" }, location: { type: "string" } }, required: ["name", "location"] } },
+        ],
+      }),
+    );
+  });
+
+  afterAll(async () => {
+    await app.close();
+    if (toolDir) rmSync(toolDir, { recursive: true, force: true });
+  });
+
+  it(
+    "answers 'where is X' by calling the tool, after recording it",
+    async () => {
+      const save = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "Using our item tracker, record that the passport is in the bedroom safe." },
+      });
+      expect(save.statusCode).toBe(200);
+
+      const ask = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "Where is the passport?" },
+      });
+      expect(ask.statusCode).toBe(200);
+      const reply = (ask.json().reply as string).toLowerCase();
+      expect(reply).toMatch(/bedroom safe|safe/);
+      expect(ask.json().references?.some((r: { type: string }) => r.type === "tool")).toBe(true);
+    },
+    600000,
+  );
+});

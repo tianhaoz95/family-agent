@@ -192,9 +192,15 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   callback, restarts the inbox watcher with a fresh client — a langchain `ChatOllama` binds its
   URL and model at construction, so hot-patching isn't possible.
 - `agents/index.ts` — the deepagents planner (`buildFamilyAgent`) plus its subagents
-  `task-agent`, `document-agent`, `builder-agent`, `notes-agent`, and the
+  `task-agent`, `document-agent`, `builder-agent`, `notes-agent`, `tools-agent`, and the
   `askFamilyAgent` / `askFamilyAgentInChannel` / `mentionsAgent` helpers. Notable
   non-obvious things in this file:
+  - `tools-agent` (`agents/toolTools.ts`) is dynamic: `builder-agent` *makes* a tool,
+    `tools-agent` *uses* one the family already built. It has two generic tools —
+    `list_family_tools` / `call_family_tool` — and resolves the catalog live each turn
+    from `<toolDir>/mcp.json` caches (a `familyTools.getCatalog` dep), so a new/rebuilt/
+    deleted tool needs no graph rebuild. Only wired when `config.toolsEnabled`. See
+    `docs/DECISIONS.md` → "Tools as an agent API (MCP)".
   - deepagents bakes in generic `ls`/`read_file`/`write_file` tools for its own scratch
     filesystem; these are explicitly permission-denied and stripped down to just `read_file` via
     `createFilesystemMiddleware`, because small local models reliably confuse "documents" (this
@@ -329,18 +335,22 @@ The first data that isn't per-account. Both added narrowly rather than by loosen
 
 ## Scope notes
 
-Four subagents ship: `task-agent`, `document-agent`, `builder-agent`, and
-`notes-agent`. `builder-agent`
+Five subagents ship: `task-agent`, `document-agent`, `builder-agent`,
+`notes-agent`, and `tools-agent`. `builder-agent`
 generates small self-contained web tools (`agent-core/src/tools/*`, and a "Tools" screen in
 both apps) — see `docs/STATUS.md` for the architecture. Static tools are plain inline HTML
-served with a strict CSP from a dedicated port (default 4174); a tool that needs shared state
-gets a Deno backend in a deny-by-default sandbox (`ToolSupervisor`), with the model only ever
-writing `handler.ts`. That backend's harness (`agent-core/src/tools/harness.ts`, our code)
-opens one private SQLite database per tool at `<dataDir>/tools/<id>/data/tool.db` via
-`node:sqlite` — isolated because `--allow-write` is scoped to that tool's `data/` dir and
-ATTACH is disabled; the handler gets the raw `db` handle plus a key/value `store` facade (also
-what `GET/PUT /__state` uses) layered on a `_kv` table. `FAMILY_AGENT_TOOLS=0` disables the
-whole feature.
+served with a strict CSP from a dedicated port (default 4174); a tool that needs a backend
+gets a Deno process in a deny-by-default sandbox (`ToolSupervisor`), with the model only ever
+writing `operations.ts` (`[{ name, description, access, inputSchema, run }]` — older tools
+have a `handler.ts` instead, still supported). That backend's harness
+(`agent-core/src/tools/harness.ts`, our code) opens one private SQLite database per tool at
+`<dataDir>/tools/<id>/data/tool.db` via `node:sqlite` — isolated because `--allow-write` is
+scoped to that tool's `data/` dir and ATTACH is disabled; `run(input, ctx)` gets the raw `db`
+handle plus a key/value `store` facade (also what `GET/PUT /__state` uses) layered on a `_kv`
+table. From the one `operations` array the harness serves an **MCP server** (`POST /mcp`,
+JSON-RPC 2.0) that `tools-agent` calls via `agent-core/src/tools/toolMcp.ts`, plain REST
+(`/api/<name>`) for the tool's own frontend, and `GET /__manifest`. `FAMILY_AGENT_TOOLS=0`
+disables the whole feature.
 
 Still not implemented from the brainstormed architecture: the compute mesh, Tailscale
 transport, and the bundled managed-model runtime. Full reasoning for every scope cut is in

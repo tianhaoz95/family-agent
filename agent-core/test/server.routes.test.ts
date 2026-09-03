@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, rmSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { Store } from "../src/db.js";
@@ -883,6 +884,138 @@ describe("HTTP API", () => {
     } finally {
       (config as { toolsEnabled: boolean }).toolsEnabled = originalEnabled;
     }
+  });
+
+  it("GET /tools/:id/operations returns the cached MCP operation list", async () => {
+    const t = admin.scoped.createTool({ name: "Item Tracker", description: "where stuff is", prompt: "x", kind: "server" });
+    admin.scoped.setToolStatus(t.id, "ready");
+
+    // No cache yet.
+    expect((await inject({ method: "GET", url: `/tools/${t.id}/operations` })).json().operations).toEqual([]);
+
+    // Stand in for what toolMcp.refreshManifest writes at build time.
+    const dir = join(config.dataDir, "tools", t.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "mcp.json"),
+      JSON.stringify({
+        name: "Item Tracker",
+        operations: [
+          { name: "find_item", description: "look up an item", access: "read", inputSchema: { type: "object", properties: { query: { type: "string" } } } },
+          { name: "save_item", description: "record an item", access: "write", inputSchema: { type: "object", properties: {} } },
+        ],
+      }),
+    );
+
+    const res = await inject({ method: "GET", url: `/tools/${t.id}/operations` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().operations.map((o: any) => `${o.name}:${o.access}`)).toEqual(["find_item:read", "save_item:write"]);
+
+    expect((await inject({ method: "GET", url: "/tools/NOPE/operations" })).statusCode).toBe(404);
+  });
+
+  // ---- tool database inspector ----
+  // Stands in for what tools/harness.ts writes at runtime: a server tool with
+  // its own SQLite db under <dataDir>/tools/<id>/data/tool.db.
+  function seedServerToolDb(scoped: typeof admin.scoped, seed?: (db: DatabaseSync) => void) {
+    const t = scoped.createTool({ name: "Chore points", description: "points ledger", prompt: "x", kind: "server" });
+    scoped.setToolStatus(t.id, "ready");
+    const dir = join(config.dataDir, "tools", t.id, "data");
+    mkdirSync(dir, { recursive: true });
+    const db = new DatabaseSync(join(dir, "tool.db"));
+    db.exec("CREATE TABLE _kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    db.exec("CREATE TABLE points (id INTEGER PRIMARY KEY, who TEXT NOT NULL, n INTEGER DEFAULT 0)");
+    db.prepare("INSERT INTO points (who, n) VALUES (?, ?)").run("ada", 3);
+    db.prepare("INSERT INTO points (who, n) VALUES (?, ?)").run("bo", 7);
+    db.prepare("INSERT INTO _kv (key, value) VALUES (?, ?)").run("state", '{"round":2}');
+    seed?.(db);
+    db.close();
+    return t;
+  }
+
+  it("GET /tools/:id/db returns the schema and row counts for a server tool", async () => {
+    const t = seedServerToolDb(admin.scoped);
+    const res = await inject({ method: "GET", url: `/tools/${t.id}/db` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.exists).toBe(true);
+    const points = body.tables.find((x: any) => x.name === "points");
+    expect(points).toMatchObject({ type: "table", rowCount: 2 });
+    expect(points.columns.map((c: any) => c.name)).toEqual(["id", "who", "n"]);
+    expect(points.columns.find((c: any) => c.name === "id").pk).toBe(true);
+  });
+
+  it("GET /tools/:id/db reports exists:false when a server tool never ran", async () => {
+    const server = admin.scoped.createTool({ name: "Fresh", description: "d", prompt: "x", kind: "server" });
+    admin.scoped.setToolStatus(server.id, "ready");
+    expect((await inject({ method: "GET", url: `/tools/${server.id}/db` })).json()).toMatchObject({
+      kind: "server",
+      exists: false,
+    });
+  });
+
+  it("GET /tools/:id/db + /db/state expose a static tool's saved __state blobs", async () => {
+    const stat = admin.scoped.createTool({ name: "Static", description: "d", prompt: "x", kind: "static" });
+    admin.scoped.setToolStatus(stat.id, "ready");
+
+    // no data/ dir yet
+    expect((await inject({ method: "GET", url: `/tools/${stat.id}/db` })).json()).toMatchObject({
+      kind: "static",
+      exists: false,
+      stateEntries: [],
+    });
+
+    const dataDir = join(config.dataDir, "tools", stat.id, "data");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, "state.json"), JSON.stringify({ recipes: ["a", "b"], last: 1 }));
+    writeFileSync(join(dataDir, "__ls.json"), JSON.stringify({ theme: "dark" }));
+
+    const ov = (await inject({ method: "GET", url: `/tools/${stat.id}/db` })).json();
+    expect(ov.exists).toBe(true);
+    expect(ov.stateEntries.map((e: any) => e.key).sort()).toEqual(["__ls", "state"]);
+
+    const val = await inject({ method: "GET", url: `/tools/${stat.id}/db/state?key=state` });
+    expect(val.json().value).toEqual({ recipes: ["a", "b"], last: 1 });
+
+    expect((await inject({ method: "GET", url: `/tools/${stat.id}/db/state?key=missing` })).statusCode).toBe(400);
+    // the SQL routes don't apply to a static tool
+    expect((await inject({ method: "GET", url: `/tools/${stat.id}/db/rows?table=x` })).statusCode).toBe(400);
+  });
+
+  it("GET /tools/:id/db/rows paginates and sorts", async () => {
+    const t = seedServerToolDb(admin.scoped);
+    const res = await inject({ method: "GET", url: `/tools/${t.id}/db/rows?table=points&limit=1&offset=1&orderBy=n&dir=desc` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({ table: "points", total: 2, limit: 1, offset: 1 });
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0].who).toBe("ada"); // n desc -> [bo(7), ada(3)], offset 1
+
+    expect((await inject({ method: "GET", url: `/tools/${t.id}/db/rows?table=nope` })).statusCode).toBe(400);
+    expect((await inject({ method: "GET", url: `/tools/${t.id}/db/rows?table=points&orderBy=bogus` })).statusCode).toBe(400);
+  });
+
+  it("POST /tools/:id/db/query runs a read-only statement and refuses writes", async () => {
+    const t = seedServerToolDb(admin.scoped);
+    const ok = await inject({ method: "POST", url: `/tools/${t.id}/db/query`, payload: { sql: "SELECT who, n FROM points ORDER BY n" } });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().rows.map((r: any) => r.who)).toEqual(["ada", "bo"]);
+
+    for (const sql of ["DELETE FROM points", "UPDATE points SET n = 0", "DROP TABLE points", "SELECT 1; DROP TABLE points"]) {
+      const bad = await inject({ method: "POST", url: `/tools/${t.id}/db/query`, payload: { sql } });
+      expect(bad.statusCode, sql).toBe(400);
+    }
+    // the write was blocked, not applied
+    expect((await inject({ method: "GET", url: `/tools/${t.id}/db` })).json().tables.find((x: any) => x.name === "points").rowCount).toBe(2);
+  });
+
+  it("tool db routes 404 for another user's tool", async () => {
+    const t = seedServerToolDb(admin.scoped);
+    const stranger = seedUser(store, { username: "stranger", role: "member" });
+    const asStranger = authInject(app, stranger.token);
+    expect((await asStranger({ method: "GET", url: `/tools/${t.id}/db` })).statusCode).toBe(404);
+    expect((await asStranger({ method: "GET", url: `/tools/${t.id}/db/rows?table=points` })).statusCode).toBe(404);
+    expect((await asStranger({ method: "POST", url: `/tools/${t.id}/db/query`, payload: { sql: "SELECT 1" } })).statusCode).toBe(404);
   });
 
   it("GET /health advertises the tools port", async () => {

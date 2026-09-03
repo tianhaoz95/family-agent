@@ -43,6 +43,9 @@ import { toolsDir } from "./config.js";
 import { ToolSupervisor } from "./tools/supervisor.js";
 import { startToolsServer } from "./tools/server.js";
 import { buildTool } from "./tools/builder.js";
+import * as dbInspect from "./tools/dbInspect.js";
+import { readManifestCache, refreshManifest, callOperation } from "./tools/toolMcp.js";
+import type { FamilyToolEntry } from "./agents/toolTools.js";
 
 // The authenticated user + their scoped store, attached by the auth hook and
 // read by every non-public route handler.
@@ -154,9 +157,26 @@ export function buildServer(
 
   const startToolBuild = (userId: string, prompt: string) => {
     if (!config.toolsEnabled) return;
-    void buildTool(extractionModel, store.scoped(userId), supervisor, prompt).catch((e) => {
-      console.error("tool build crashed:", e);
-    });
+    void buildTool(extractionModel, store.scoped(userId), supervisor, prompt)
+      // buildTool caches the new tool's MCP manifest itself; just drop this
+      // user's planner graph so it rebuilds and tools-agent sees the change.
+      .then(() => agents.delete(userId))
+      .catch((e) => console.error("tool build crashed:", e));
+  };
+
+  // This user's ready server tools that expose an MCP operation list — read
+  // fresh from the on-disk cache each time so a rebuilt/added/removed tool is
+  // reflected without reconstructing the planner graph.
+  const familyToolCatalog = (userId: string): FamilyToolEntry[] => {
+    if (!config.toolsEnabled) return [];
+    const out: FamilyToolEntry[] = [];
+    for (const t of store.scoped(userId).listTools()) {
+      if (t.kind !== "server" || t.status !== "ready") continue;
+      const manifest = readManifestCache(t.id);
+      if (!manifest || manifest.operations.length === 0) continue;
+      out.push({ id: t.id, name: t.name, description: t.description, operations: manifest.operations });
+    }
+    return out;
   };
 
   // One planner graph per user, built on first use, bound to that user's
@@ -165,7 +185,7 @@ export function buildServer(
   // Per-user sink for "the agent looked this up" hints — a fresh array is set
   // just before each /chat turn and read back after, so the reply can carry
   // clickable task / document references.
-  const chatRefs = new Map<string, { type: "document" | "task"; id: string }[]>();
+  const chatRefs = new Map<string, { type: "document" | "task" | "tool"; id: string }[]>();
   const agentFor = (userId: string): FamilyAgent => {
     let a = agents.get(userId);
     if (!a) {
@@ -173,6 +193,12 @@ export function buildServer(
         startToolBuild: (p) => startToolBuild(userId, p),
         onReference: (ref) => chatRefs.get(userId)?.push(ref),
         getEmbedder: () => embedder,
+        familyTools: config.toolsEnabled
+          ? {
+              getCatalog: () => familyToolCatalog(userId),
+              callOperation: (toolId, operation, args) => callOperation(toolId, operation, args, supervisor),
+            }
+          : undefined,
       });
       agents.set(userId, a);
     }
@@ -183,7 +209,7 @@ export function buildServer(
     const collected = chatRefs.get(userId) ?? [];
     chatRefs.delete(userId);
     const seen = new Set<string>();
-    const out: { type: "document" | "task"; id: string; label: string }[] = [];
+    const out: { type: "document" | "task" | "tool"; id: string; label: string }[] = [];
     for (const r of collected) {
       const key = `${r.type}:${r.id}`;
       if (seen.has(key)) continue;
@@ -191,6 +217,9 @@ export function buildServer(
       if (r.type === "document") {
         const d = userStore.getDocument(r.id);
         if (d) out.push({ type: "document", id: r.id, label: d.filename });
+      } else if (r.type === "tool") {
+        const t = userStore.getTool(r.id);
+        if (t) out.push({ type: "tool", id: r.id, label: t.name });
       } else {
         const t = userStore.getTask(r.id);
         if (t) out.push({ type: "task", id: r.id, label: t.title });
@@ -222,6 +251,22 @@ export function buildServer(
   // embedding model isn't reachable — never blocks startup or the API. No-op
   // when the feature is off (embedder is null).
   void backfillEmbeddings(store, () => embedder);
+
+  // Cache the MCP operation list for any server tool that predates the feature
+  // (or lost its cache). Fire-and-forget — boots each backend once, then stops
+  // it. No-op when tools are disabled or Deno isn't available.
+  if (config.toolsEnabled && supervisor.denoAvailable()) {
+    void (async () => {
+      for (const u of store.listUsers()) {
+        for (const t of store.scoped(u.id).listTools()) {
+          if (t.kind === "server" && t.status === "ready" && !readManifestCache(t.id)) {
+            await refreshManifest(t.id, t.name, supervisor).catch(() => {});
+            supervisor.stop(t.id);
+          }
+        }
+      }
+    })();
+  }
 
   // ---- health / discovery (public) ----
   app.get("/health", async () => ({
@@ -876,15 +921,33 @@ export function buildServer(
     return { tool: view };
   });
 
+  // The operations this tool exposes to the chat assistant (its MCP tools/list,
+  // cached at build time — see tools/toolMcp.ts). Empty for static tools and
+  // for server tools built before the operations format.
+  app.get("/tools/:id/operations", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const tool = req.userStore.getTool(id);
+    if (!tool) return reply.code(404).send({ error: "tool not found" });
+    const manifest = readManifestCache(id);
+    return {
+      operations: (manifest?.operations ?? []).map((o) => ({
+        name: o.name,
+        description: o.description,
+        access: o.access,
+        inputSchema: o.inputSchema,
+      })),
+    };
+  });
+
   const BuildToolBody = z.object({ prompt: z.string().min(3).max(600) });
   app.post("/tools", async (req, reply) => {
     if (!config.toolsEnabled) return reply.code(403).send({ error: "Tool building is disabled." });
     const parsed = BuildToolBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
     const prompt = parsed.data.prompt;
-    void buildTool(extractionModel, req.userStore, supervisor, prompt).catch((e) =>
-      console.error("tool build crashed:", e)
-    );
+    // Same path as a build kicked off from chat — refreshes the tool's MCP
+    // manifest and busts the planner cache when it finishes.
+    startToolBuild(req.authUser.id, prompt);
     return reply.code(202).send({ building: true, prompt });
   });
 
@@ -895,7 +958,97 @@ export function buildServer(
     supervisor.stop(id);
     await rm(join(toolsDir(), id), { recursive: true, force: true }).catch(() => {});
     req.userStore.deleteTool(id);
+    // Drop the planner graph so tools-agent stops offering the removed tool.
+    agents.delete(req.authUser.id);
     return { deleted: true };
+  });
+
+  // ---- tool database inspector ----
+  // Read-only browsing of a "server"-kind tool's private SQLite db
+  // (<dataDir>/tools/<id>/data/tool.db — see tools/harness.ts and
+  // tools/dbInspect.ts). Scoped to the caller's own tools via getTool().
+  const ownedTool = (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const tool = req.userStore.getTool(id);
+    if (!tool) {
+      reply.code(404).send({ error: "tool not found" });
+      return null;
+    }
+    return tool;
+  };
+
+  const sendDbError = (reply: FastifyReply, e: unknown) => {
+    if (e instanceof dbInspect.ToolDbMissing) return reply.code(404).send({ error: e.message });
+    if (e instanceof dbInspect.BadIdentifier || e instanceof dbInspect.NotReadOnlySql) {
+      return reply.code(400).send({ error: e.message });
+    }
+    return reply.code(400).send({ error: e instanceof Error ? e.message : String(e) });
+  };
+
+  app.get("/tools/:id/db", async (req, reply) => {
+    const tool = ownedTool(req, reply);
+    if (!tool) return;
+    const id = (req.params as { id: string }).id;
+    try {
+      return tool.kind === "server"
+        ? { kind: "server", ...dbInspect.overview(id) }
+        : { kind: "static", ...dbInspect.staticOverview(id) };
+    } catch (e) {
+      return sendDbError(reply, e);
+    }
+  });
+
+  const DbStateQuery = z.object({ key: z.string().min(1).max(64) });
+
+  app.get("/tools/:id/db/state", async (req, reply) => {
+    const tool = ownedTool(req, reply);
+    if (!tool) return;
+    if (tool.kind === "server") {
+      return reply.code(400).send({ error: "server tools keep state in the _kv table" });
+    }
+    const parsed = DbStateQuery.safeParse(req.query);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    try {
+      return { key: parsed.data.key, value: dbInspect.staticStateValue((req.params as { id: string }).id, parsed.data.key) };
+    } catch (e) {
+      return sendDbError(reply, e);
+    }
+  });
+
+  const DbRowsQuery = z.object({
+    table: z.string().min(1).max(128),
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+    offset: z.coerce.number().int().min(0).optional(),
+    orderBy: z.string().max(128).optional(),
+    dir: z.enum(["asc", "desc"]).optional(),
+  });
+
+  app.get("/tools/:id/db/rows", async (req, reply) => {
+    const tool = ownedTool(req, reply);
+    if (!tool) return;
+    if (tool.kind !== "server") return reply.code(400).send({ error: "this tool has no database" });
+    const parsed = DbRowsQuery.safeParse(req.query);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    try {
+      return dbInspect.page((req.params as { id: string }).id, parsed.data.table, parsed.data);
+    } catch (e) {
+      return sendDbError(reply, e);
+    }
+  });
+
+  const DbQueryBody = z.object({ sql: z.string().min(1).max(4000) });
+
+  app.post("/tools/:id/db/query", async (req, reply) => {
+    const tool = ownedTool(req, reply);
+    if (!tool) return;
+    if (tool.kind !== "server") return reply.code(400).send({ error: "this tool has no database" });
+    const parsed = DbQueryBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    try {
+      return dbInspect.query((req.params as { id: string }).id, parsed.data.sql);
+    } catch (e) {
+      return sendDbError(reply, e);
+    }
   });
 
   app.get("/ollama/models", async () => {

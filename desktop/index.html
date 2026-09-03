@@ -502,6 +502,36 @@
           ></iframe>
         </div>
 
+        <!-- Read-only inspector for a server tool's private SQLite database.
+             Fills the content area like the tool viewer above. -->
+        <div id="db-inspector" class="db-inspector" hidden>
+          <header class="tool-viewer-bar">
+            <button id="db-inspector-close" type="button" class="tool-viewer-back">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+              <span>Tools</span>
+            </button>
+            <span id="db-inspector-title" class="tool-viewer-title"></span>
+            <span id="db-inspector-meta" class="db-inspector-meta"></span>
+          </header>
+          <div class="db-inspector-body">
+            <nav id="db-inspector-tables" class="db-inspector-tables" aria-label="Tables"></nav>
+            <div class="db-inspector-main">
+              <form id="db-inspector-query" class="db-inspector-query">
+                <input id="db-inspector-sql" type="text" spellcheck="false" autocomplete="off"
+                  placeholder="SELECT * FROM … — read-only" />
+                <button type="submit">Run</button>
+              </form>
+              <p id="db-inspector-status" class="db-inspector-status" role="status"></p>
+              <div id="db-inspector-grid" class="db-inspector-grid"></div>
+              <div id="db-inspector-pager" class="db-inspector-pager" hidden>
+                <button id="db-inspector-prev" type="button">← Prev</button>
+                <span id="db-inspector-range"></span>
+                <button id="db-inspector-next" type="button">Next →</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Slides in from the right: a document preview, or a task/document
              the assistant referenced in a reply. -->
         <aside id="side-panel" class="side-panel" hidden aria-label="Detail panel">

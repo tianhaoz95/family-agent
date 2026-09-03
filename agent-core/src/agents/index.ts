@@ -6,6 +6,7 @@ import type { ScopedStore } from "../db.js";
 import { makeTaskTools } from "./taskTools.js";
 import { makeDocumentTools } from "./documentTools.js";
 import { makeNoteTools } from "./noteTools.js";
+import { makeFamilyToolTools, type FamilyToolDeps } from "./toolTools.js";
 import type { OnReference } from "./references.js";
 import type { Embedder } from "../embeddings.js";
 
@@ -30,10 +31,20 @@ sticky notes — a shared family board and each person's private board. Route
 anything about "the board", "the sticky notes", "the fridge", "our notes", or
 "note that down / add to my notes / jot this down" to it.
 
+There is also a "tools-agent" subagent: the family builds their own small
+tools (an item / location tracker, a household inventory, a borrowed-things
+log, a chore-points tally, a bookshelf catalog…), and those tools can be
+queried and updated from chat. When someone wants to look something up in one
+of them or record something into one — "where did we put the…", "who
+borrowed the…", "add… to the inventory", "log that…", "how many points does
+… have" — delegate to tools-agent. (Building a NEW tool is still builder-agent;
+tools-agent only uses tools that already exist.)
+
 To delegate, call the tool named "task" with two arguments: subagent_type set
-to "task-agent", "document-agent", "builder-agent", or "notes-agent", and
-description set to what you need done. These are NOT themselves callable tools
-— calling "task" with the right subagent_type is the only way to reach them.
+to "task-agent", "document-agent", "builder-agent", "notes-agent", or
+"tools-agent", and description set to what you need done. These are NOT
+themselves callable tools — calling "task" with the right subagent_type is the
+only way to reach them.
 
 Example — user asks "what documents do I have?": call task with
 subagent_type "document-agent" and description "List all ingested documents
@@ -73,6 +84,12 @@ fridge?": call task with subagent_type "notes-agent" and description "List
 the sticky notes." And for "add a sticky note that the plumber comes Friday"
 or "note that down for me": call task with subagent_type "notes-agent" and
 description "Add a sticky note: plumber comes Friday."
+
+Example — user asks "where's the good screwdriver?": call task with
+subagent_type "tools-agent" and description "Look up where the good
+screwdriver is stored." And for "we moved the tent to the basement": call
+task with subagent_type "tools-agent" and description "Record that the tent
+is now in the basement."
 
 Keep replies short and concrete. If a request needs no tool at all (a plain
 question with nothing to look up, like "what can you help with?"), answer
@@ -126,6 +143,22 @@ add_sticky_note once — default to the shared board unless the request is
 clearly personal ("my notes", "remind me"), then use private. Confirm what you
 did in one sentence. Never refuse — a sticky note is just a short line of text.`;
 
+const TOOLS_AGENT_PROMPT = `You use the family's own custom-built tools to look
+things up and record things — trackers, inventories, logs, tallies the family
+made in the Tools tab. You do NOT build tools (that's builder-agent's job) and
+you do NOT touch tasks, documents, or sticky notes.
+
+Always call list_family_tools first. It shows every tool, and for each one the
+operations you can call — their exact names, whether they read or write, and
+their parameters. Then call call_family_tool with the tool name, the operation
+name (both exactly as listed), and an input object with the parameters.
+
+If a lookup ("where is…", "who has…", "how many…") — use a read operation and
+report what it returns, plainly. If a change ("we moved…", "add…", "log
+that…", "mark…") — use a write operation, then confirm what you recorded in
+one sentence. If no tool fits the request, say so plainly — do not invent a
+tool or an operation. Never refuse a request that a tool clearly covers.`;
+
 const BUILDER_AGENT_PROMPT = `You build small custom web tools for the family.
 When you get a request, call start_build exactly once with a clear one-line
 description of the tool to make (rephrase the user's ask into "Build a tool
@@ -136,10 +169,17 @@ sentence that their tool is being built and will show up in the Tools tab.`;
 export interface FamilyAgentDeps {
   /** Fire-and-forget: kick off generating a tool from this description. */
   startToolBuild?: (description: string) => void;
-  /** Notified of each task / document a subagent retrieves this turn. */
+  /** Notified of each task / document / tool a subagent retrieves this turn. */
   onReference?: OnReference;
   /** Current embedding client (or null) — enables semantic document search. */
   getEmbedder?: () => Embedder | null;
+  /**
+   * The "tools-agent" wiring: `getCatalog` returns this user's ready tools that
+   * expose operations (read live each turn — no graph rebuild when a tool
+   * changes), `callOperation` invokes one over MCP. Omit to disable the
+   * subagent (e.g. tools feature off).
+   */
+  familyTools?: Pick<FamilyToolDeps, "getCatalog" | "callOperation">;
 }
 
 export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {}) {
@@ -206,6 +246,23 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
         model,
         tools: makeNoteTools(store),
       },
+      ...(deps.familyTools
+        ? [
+            {
+              name: "tools-agent",
+              description:
+                "Uses the family's own custom-built tools (trackers, inventories, logs, tallies) to look something up or record something — where an item is stored, who borrowed what, how many chore points someone has.",
+              systemPrompt: TOOLS_AGENT_PROMPT,
+              model,
+              tools: makeFamilyToolTools({
+                getCatalog: deps.familyTools.getCatalog,
+                callOperation: deps.familyTools.callOperation,
+                onReference: deps.onReference,
+                logActivity: (actor, action, detail) => store.logActivity(actor, action, detail),
+              }),
+            },
+          ]
+        : []),
     ],
   });
 }

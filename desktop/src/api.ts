@@ -169,11 +169,19 @@ export interface ActivityEntry {
   detail: string;
 }
 
-/** A task/document the assistant looked up while answering — rendered as a clickable chip. */
+/** A task/document/tool the assistant used while answering — rendered as a clickable chip. */
 export interface ChatReference {
-  type: "document" | "task";
+  type: "document" | "task" | "tool";
   id: string;
   label: string;
+}
+
+/** An operation a server tool exposes to the chat assistant (its MCP tools/list). */
+export interface ToolOperation {
+  name: string;
+  description: string;
+  access: "read" | "write";
+  inputSchema: { type?: string; properties?: Record<string, { type?: string; description?: string }>; required?: string[] };
 }
 
 export interface Tool {
@@ -186,6 +194,52 @@ export interface Tool {
   createdAt: string;
   /** Path under the tools server, e.g. "/AB12CD34/". null until ready. */
   path: string | null;
+}
+
+// ---- tool database inspector (server-kind tools only) ----
+export interface ToolDbColumn {
+  name: string;
+  type: string;
+  pk: boolean;
+  notNull: boolean;
+}
+
+export interface ToolDbTable {
+  name: string;
+  type: "table" | "view";
+  rowCount: number | null;
+  columns: ToolDbColumn[];
+  sql: string | null;
+}
+
+export interface ToolDbStateEntry {
+  key: string;
+  bytes: number;
+}
+
+export interface ToolDbOverview {
+  kind: "static" | "server";
+  exists: boolean;
+  sizeBytes: number | null;
+  tables: ToolDbTable[];
+  /** Static tools only — the tool's saved `/__state` blobs. */
+  stateEntries: ToolDbStateEntry[];
+}
+
+export interface ToolDbRowPage {
+  table: string;
+  columns: ToolDbColumn[];
+  rows: Record<string, unknown>[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ToolDbQueryResult {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  truncated: boolean;
 }
 
 export interface Health {
@@ -437,4 +491,22 @@ export const api = {
   buildTool: (prompt: string) =>
     request<{ building: true; prompt: string }>("/tools", { method: "POST", body: JSON.stringify({ prompt }) }),
   deleteTool: (id: string) => request<{ deleted: true }>(`/tools/${id}`, { method: "DELETE" }),
+  getTool: (id: string) => request<{ tool: Tool }>(`/tools/${id}`),
+  toolDb: (id: string) => request<ToolDbOverview>(`/tools/${id}/db`),
+  toolDbRows: (
+    id: string,
+    params: { table: string; limit?: number; offset?: number; orderBy?: string; dir?: "asc" | "desc" },
+  ) => {
+    const q = new URLSearchParams({ table: params.table });
+    if (params.limit != null) q.set("limit", String(params.limit));
+    if (params.offset != null) q.set("offset", String(params.offset));
+    if (params.orderBy) q.set("orderBy", params.orderBy);
+    if (params.dir) q.set("dir", params.dir);
+    return request<ToolDbRowPage>(`/tools/${id}/db/rows?${q.toString()}`);
+  },
+  toolDbQuery: (id: string, sql: string) =>
+    request<ToolDbQueryResult>(`/tools/${id}/db/query`, { method: "POST", body: JSON.stringify({ sql }) }),
+  toolDbState: (id: string, key: string) =>
+    request<{ key: string; value: unknown }>(`/tools/${id}/db/state?key=${encodeURIComponent(key)}`),
+  toolOperations: (id: string) => request<{ operations: ToolOperation[] }>(`/tools/${id}/operations`),
 };

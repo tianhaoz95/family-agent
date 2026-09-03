@@ -298,10 +298,39 @@ Later changes (not part of the original autonomous session):
     (`PRAGMA max_page_count`). Tool deletion `rm -rf`s the dir, DB included.
     Verified in `test/tools.test.ts` (persists across a backend restart; legacy
     JSON blob migrates).
+  - **Data inspector.** Read-only browsing of a tool's persisted data, on an
+    "Inspect data" button on every ready tool (desktop full-area overlay).
+    Server tools: `tools/dbInspect.ts` opens `tool.db` with `{ readOnly: true }`
+    (agent-core has disk access; no proxy through the Deno sandbox) behind
+    `GET /tools/:id/db`, `GET /tools/:id/db/rows`, and a SELECT-only
+    `POST /tools/:id/db/query` — table rail + sortable paged grid + query box.
+    Static tools (no db): `GET /tools/:id/db` + `GET /tools/:id/db/state?key=`
+    expose the `data/<key>.json` `__state` blobs as pretty JSON. All routes
+    scoped to the caller's own tools. Android not wired yet. See
+    `docs/DECISIONS.md` → "Tool database inspector".
+  - **Server tools are an API the chat assistant can call.** The model writes
+    `operations.ts` (`[{ name, description, access, inputSchema, run }]`); the
+    harness turns that one array into a real MCP server (`POST /mcp` —
+    JSON-RPC 2.0 `initialize` / `tools/list` / `tools/call`), plain REST for the
+    tool's own frontend (`GET|POST /api/<name>`), and `GET /__manifest`.
+    agent-core is the MCP client (`tools/toolMcp.ts`), caches each tool's
+    operation list to `<toolDir>/mcp.json` at build time, and a `tools-agent`
+    subagent (`list_family_tools` + `call_family_tool`) lets the planner query
+    and update the family's own trackers/inventories/logs from chat — "where's
+    the winter tent?" is answered by calling the tool, with a `type:"tool"`
+    reference chip. Writes get an `activity` line. Verified end-to-end against
+    `gemma4:26b`: built an item tracker from one sentence, then chat recorded an
+    item and looked it up, and the tool's own UI showed the same row. The MCP
+    endpoint is also reachable via the tools server at `:4174/<id>/mcp` (no auth
+    yet — external clients are future scope). See `docs/DECISIONS.md` → "Tools
+    as an agent API (MCP)".
   - Kill switch: `FAMILY_AGENT_TOOLS=0`.
-  - Reliability caveat: `gemma4:e2b` produces a working simple HTML tool most of
-    the time but not always; a bad build is marked `failed` with the error, and
-    a broken custom backend falls back to the built-in `/__state` persistence.
+  - Reliability caveat: a smaller model produces a working simple HTML tool most
+    of the time but not always; a bad build is marked `failed` with the error, a
+    broken frontend still has the built-in `/__state` persistence, and a broken
+    `operations.ts` falls back to no operations (the tool works, the assistant
+    just can't use it). `gemma4:26b` generated clean multi-operation backends
+    reliably in testing.
 - `db.ts` now runs column migrations on startup (an older DB missing a newer
   column no longer breaks every write).
 - Documents can be deleted, and a failed field-extraction shows a retry

@@ -15,6 +15,8 @@ import {
   type Settings,
   type SettingsPatch,
   type Tool,
+  type ToolDbColumn,
+  type ToolOperation,
   type Health,
   type User,
   AGENT_SENDER_ID,
@@ -45,6 +47,7 @@ const views = Array.from(document.querySelectorAll<HTMLElement>(".view"));
 
 function showView(name: string) {
   closeToolViewer();
+  closeDbInspector();
   closeSidePanel();
   for (const btn of navButtons) btn.classList.toggle("is-active", btn.dataset.view === name);
   for (const view of views) view.classList.toggle("is-active", view.id === `view-${name}`);
@@ -1398,8 +1401,38 @@ function renderTools(tools: Tool[]) {
       openBtn.textContent = "Open";
       openBtn.addEventListener("click", () => openTool(tool));
       footer.appendChild(openBtn);
+
+      const inspectBtn = document.createElement("button");
+      inspectBtn.className = "doc-preview";
+      inspectBtn.type = "button";
+      inspectBtn.textContent = "Inspect data";
+      inspectBtn.title =
+        tool.kind === "server"
+          ? "Browse this tool's database (read-only)"
+          : "View this tool's saved data (read-only)";
+      inspectBtn.addEventListener("click", () => void openDbInspector(tool));
+      footer.appendChild(inspectBtn);
     }
     li.appendChild(footer);
+
+    // For a server tool, show what the chat assistant can do with it.
+    if (tool.kind === "server" && tool.status === "ready") {
+      const ops = document.createElement("p");
+      ops.className = "tool-ops-line";
+      li.appendChild(ops);
+      void api
+        .toolOperations(tool.id)
+        .then(({ operations }) => {
+          if (!operations.length) return;
+          ops.innerHTML =
+            `<span class="tool-ops-label">Assistant can</span> ` +
+            operations
+              .map((o: ToolOperation) => `<code class="tool-op tool-op-${o.access}" title="${escapeHtml(o.description)}">${escapeHtml(o.name)}</code>`)
+              .join(" ");
+        })
+        .catch(() => {});
+    }
+
     toolList.appendChild(li);
   }
 }
@@ -1450,6 +1483,335 @@ toolForm.addEventListener("submit", async (e) => {
     toolStatusEl.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
   }
 });
+
+// ---------- tool database inspector ----------
+// Read-only browsing of a server tool's private SQLite db. Fills the content
+// area like the tool viewer; the sidebar stays usable. Backend: GET
+// /tools/:id/db, GET /tools/:id/db/rows, POST /tools/:id/db/query.
+const dbInspector = document.getElementById("db-inspector") as HTMLElement;
+const dbInspectorTitle = document.getElementById("db-inspector-title")!;
+const dbInspectorMeta = document.getElementById("db-inspector-meta")!;
+const dbInspectorTablesEl = document.getElementById("db-inspector-tables")!;
+const dbInspectorGrid = document.getElementById("db-inspector-grid")!;
+const dbInspectorStatus = document.getElementById("db-inspector-status")!;
+const dbInspectorPager = document.getElementById("db-inspector-pager") as HTMLElement;
+const dbInspectorRange = document.getElementById("db-inspector-range")!;
+const dbInspectorPrev = document.getElementById("db-inspector-prev") as HTMLButtonElement;
+const dbInspectorNext = document.getElementById("db-inspector-next") as HTMLButtonElement;
+const dbInspectorClose = document.getElementById("db-inspector-close") as HTMLButtonElement;
+const dbInspectorQueryForm = document.getElementById("db-inspector-query") as HTMLFormElement;
+const dbInspectorSql = document.getElementById("db-inspector-sql") as HTMLInputElement;
+
+const DB_PAGE = 50;
+const dbState = {
+  toolId: "",
+  table: "",
+  offset: 0,
+  orderBy: undefined as string | undefined,
+  dir: "asc" as "asc" | "desc",
+};
+
+function closeDbInspector() {
+  if (dbInspector.hidden) return;
+  dbInspector.hidden = true;
+  dbInspectorTablesEl.innerHTML = "";
+  dbInspectorGrid.innerHTML = "";
+  dbInspectorPager.hidden = true;
+  dbInspectorStatus.textContent = "";
+  dbInspectorStatus.classList.remove("is-error");
+  dbInspectorSql.value = "";
+  dbInspectorQueryForm.hidden = false;
+  dbState.toolId = "";
+  dbState.table = "";
+}
+dbInspectorClose.addEventListener("click", () => showView("tools"));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !dbInspector.hidden && document.activeElement !== dbInspectorSql) {
+    closeDbInspector();
+  }
+});
+
+function dbError(msg: string) {
+  dbInspectorStatus.textContent = msg;
+  dbInspectorStatus.classList.add("is-error");
+}
+function dbInfo(msg: string) {
+  dbInspectorStatus.textContent = msg;
+  dbInspectorStatus.classList.remove("is-error");
+}
+
+function fmtBytes(n: number | null): string {
+  if (n == null) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function openDbInspector(tool: Tool) {
+  closeToolViewer();
+  closeSidePanel();
+  dbState.toolId = tool.id;
+  dbState.table = "";
+  dbInspectorTitle.textContent = `${tool.name} — ${tool.kind === "server" ? "database" : "saved data"}`;
+  dbInspectorMeta.textContent = "";
+  dbInspectorTablesEl.innerHTML = "";
+  dbInspectorGrid.innerHTML = "";
+  dbInspectorPager.hidden = true;
+  dbInspectorSql.value = "";
+  // The SQL box only makes sense for a real database.
+  dbInspectorQueryForm.hidden = tool.kind !== "server";
+  dbInfo("Loading…");
+  dbInspector.hidden = false;
+
+  try {
+    const overview = await api.toolDb(tool.id);
+    // Tolerate an older/unexpected response shape (e.g. an agent-core that
+    // predates this feature): never index into a field that might be missing.
+    const kind = overview?.kind ?? tool.kind;
+    const tables = Array.isArray(overview?.tables) ? overview.tables : [];
+    const stateEntries = Array.isArray(overview?.stateEntries) ? overview.stateEntries : [];
+    dbInspectorMeta.textContent = fmtBytes(overview?.sizeBytes ?? null);
+
+    if (kind !== "server") {
+      // A current agent-core always returns a stateEntries array here; its
+      // absence means the running backend predates this feature.
+      if (!Array.isArray(overview?.stateEntries)) {
+        dbInspectorTablesEl.innerHTML = `<p class="db-inspector-tables-empty">—</p>`;
+        dbError("This needs a newer agent-core. Restart the app (./scripts/start-desktop.sh) to rebuild it.");
+        return;
+      }
+      renderStaticState(stateEntries);
+      return;
+    }
+
+    if (!overview?.exists) {
+      dbInfo("This tool has no database yet — it gets one the first time its backend runs.");
+      return;
+    }
+    if (tables.length === 0) {
+      dbInspectorTablesEl.innerHTML = `<p class="db-inspector-tables-empty">No tables.</p>`;
+      dbInfo("The database is empty.");
+      return;
+    }
+    for (const t of tables) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "db-inspector-table-btn" + (t.type === "view" ? " is-view" : "");
+      btn.dataset.table = t.name;
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = t.name;
+      const count = document.createElement("span");
+      count.className = "count";
+      count.textContent = t.rowCount == null ? "" : String(t.rowCount);
+      btn.append(name, count);
+      btn.addEventListener("click", () => void selectDbTable(t.name));
+      dbInspectorTablesEl.appendChild(btn);
+    }
+    dbInfo("");
+    await selectDbTable(tables[0].name);
+  } catch (err) {
+    dbError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+// A static (non-server) tool has no SQLite db — it persists small JSON blobs
+// through GET/PUT /__state. Show those instead of tables.
+function renderStaticState(entries: { key: string; bytes: number }[]) {
+  if (!entries || entries.length === 0) {
+    dbInspectorTablesEl.innerHTML = `<p class="db-inspector-tables-empty">No saved data.</p>`;
+    dbInfo("This tool hasn't saved any data yet.");
+    return;
+  }
+  for (const e of entries) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "db-inspector-table-btn";
+    btn.dataset.stateKey = e.key;
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = e.key === "__ls" ? "browser storage" : e.key;
+    const count = document.createElement("span");
+    count.className = "count";
+    count.textContent = fmtBytes(e.bytes);
+    btn.append(name, count);
+    btn.addEventListener("click", () => void loadStaticState(e.key));
+    dbInspectorTablesEl.appendChild(btn);
+  }
+  dbInfo("");
+  void loadStaticState(entries[0].key);
+}
+
+async function loadStaticState(key: string) {
+  for (const b of dbInspectorTablesEl.querySelectorAll<HTMLElement>(".db-inspector-table-btn")) {
+    b.classList.toggle("is-active", b.dataset.stateKey === key);
+  }
+  dbInfo("Loading…");
+  try {
+    const { value } = await api.toolDbState(dbState.toolId, key);
+    dbInspectorGrid.innerHTML = "";
+    const pre = document.createElement("pre");
+    pre.className = "db-inspector-json";
+    pre.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    dbInspectorGrid.appendChild(pre);
+    dbInfo("");
+  } catch (err) {
+    dbError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function selectDbTable(table: string) {
+  dbState.table = table;
+  dbState.offset = 0;
+  dbState.orderBy = undefined;
+  dbState.dir = "asc";
+  dbInspectorSql.value = "";
+  for (const b of dbInspectorTablesEl.querySelectorAll<HTMLElement>(".db-inspector-table-btn")) {
+    b.classList.toggle("is-active", b.dataset.table === table);
+  }
+  await loadDbRows();
+}
+
+async function loadDbRows() {
+  if (!dbState.toolId || !dbState.table) return;
+  dbInfo("Loading…");
+  try {
+    const page = await api.toolDbRows(dbState.toolId, {
+      table: dbState.table,
+      limit: DB_PAGE,
+      offset: dbState.offset,
+      orderBy: dbState.orderBy,
+      dir: dbState.orderBy ? dbState.dir : undefined,
+    });
+    renderDbGrid(
+      page.columns,
+      page.rows,
+      (col) => {
+        if (dbState.orderBy === col) {
+          dbState.dir = dbState.dir === "asc" ? "desc" : "asc";
+        } else {
+          dbState.orderBy = col;
+          dbState.dir = "asc";
+        }
+        void loadDbRows();
+      },
+    );
+    const from = page.total === 0 ? 0 : page.offset + 1;
+    const to = Math.min(page.offset + page.limit, page.total);
+    dbInspectorRange.textContent = `${from}–${to} of ${page.total}`;
+    dbInspectorPrev.disabled = page.offset === 0;
+    dbInspectorNext.disabled = to >= page.total;
+    dbInspectorPager.hidden = false;
+    dbInfo("");
+  } catch (err) {
+    dbInspectorPager.hidden = true;
+    dbError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+dbInspectorPrev.addEventListener("click", () => {
+  dbState.offset = Math.max(0, dbState.offset - DB_PAGE);
+  void loadDbRows();
+});
+dbInspectorNext.addEventListener("click", () => {
+  dbState.offset += DB_PAGE;
+  void loadDbRows();
+});
+
+dbInspectorQueryForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const sql = dbInspectorSql.value.trim();
+  if (!sql || !dbState.toolId) return;
+  dbInfo("Running…");
+  dbInspectorPager.hidden = true;
+  dbState.table = "";
+  dbState.orderBy = undefined;
+  for (const b of dbInspectorTablesEl.querySelectorAll(".db-inspector-table-btn")) {
+    b.classList.remove("is-active");
+  }
+  try {
+    const res = await api.toolDbQuery(dbState.toolId, sql);
+    renderDbGrid(
+      res.columns.map((name) => ({ name, type: "", pk: false, notNull: false })),
+      res.rows,
+    );
+    dbInfo(
+      res.truncated
+        ? `${res.rowCount} rows (truncated — refine the query to see more)`
+        : `${res.rowCount} row${res.rowCount === 1 ? "" : "s"}`,
+    );
+  } catch (err) {
+    dbError(err instanceof Error ? err.message : String(err));
+  }
+});
+
+function renderDbGrid(
+  columns: ToolDbColumn[],
+  rows: Record<string, unknown>[],
+  onSort?: (col: string) => void,
+) {
+  dbInspectorGrid.innerHTML = "";
+  if (rows.length === 0) {
+    dbInspectorGrid.innerHTML = `<p class="db-inspector-grid-empty">No rows.</p>`;
+    return;
+  }
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const col of columns) {
+    const th = document.createElement("th");
+    const label = document.createElement("span");
+    label.textContent = col.name;
+    if (col.pk) label.classList.add("pk");
+    th.appendChild(label);
+    if (col.pk) {
+      const key = document.createElement("span");
+      key.className = "pk";
+      key.textContent = " 🔑";
+      th.appendChild(key);
+    }
+    if (onSort) {
+      if (dbState.orderBy === col.name) {
+        const s = document.createElement("span");
+        s.className = "sort";
+        s.textContent = dbState.dir === "asc" ? " ▲" : " ▼";
+        th.appendChild(s);
+      }
+      th.addEventListener("click", () => onSort(col.name));
+    } else {
+      th.style.cursor = "default";
+    }
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    for (const col of columns) {
+      const td = document.createElement("td");
+      const v = row[col.name];
+      if (v === null || v === undefined) {
+        td.textContent = "NULL";
+        td.classList.add("is-null");
+      } else if (typeof v === "object" && (v as { __blob?: boolean }).__blob) {
+        const b = v as { bytes: number; preview: string };
+        td.textContent = `‹blob ${b.bytes} B›`;
+        td.classList.add("is-blob");
+        td.title = b.preview;
+      } else {
+        const s = typeof v === "string" ? v : JSON.stringify(v);
+        td.textContent = s;
+        td.title = s;
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  dbInspectorGrid.appendChild(table);
+}
 
 // ---------- settings ----------
 const settingsModelSelect = document.getElementById("settings-model-select") as HTMLSelectElement;
@@ -2657,7 +3019,42 @@ async function openTaskPanel(id: string) {
   }
 }
 
-/** Render the assistant's task/document references as clickable chips under its bubble. */
+async function openToolPanel(id: string) {
+  openSidePanel("Loading…", `<p class="side-panel-hint">Loading…</p>`);
+  const gen = panelGen;
+  try {
+    const [{ tool }, { operations }] = await Promise.all([api.getTool(id), api.toolOperations(id)]);
+    if (gen !== panelGen) return;
+    const ops = operations.length
+      ? `<ul class="tool-op-list">${operations
+          .map(
+            (o) =>
+              `<li><code>${escapeHtml(o.name)}</code> <span class="tool-op-access tool-op-access-${o.access}">${o.access}</span><br><span class="side-panel-hint">${escapeHtml(o.description)}</span></li>`
+          )
+          .join("")}</ul>`
+      : `<p class="side-panel-hint">This tool doesn't expose anything the assistant can call.</p>`;
+    openSidePanel(
+      tool.name,
+      `<p class="side-panel-summary">${escapeHtml(tool.description)}</p>
+       <p class="side-panel-hint">The assistant used this tool to answer. It can:</p>
+       ${ops}
+       <button type="button" class="btn-primary" id="tool-panel-open">Open tool</button>`
+    );
+    document.getElementById("tool-panel-open")?.addEventListener("click", () => {
+      closeSidePanel();
+      showView("tools");
+      void refreshTools().then((tools) => {
+        const t = tools.find((x) => x.id === id);
+        if (t) openTool(t);
+      });
+    });
+  } catch (err) {
+    if (gen !== panelGen) return;
+    openSidePanel("Not found", `<p class="side-panel-hint">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`);
+  }
+}
+
+/** Render the assistant's task/document/tool references as clickable chips under its bubble. */
 function appendReferences(afterEl: HTMLElement, references: ChatReference[]) {
   const wrap = document.createElement("div");
   wrap.className = "chat-references";
@@ -2670,9 +3067,11 @@ function appendReferences(afterEl: HTMLElement, references: ChatReference[]) {
     chip.type = "button";
     chip.className = `ref-chip ref-chip-${ref.type}`;
     chip.textContent = ref.label;
-    chip.addEventListener("click", () =>
-      ref.type === "document" ? void openDocumentPanel(ref.id) : void openTaskPanel(ref.id)
-    );
+    chip.addEventListener("click", () => {
+      if (ref.type === "document") void openDocumentPanel(ref.id);
+      else if (ref.type === "tool") void openToolPanel(ref.id);
+      else void openTaskPanel(ref.id);
+    });
     wrap.appendChild(chip);
   }
   afterEl.insertAdjacentElement("afterend", wrap);
