@@ -372,6 +372,17 @@ export const api = {
   deleteDocument: (id: string) => request<{ document: Document }>(`/documents/${id}`, { method: "DELETE" }),
   retryExtraction: (id: string) =>
     request<{ document: Document }>(`/documents/${id}/retry-extraction`, { method: "POST" }),
+  /** Rename a document. `by` is "document-agent" when applying an AI suggestion the user confirmed. */
+  renameDocument: (id: string, filename: string, by: "user" | "document-agent" = "user") =>
+    request<{ document: Document }>(`/documents/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ filename, by }),
+    }),
+  /** Ask the local model for a better filename from the document's content. Does not apply it. */
+  suggestDocumentName: (id: string) =>
+    request<{ suggestion: { filename: string }; current: string }>(`/documents/${id}/suggest-name`, {
+      method: "POST",
+    }),
   listActivity: () => request<{ activity: ActivityEntry[] }>("/activity"),
 
   // ---- family chat ----

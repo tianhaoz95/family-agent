@@ -115,6 +115,26 @@ describe("Store (scoped to one user)", () => {
     expect(store.listActivity().some((a) => a.action === "document.deleted")).toBe(true);
   });
 
+  it("renames a document, tags the actor, and keeps search in sync", () => {
+    const doc = store.createDocument({ filename: "scan_02.pdf", rawText: "Aetna explanation of benefits for a visit" });
+
+    const renamed = store.renameDocument(doc.id, "Aetna EOB.pdf", "document-agent");
+    expect(renamed?.filename).toBe("Aetna EOB.pdf");
+    expect(store.getDocument(doc.id)?.filename).toBe("Aetna EOB.pdf");
+
+    const act = store.listActivity().find((a) => a.action === "document.renamed");
+    expect(act?.actor).toBe("document-agent");
+    expect(act?.detail).toContain("Aetna EOB.pdf");
+
+    // FTS mirror follows the new filename.
+    expect(store.searchDocuments("Aetna EOB").map((r) => r.id)).toContain(doc.id);
+
+    // No-ops: unchanged name, blank name, unknown id.
+    expect(store.renameDocument(doc.id, "  Aetna EOB.pdf  ")?.filename).toBe("Aetna EOB.pdf");
+    expect(store.renameDocument(doc.id, "   ")?.filename).toBe("Aetna EOB.pdf");
+    expect(store.renameDocument("nope", "x")).toBeUndefined();
+  });
+
   it("tracks builder tools through their lifecycle", () => {
     const tool = store.createTool({ name: "Packing list", description: "pack a bag", prompt: "make me a packing list", kind: "static" });
     expect(tool.status).toBe("building");

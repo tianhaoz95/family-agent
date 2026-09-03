@@ -40,8 +40,12 @@ const HTML_SYSTEM = `You write one complete, self-contained HTML document for a 
 - Output ONLY the HTML, starting with <!doctype html>. No explanation, no markdown fences.
 - Everything inline: one <style> block, one <script> block. NO external URLs, CDNs, frameworks, fonts, or images.
 - Clean, modern, legible. Works offline.
-- Persist the user's data. If this tool is LOCAL: use localStorage. If it has SHARED STATE: load with
-  fetch('/__state').then(r=>r.json()) and save with fetch('/__state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(data)}). Treat a null response as "no data yet".
+- Persist the user's data with the built-in state API. Use the RELATIVE path "__state" (no leading slash):
+  load with fetch('__state').then(r=>r.json()) (treat a null response as "no data yet") and save with
+  fetch('__state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(data)}).
+  This is disk-backed and survives restarts. Do NOT rely on localStorage for anything that must be kept —
+  the tool runs in a sandboxed frame whose localStorage is not durable. Use a distinct key per dataset
+  with fetch('__state?key=NAME', ...) if you have more than one.
 - Keep it focused and functional. No login, no settings pages, no external anything.`;
 
 const HANDLER_SYSTEM = `You write a Deno request handler for a small family tool's backend. Output ONLY TypeScript, no markdown fences. It runs sandboxed (no network, no filesystem, no subprocesses) with one private SQLite database. Shape:
@@ -61,7 +65,7 @@ export async function handler(request: Request, ctx: {
   return new Response("not found", { status: 404 });
 }
 
-Use ctx.db when the tool has many rows or needs queries/filtering; use ctx.store for one small blob of state. The frontend can also just use the built-in GET/PUT /__state (backed by ctx.store). Only write a handler if the tool needs real server-side logic. Keep it short.`;
+Use ctx.db when the tool has many rows or needs queries/filtering; use ctx.store for one small blob of state. The frontend can also just use the built-in GET/PUT "__state" (relative path, backed by ctx.store). Only write a handler if the tool needs real server-side logic. Keep it short.`;
 
 function stripFences(s: string): string {
   return s
@@ -90,8 +94,8 @@ ${body}
 async function generateHtml(model: ChatOllama, prompt: string, kind: "static" | "server"): Promise<string> {
   const scope =
     kind === "server"
-      ? "This tool has SHARED STATE — load/save with fetch('/__state')."
-      : "This tool is LOCAL — save with localStorage.";
+      ? "This tool has SHARED STATE across devices — load/save with fetch('__state')."
+      : "Persist with fetch('__state') as described above — it is disk-backed and survives restarts.";
   for (let attempt = 1; attempt <= 2; attempt++) {
     const res = await model.invoke([
       new SystemMessage(HTML_SYSTEM),

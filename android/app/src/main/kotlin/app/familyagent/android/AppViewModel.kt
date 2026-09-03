@@ -398,6 +398,27 @@ class AppViewModel(
         }
     }
 
+    /** Apply a rename the user confirmed. [byAgent] tags an AI-suggested name in the activity log. */
+    fun renameDocument(id: String, filename: String, byAgent: Boolean) {
+        viewModelScope.launch {
+            apiCall { api.renameDocument(id, filename, if (byAgent) "document-agent" else "user") }
+                .onSuccess {
+                    refreshDocuments()
+                    refreshActivity()
+                }
+                .onFailure { err ->
+                    _state.value = _state.value.copy(documentUploadStatus = "Rename failed: ${err.message}")
+                }
+        }
+    }
+
+    /** Fetch an AI-proposed name for the user to confirm or edit. Never applies it. */
+    fun suggestDocumentName(id: String, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(apiCall { api.suggestDocumentName(id).suggestion.filename })
+        }
+    }
+
     fun retryExtraction(id: String) {
         viewModelScope.launch {
             apiCall { api.retryExtraction(id) }

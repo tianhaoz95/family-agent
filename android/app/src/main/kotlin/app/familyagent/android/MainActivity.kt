@@ -268,6 +268,8 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onDelete = viewModel::deleteDocument,
                         onRetry = viewModel::retryExtraction,
                         onPreview = viewModel::openDocumentDetail,
+                        onRename = viewModel::renameDocument,
+                        onSuggestName = viewModel::suggestDocumentName,
                     )
                 }
                 composable(Destination.Tools.route) {

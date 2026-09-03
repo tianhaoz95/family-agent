@@ -202,6 +202,36 @@ describe("api client", () => {
     expect((init as RequestInit).headers).toBeUndefined();
   });
 
+  it("renameDocument() PATCHes /documents/:id with the filename and source", async () => {
+    const fetchMock = mockFetchOnce(200, { document: { id: "DOC1", filename: "Water Bill.pdf" } });
+    await api.renameDocument("DOC1", "Water Bill.pdf", "document-agent");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/documents/DOC1");
+    expect((init as RequestInit).method).toBe("PATCH");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      filename: "Water Bill.pdf",
+      by: "document-agent",
+    });
+  });
+
+  it("renameDocument() defaults the source to 'user'", async () => {
+    const fetchMock = mockFetchOnce(200, { document: { id: "DOC1", filename: "x" } });
+    await api.renameDocument("DOC1", "x");
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      filename: "x",
+      by: "user",
+    });
+  });
+
+  it("suggestDocumentName() POSTs /documents/:id/suggest-name", async () => {
+    const fetchMock = mockFetchOnce(200, { suggestion: { filename: "Blue Cross EOB.pdf" }, current: "scan.pdf" });
+    const res = await api.suggestDocumentName("DOC1");
+    expect(res.suggestion.filename).toBe("Blue Cross EOB.pdf");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/documents/DOC1/suggest-name");
+    expect((init as RequestInit).method).toBe("POST");
+  });
+
   it("searchDocuments() builds a query string with q and filters", async () => {
     const fetchMock = mockFetchOnce(200, { results: [] });
     await api.searchDocuments("water bill", { category: "bill", dueBefore: "2026-10-01" });

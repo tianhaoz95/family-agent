@@ -196,6 +196,16 @@ class FamilyAgentApi(
     suspend fun retryExtraction(id: String): Document =
         json.decodeFromString<DocumentResponse>(sendNoBody("POST", "/documents/$id/retry-extraction")).document
 
+    /** Rename a document. [by] is "document-agent" when applying an AI suggestion the user confirmed. */
+    suspend fun renameDocument(id: String, filename: String, by: String = "user"): Document =
+        json.decodeFromString<DocumentResponse>(
+            send("PATCH", "/documents/$id", json.encodeToString(RenameDocumentRequest(filename, by)))
+        ).document
+
+    /** Ask the local model for a better filename from the document's content. Does not apply it. */
+    suspend fun suggestDocumentName(id: String): SuggestNameResponse =
+        json.decodeFromString(sendNoBody("POST", "/documents/$id/suggest-name"))
+
     suspend fun listActivity(): List<ActivityEntry> = json.decodeFromString<ActivityResponse>(get("/activity")).activity
 
     // ---- family chat ----

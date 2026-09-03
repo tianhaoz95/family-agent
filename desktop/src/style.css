@@ -2596,6 +2596,47 @@ input[type="file"]::file-selector-button:hover {
   margin-left: 6px;
 }
 
+.doc-rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.doc-rename-input {
+  flex: 1 1 220px;
+  font: inherit;
+  font-size: 0.86rem;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+.doc-rename-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.doc-rename-save {
+  all: unset;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  padding: 4px 12px;
+  border-radius: var(--r-sm);
+}
+.doc-rename-save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.doc-rename-hint {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 .chat-references {
   display: flex;
   flex-wrap: wrap;

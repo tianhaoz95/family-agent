@@ -268,9 +268,18 @@ Later changes (not part of the original autonomous session):
     browser. Desktop embeds it in a full-window `<iframe>` (cross-origin +
     `sandbox` attr; the tools server's CSP `frame-ancestors` allows only the
     local app / localhost, nothing remote). Android loads it in an in-app
-    `WebView` (`ToolWebViewScreen`, JS + DOM storage on so localStorage tools
-    work). No Tauri window/webview IPC — the only Tauri capability the app
-    uses is the directory picker.
+    `WebView` (`ToolWebViewScreen`). No Tauri window/webview IPC — the only
+    Tauri capability the app uses is the directory picker.
+  - **Persistence is server-side for every tool.** Static tools get disk-backed
+    `GET/PUT /<id>/__state` from the Node tools server (`<tool dir>/data/<key>.json`);
+    server tools get it from their Deno backend. Every served page also gets an
+    injected `<base href="/<id>/">` + a shim that mirrors `localStorage` →
+    `__state` — the cross-origin iframe's own `localStorage` is not durable
+    across a webview restart, which used to silently wipe every "local" tool.
+    A tool that calls `fetch('/__state')` (absolute) is handled too: the HTML
+    rewrite makes it relative, and the server falls back to the same-origin
+    `Referer` to find the tool id for any unprefixed request. See
+    `docs/DECISIONS.md`.
   - A tool that needs cross-device shared state ("the whole family can…") gets
     a **Deno backend** run by `ToolSupervisor` under a deny-by-default sandbox:
     `--no-prompt --deny-import --allow-net=127.0.0.1:<own port>
@@ -398,6 +407,15 @@ Later changes (not part of the original autonomous session):
   renders `AssistChip`s that open a **bottom sheet**. The same panel/sheet
   backs a new **Preview** button on each document. `GET /tasks/:id` and `GET
   /documents/:id` were added for it.
+- **Document rename.** Each document has a **Rename** control (desktop: inline
+  editor on the row; Android: a dialog). The user can type a name, or tap
+  **Suggest with agent** → `POST /documents/:id/suggest-name` runs a
+  single-purpose model call (`agents/rename.ts`, planner-bypass like
+  `extraction.ts`) and fills the field with a proposed name. Nothing is applied
+  until the user confirms, which `PATCH /documents/:id`es with
+  `by: "document-agent"` so the activity log distinguishes an AI name from a
+  hand-typed one. There is deliberately no planner tool that renames — see
+  `docs/DECISIONS.md` → "Document rename".
 - **Small UX changes**: desktop document upload auto-starts on file pick (the
   separate Upload button is gone); the desktop **Sign out** button moved from
   the sidebar to Settings → Your account (Android already had it in Settings).

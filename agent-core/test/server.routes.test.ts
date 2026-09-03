@@ -214,6 +214,46 @@ describe("HTTP API", () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it("PATCH /documents/:id renames a document and logs it, 404s for unknown", async () => {
+    const created = await inject({
+      method: "POST",
+      url: "/documents/ingest",
+      payload: { filename: "scan_001.pdf", text: "Blue Cross explanation of benefits" },
+    });
+    const id = created.json().document.id;
+
+    const renamed = await inject({
+      method: "PATCH",
+      url: `/documents/${id}`,
+      payload: { filename: "Blue Cross EOB.pdf" },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().document.filename).toBe("Blue Cross EOB.pdf");
+
+    expect((await inject({ method: "GET", url: `/documents/${id}` })).json().document.filename).toBe(
+      "Blue Cross EOB.pdf"
+    );
+    const activity = (await inject({ method: "GET", url: "/activity" })).json().activity;
+    expect(activity.some((a: any) => a.action === "document.renamed")).toBe(true);
+
+    expect((await inject({ method: "PATCH", url: "/documents/nope", payload: { filename: "z" } })).statusCode).toBe(404);
+    expect((await inject({ method: "PATCH", url: `/documents/${id}`, payload: {} })).statusCode).toBe(400);
+  });
+
+  it("a member can't rename another user's document", async () => {
+    const created = await inject({
+      method: "POST",
+      url: "/documents/ingest",
+      payload: { filename: "mine.txt", text: "secret" },
+    });
+    const id = created.json().document.id;
+    const member = seedUser(store, { username: "kid3", role: "member" });
+    const asMember = authInject(app, member.token);
+    expect((await asMember({ method: "PATCH", url: `/documents/${id}`, payload: { filename: "hax.txt" } })).statusCode).toBe(
+      404
+    );
+  });
+
   // FormData + Response is the standard-library way to build a real multipart
   // body without a separate form-data package — Node has had both globally
   // since 18.

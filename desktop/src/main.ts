@@ -904,6 +904,14 @@ function renderDocuments(docs: Document[]) {
     preview.addEventListener("click", () => void openDocumentPanel(doc.id));
     head.appendChild(preview);
 
+    const rename = document.createElement("button");
+    rename.className = "doc-preview";
+    rename.type = "button";
+    rename.textContent = "Rename";
+    rename.title = "Rename this document, or let the agent suggest a name";
+    rename.addEventListener("click", () => beginDocumentRename(doc, li, head));
+    head.appendChild(rename);
+
     const del = document.createElement("button");
     del.className = "doc-delete";
     del.type = "button";
@@ -968,6 +976,103 @@ async function refreshDocuments(): Promise<Document[]> {
   const { documents } = await api.listDocuments();
   renderDocuments(documents);
   return documents;
+}
+
+// Inline rename editor: type a new name, or ask the agent to propose one from
+// the document's content. The agent only ever *suggests* — the name is applied
+// only when the user clicks Save, and an AI-sourced name is logged as coming
+// from the document-agent.
+function beginDocumentRename(doc: Document, li: HTMLLIElement, head: HTMLElement) {
+  if (li.querySelector(".doc-rename")) return;
+  head.hidden = true;
+
+  const box = document.createElement("div");
+  box.className = "doc-rename";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "doc-rename-input";
+  input.value = doc.filename;
+  input.setAttribute("aria-label", "New document name");
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "doc-rename-save";
+  save.textContent = "Save";
+
+  const suggest = document.createElement("button");
+  suggest.type = "button";
+  suggest.className = "doc-preview";
+  suggest.textContent = "Suggest with agent";
+
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "doc-preview";
+  cancel.textContent = "Cancel";
+
+  const hint = document.createElement("p");
+  hint.className = "doc-rename-hint";
+  hint.hidden = true;
+
+  let source: "user" | "document-agent" = "user";
+  input.addEventListener("input", () => (source = "user"));
+
+  const close = () => {
+    box.remove();
+    hint.remove();
+    head.hidden = false;
+  };
+
+  cancel.addEventListener("click", close);
+
+  suggest.addEventListener("click", async () => {
+    suggest.disabled = true;
+    suggest.textContent = "Thinking…";
+    hint.hidden = true;
+    try {
+      const { suggestion } = await api.suggestDocumentName(doc.id);
+      input.value = suggestion.filename;
+      source = "document-agent";
+      input.focus();
+      input.select();
+      hint.textContent = "Agent suggestion — edit it or click Save to confirm.";
+      hint.hidden = false;
+    } catch (err) {
+      hint.textContent = `Couldn't suggest a name: ${err instanceof Error ? err.message : String(err)}`;
+      hint.hidden = false;
+    } finally {
+      suggest.disabled = false;
+      suggest.textContent = "Suggest with agent";
+    }
+  });
+
+  const commit = async () => {
+    const next = input.value.trim();
+    if (!next || next === doc.filename) return close();
+    save.disabled = true;
+    try {
+      await api.renameDocument(doc.id, next, source);
+      close();
+      void refreshDocuments();
+      void refreshActivity();
+    } catch (err) {
+      save.disabled = false;
+      hint.textContent = `Rename failed: ${err instanceof Error ? err.message : String(err)}`;
+      hint.hidden = false;
+    }
+  };
+
+  save.addEventListener("click", () => void commit());
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") void commit();
+    if (e.key === "Escape") close();
+  });
+
+  box.append(input, save, suggest, cancel);
+  head.insertAdjacentElement("afterend", box);
+  box.insertAdjacentElement("afterend", hint);
+  input.focus();
+  input.select();
 }
 
 // Field extraction runs asynchronously server-side and is slow — a local

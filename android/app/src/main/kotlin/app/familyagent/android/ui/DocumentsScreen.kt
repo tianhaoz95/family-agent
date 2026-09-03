@@ -13,7 +13,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.*
@@ -39,12 +41,15 @@ fun DocumentsScreen(
     onDelete: (id: String) -> Unit,
     onRetry: (id: String) -> Unit,
     onPreview: (id: String) -> Unit = {},
+    onRename: (id: String, filename: String, byAgent: Boolean) -> Unit = { _, _, _ -> },
+    onSuggestName: (id: String, onResult: (Result<String>) -> Unit) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     var pasteFilename by remember { mutableStateOf("") }
     var pasteText by remember { mutableStateOf("") }
     var pasteExpanded by remember { mutableStateOf(false) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    var renameTarget by remember { mutableStateOf<Document?>(null) }
 
     val pickFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) uploadFromUri(context, uri, onUpload)
@@ -169,6 +174,17 @@ fun DocumentsScreen(
                                 Chip(category)
                             }
                             IconButton(
+                                onClick = { renameTarget = doc },
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(
+                                    Icons.Rounded.DriveFileRenameOutline,
+                                    contentDescription = "Rename ${doc.filename}",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(
                                 onClick = { onDelete(doc.id) },
                                 modifier = Modifier.size(32.dp),
                             ) {
@@ -221,6 +237,98 @@ fun DocumentsScreen(
             }
         }
     }
+
+    renameTarget?.let { doc ->
+        RenameDocumentDialog(
+            doc = doc,
+            onSuggestName = onSuggestName,
+            onConfirm = { newName, byAgent ->
+                onRename(doc.id, newName, byAgent)
+                renameTarget = null
+            },
+            onDismiss = { renameTarget = null },
+        )
+    }
+}
+
+/**
+ * Rename a document by hand, or let the agent propose a name from the document's
+ * content. The agent only ever fills the field — the rename is applied only when
+ * the user taps Save, and an unedited AI name is flagged as agent-sourced.
+ */
+@Composable
+private fun RenameDocumentDialog(
+    doc: Document,
+    onSuggestName: (id: String, onResult: (Result<String>) -> Unit) -> Unit,
+    onConfirm: (filename: String, byAgent: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember(doc.id) { mutableStateOf(doc.filename) }
+    var byAgent by remember(doc.id) { mutableStateOf(false) }
+    var suggesting by remember(doc.id) { mutableStateOf(false) }
+    var error by remember(doc.id) { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename document") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = {
+                        name = it
+                        byAgent = false
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("Name") },
+                    shape = MaterialTheme.shapes.medium,
+                )
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = {
+                        suggesting = true
+                        error = null
+                        onSuggestName(doc.id) { result ->
+                            suggesting = false
+                            result
+                                .onSuccess {
+                                    name = it
+                                    byAgent = true
+                                }
+                                .onFailure { error = it.message ?: "Couldn't suggest a name" }
+                        }
+                    },
+                    enabled = !suggesting,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    if (suggesting) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (suggesting) "Thinking…" else "Suggest with agent")
+                }
+                val hint = error ?: if (byAgent) "Agent suggestion — edit it or tap Save to confirm." else null
+                hint?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (error != null) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(name.trim(), byAgent) },
+                enabled = name.isNotBlank() && name.trim() != doc.filename,
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /** Camera capture needs a content:// URI to write into ahead of time — a raw file path won't do. */

@@ -12,6 +12,7 @@ import {
   type FamilyAgent,
 } from "./agents/index.js";
 import { extractDocument } from "./agents/extraction.js";
+import { suggestDocumentName } from "./agents/rename.js";
 import { createLocalModel } from "./model.js";
 import { warmModel } from "./warmup.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
@@ -586,6 +587,44 @@ export function buildServer(
     // Drop the stored original too (never the watched-folder source).
     await rm(join(documentsDir(), req.authUser.id, id), { force: true }).catch(() => {});
     return { document: deleted };
+  });
+
+  // Manual rename. The AI-rename flow uses this too: the client fetches a
+  // suggestion from /suggest-name, shows it to the user, and only PATCHes here
+  // once the user confirms — the model never renames anything on its own.
+  const RenameBody = z.object({ filename: z.string().min(1).max(160) });
+  app.patch("/documents/:id", async (req, reply) => {
+    const parsed = RenameBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
+    const by =
+      (req.body as { by?: unknown }).by === "document-agent" ? "document-agent" : "user";
+    const doc = req.userStore.renameDocument(
+      (req.params as { id: string }).id,
+      parsed.data.filename,
+      by
+    );
+    if (!doc) return reply.code(404).send({ error: "document not found" });
+    return { document: doc };
+  });
+
+  // Ask the local model for a better filename from the document's content.
+  // Returns the suggestion WITHOUT applying it — the client asks the user to
+  // confirm, then PATCHes /documents/:id.
+  app.post("/documents/:id/suggest-name", async (req, reply) => {
+    const doc = req.userStore.getDocument((req.params as { id: string }).id);
+    if (!doc) return reply.code(404).send({ error: "document not found" });
+    if (!doc.rawText.trim()) {
+      return reply.code(422).send({ error: "This document has no readable text to name it from." });
+    }
+    const suggestion = await suggestDocumentName(extractionModel, {
+      filename: doc.filename,
+      rawText: doc.rawText,
+      extracted: doc.extracted,
+    });
+    if (!suggestion) {
+      return reply.code(422).send({ error: "Couldn't come up with a name for this document." });
+    }
+    return { suggestion, current: doc.filename };
   });
 
   app.post("/documents/:id/retry-extraction", async (req, reply) => {

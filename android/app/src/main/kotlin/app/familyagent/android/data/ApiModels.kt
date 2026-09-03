@@ -180,6 +180,15 @@ data class RescheduleTaskRequest(val dueDate: String?, val dueTime: String?)
 @Serializable
 data class IngestDocumentRequest(val filename: String, val text: String)
 
+@Serializable
+data class RenameDocumentRequest(val filename: String, val by: String = "user")
+
+@Serializable
+data class NameSuggestion(val filename: String)
+
+@Serializable
+data class SuggestNameResponse(val suggestion: NameSuggestion, val current: String)
+
 // ---- family chat ----
 
 /** senderId of an assistant message (mirrors AGENT_SENDER_ID server-side). */

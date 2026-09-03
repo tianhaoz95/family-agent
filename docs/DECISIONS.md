@@ -785,6 +785,50 @@ EXISTS` (the builder prompt says so and shows it); a model that renames a
 column on an existing tool's DB will silently read nothing from the old one.
 Acceptable for a family-scale tool that can be rebuilt from scratch.
 
+## Static ("local") tools lost their data on every app restart
+
+**Symptom:** a generated tool with no shared backend (e.g. a recipe box) kept
+its data fine while the app stayed open, then came up empty after a restart.
+
+**Cause:** the builder told the model to persist "local" tools with
+`localStorage`. A tool page runs in a **cross-origin sandboxed iframe**
+(desktop, `tauri://localhost` framing `http://127.0.0.1:4174`) — WebKitGTK
+partitions third-party frame storage and does not persist it across a webview
+restart, so every write was effectively session-only. Server-kind tools were
+unaffected (their state is server-side SQLite).
+
+**Fix:** persistence is now always server-side, even for static tools.
+- The Node tools server (`tools/server.ts`) serves `GET/PUT /<id>/__state` for
+  static tools itself, backed by `<tool dir>/data/<key>.json` (the same layout
+  the Deno harness migrates from — state is portable between the two paths).
+  Server tools still get `/__state` from their Deno backend via the proxy.
+- Every served tool page gets a small injected shim that mirrors `localStorage`
+  to `/__state?key=__ls` and seeds it back on load, so tools the model wrote
+  against `localStorage` anyway (small models are unreliable) also survive.
+- The builder prompt now tells the model to use `__state` for all tools and
+  not to rely on `localStorage`.
+512 KB per-key cap, same as the harness. `test/tools.test.ts` covers static
+`/__state` persistence across a server restart and shim injection.
+
+**Follow-up — the state API was still unreachable from the tool page.** A tool
+page loads from `/<id>/`, but the builder prompt (and the model's own instinct)
+produced `fetch('/__state')` — an **absolute** path, so it hit
+`http://127.0.0.1:4174/__state`, which matches no `/<id>/…` route: a flat 404
+for every read and write. Both the Deno-backed and disk-backed paths were fine;
+nothing could reach them. Three changes, belt and suspenders:
+- `prepareHtml()` injects `<base href="/<id>/">` and rewrites any
+  `"/__state"` / `'/__state'` string literal in the served HTML to the relative
+  `"__state"`.
+- The tools server recovers the tool id from a same-origin `Referer` for any
+  request that arrives without the `/<id>/` prefix (covers server tools behind
+  the proxy and any URL the tool builds at runtime). `Referrer-Policy` was
+  loosened from `no-referrer` to `same-origin` for exactly this — the referer
+  never leaves the tools origin.
+- The builder prompts now show the relative `fetch('__state')`.
+`test/tools.test.ts` covers the HTML rewrite, the Referer route (static and
+proxied), and a missing-Referer request 404ing rather than writing to the wrong
+tool.
+
 ## Blank desktop window when the tools port was busy
 
 **Symptom:** the desktop app opened to a permanently blank (`#f6f5f4`) window
@@ -817,3 +861,24 @@ release the socket (no `SO_REUSEADDR` on the Node side).
 
 Reproduce: hold 4174 with a listener, then launch — before: blank; after: the
 login screen, with Tools disabled until the next clean restart.
+
+## Document rename — agent suggests, never applies
+
+Documents can be renamed two ways: the user types a new name, or the agent
+proposes one from the document's content. The agent path is deliberately split
+into two steps that never merge:
+
+- `POST /documents/:id/suggest-name` runs a **single-purpose model call**
+  (`agents/rename.ts`, same "bypass the planner" pattern as
+  `agents/extraction.ts` — a mechanical step, no conversation) and returns the
+  proposed filename **without touching the document**.
+- The client shows that name in an editable field; only when the user confirms
+  does it `PATCH /documents/:id { filename, by: "document-agent" }`.
+
+There is no planner tool that renames a document. Giving the agent a direct
+"rename" tool would let a chat turn rename files with no confirmation step,
+which is the one thing the feature is meant to prevent. `renameDocument(id,
+name, by)` records `by` in the activity log so an agent-sourced name is
+distinguishable from a hand-typed one. The FTS mirror follows the rename
+through the existing `documents` update trigger. Original bytes on disk are
+keyed by doc id, not filename, so a rename doesn't disturb the preview path.

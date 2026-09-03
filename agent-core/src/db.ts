@@ -1267,6 +1267,19 @@ export class ScopedStore {
     return doc;
   }
 
+  /** Rename a document. `by` distinguishes a manual rename from an agent one in the activity log. */
+  renameDocument(id: string, filename: string, by: "user" | "document-agent" = "user"): DocumentRecord | undefined {
+    const doc = this.getDocument(id);
+    if (!doc) return undefined;
+    const next = filename.trim();
+    if (!next || next === doc.filename) return doc;
+    this.db
+      .prepare("UPDATE documents SET filename = ? WHERE id = ? AND user_id = ?")
+      .run(next, id, this.userId);
+    this.logActivity(by, "document.renamed", `Renamed "${doc.filename}" to "${next}"`);
+    return this.getDocument(id);
+  }
+
   setDocumentExtractionStatus(id: string, status: ExtractionStatus): DocumentRecord | undefined {
     this.db
       .prepare("UPDATE documents SET extraction_status = ? WHERE id = ? AND user_id = ?")
