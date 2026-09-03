@@ -29,6 +29,15 @@ if ! grep -qF "\"$MODEL\"" <<<"$TAGS_JSON"; then
 fi
 
 echo "==> Ollama OK, '$MODEL' is available."
+
+# The Tauri shell spawns agent-core's *built* dist/server.js (see
+# desktop/src-tauri/src/main.rs) — `tauri dev` only hot-reloads the frontend,
+# not agent-core. Without this rebuild the app silently runs whatever backend
+# was last built, so new routes (e.g. chat / family directory) 404 and
+# features look broken. Always rebuild before launching.
+echo "==> Building agent-core (dist/server.js) ..."
+npm --prefix "$ROOT_DIR/agent-core" run build
+
 echo "==> Starting Tauri desktop app (this also launches agent-core) ..."
 cd "$DESKTOP_DIR"
 exec npm run tauri:dev

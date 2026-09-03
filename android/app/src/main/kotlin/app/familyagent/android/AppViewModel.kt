@@ -464,10 +464,10 @@ class AppViewModel(
             apiCall { api.listChannels() }.onSuccess { _state.value = _state.value.copy(channels = it) }
         }
         viewModelScope.launch {
-            if (_state.value.familyMembers.isEmpty()) {
-                apiCall { api.listFamilyMembers() }.onSuccess {
-                    _state.value = _state.value.copy(familyMembers = it)
-                }
+            // Always refetch — the directory grows as the admin adds accounts,
+            // and a stale cache would leave the new-conversation picker empty.
+            apiCall { api.listFamilyMembers() }.onSuccess {
+                _state.value = _state.value.copy(familyMembers = it)
             }
         }
         startChannelListPolling()

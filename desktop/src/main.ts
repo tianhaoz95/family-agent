@@ -1810,12 +1810,10 @@ async function enterMessages() {
   channelNewForm.hidden = true;
   conversationEl.hidden = true;
   conversationEmpty.hidden = false;
-  if (familyMembers.length === 0) {
-    try {
-      familyMembers = (await api.listFamilyMembers()).members;
-    } catch {
-      /* ignore */
-    }
+  try {
+    familyMembers = (await api.listFamilyMembers()).members;
+  } catch {
+    /* ignore */
   }
   await refreshChannels();
   renderChannelList();
@@ -1834,11 +1832,26 @@ function startChannelBadgePolling() {
   }
 }
 
-channelNewBtn.addEventListener("click", () => {
+channelNewBtn.addEventListener("click", async () => {
   channelNewError.textContent = "";
   channelNewName.value = "";
   channelNewMembers.innerHTML = "";
-  for (const m of familyMembers.filter((m) => m.id !== currentUser?.id)) {
+  // Always refetch — the directory grows as the admin adds accounts, and a
+  // stale cache from an earlier visit would show an empty picker.
+  let fetchFailed = false;
+  try {
+    familyMembers = (await api.listFamilyMembers()).members;
+  } catch (err) {
+    fetchFailed = true;
+    channelNewError.textContent = `Couldn't load family accounts: ${
+      err instanceof Error ? err.message : String(err)
+    }`;
+  }
+  const others = familyMembers.filter((m) => m.id !== currentUser?.id);
+  if (!fetchFailed && others.length === 0) {
+    channelNewError.textContent = "No other family accounts yet — ask the admin to add one.";
+  }
+  for (const m of others) {
     const label = document.createElement("label");
     label.className = "channel-new-member";
     label.innerHTML = `<input type="checkbox" value="${m.id}" /> ${escapeHtml(m.displayName)}`;
