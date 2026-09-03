@@ -52,6 +52,20 @@ class FamilyAgentApi(
         execute(Request.Builder().url("$baseUrl$path").get().withAuth().build())
     }
 
+    /** Raw response bytes — for a document's original file (PDF / image preview). */
+    suspend fun getBytes(path: String): ByteArray = withContext(Dispatchers.IO) {
+        try {
+            client.newCall(Request.Builder().url("$baseUrl$path").get().withAuth().build()).execute().use { response ->
+                if (response.code == 401) throw UnauthorizedException()
+                if (!response.isSuccessful) throw ApiException("${path}: HTTP ${response.code}")
+                response.body?.bytes() ?: ByteArray(0)
+            }
+        } catch (e: IOException) {
+            if (e is ApiException) throw e
+            throw ApiException("Could not reach $baseUrl — is the home server running? (${e.message})")
+        }
+    }
+
     private suspend fun send(method: String, path: String, body: String): String = withContext(Dispatchers.IO) {
         execute(
             Request.Builder()
@@ -176,6 +190,9 @@ class FamilyAgentApi(
         sendNoBody("DELETE", "/documents/$id")
     }
 
+    /** The document's original file (PDF / image) for previewing. */
+    suspend fun documentOriginal(id: String): ByteArray = getBytes("/documents/$id/original")
+
     suspend fun retryExtraction(id: String): Document =
         json.decodeFromString<DocumentResponse>(sendNoBody("POST", "/documents/$id/retry-extraction")).document
 
@@ -201,13 +218,23 @@ class FamilyAgentApi(
         return json.decodeFromString<MessagesResponse>(get("/channels/$id/messages$q")).messages
     }
 
-    suspend fun postMessage(id: String, body: String, mentionAgent: Boolean): Message =
+    suspend fun postMessage(
+        id: String,
+        body: String,
+        mentionAgent: Boolean,
+        images: List<String> = emptyList(),
+    ): Message =
         json.decodeFromString<MessageResponse>(
-            send("POST", "/channels/$id/messages", json.encodeToString(PostMessageRequest(body, mentionAgent)))
+            send("POST", "/channels/$id/messages", json.encodeToString(PostMessageRequest(body, mentionAgent, images)))
         ).message
 
     suspend fun markChannelRead(id: String, ts: String) {
         runCatching { send("POST", "/channels/$id/read", json.encodeToString(MarkReadRequest(ts))) }
+    }
+
+    /** Delete a conversation and its messages for everyone in it. Any member can. */
+    suspend fun deleteChannel(id: String) {
+        sendNoBody("DELETE", "/channels/$id")
     }
 
     // ---- sticky notes ----

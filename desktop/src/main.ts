@@ -26,6 +26,7 @@ import {
 import { startRecording, type Recording } from "./audio.js";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { renderPdf, type PdfRender } from "./pdfPreview.js";
 
 // The planner model replies in Markdown; render it. Assistant text only —
 // user and system bubbles stay plain text.
@@ -117,8 +118,9 @@ const chatEmptyEl = document.getElementById("chat-empty")!;
 // Set while a reply is in flight so the Stop button can cancel it.
 let chatAbort: AbortController | null = null;
 
-// Images staged for the next message, as JPEG data URIs.
-let attachedImages: string[] = [];
+// Images staged for the next message, as JPEG data URIs. Managed by an
+// imageTray (see makeImageTray) — the same composer attachment behaviour is
+// reused by the family-chat message composer.
 const MAX_IMAGES = 4;
 // Phone photos are huge; the planner model is slow. Cap the long edge and
 // re-encode as JPEG before sending — a 4000px photo becomes ~150 KB.
@@ -204,69 +206,91 @@ function fileToScaledDataUrl(file: File): Promise<string> {
   });
 }
 
-function renderAttachments() {
-  chatAttachmentsEl.innerHTML = "";
-  chatAttachmentsEl.hidden = attachedImages.length === 0;
-  attachedImages.forEach((src, i) => {
-    const chip = document.createElement("div");
-    chip.className = "chat-attachment";
-    const img = document.createElement("img");
-    img.src = src;
-    img.alt = "attachment preview";
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.setAttribute("aria-label", "Remove image");
-    remove.innerHTML =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
-    remove.addEventListener("click", () => {
-      attachedImages.splice(i, 1);
-      renderAttachments();
+/** A composer image tray: staged data URIs + a thumbnail strip with remove
+ *  buttons. Chat and family-chat both use one so attaching behaves identically. */
+interface ImageTray {
+  images: string[];
+  addFiles(files: Iterable<File>): Promise<void>;
+  clear(): void;
+}
+function makeImageTray(trayEl: HTMLElement, notify: (msg: string) => void): ImageTray {
+  const tray: ImageTray = {
+    images: [],
+    async addFiles(files) {
+      for (const file of files) {
+        if (!file.type.startsWith("image/")) continue;
+        if (tray.images.length >= MAX_IMAGES) {
+          notify(`Up to ${MAX_IMAGES} images per message.`);
+          break;
+        }
+        try {
+          tray.images.push(await fileToScaledDataUrl(file));
+        } catch (err) {
+          notify(`Couldn't attach ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      render();
+    },
+    clear() {
+      tray.images = [];
+      render();
+    },
+  };
+  function render() {
+    trayEl.innerHTML = "";
+    trayEl.hidden = tray.images.length === 0;
+    tray.images.forEach((src, i) => {
+      const chip = document.createElement("div");
+      chip.className = "chat-attachment";
+      const img = document.createElement("img");
+      img.src = src;
+      img.alt = "attachment preview";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.setAttribute("aria-label", "Remove image");
+      remove.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+      remove.addEventListener("click", () => {
+        tray.images.splice(i, 1);
+        render();
+      });
+      chip.append(img, remove);
+      trayEl.appendChild(chip);
     });
-    chip.append(img, remove);
-    chatAttachmentsEl.appendChild(chip);
-  });
+  }
+  return tray;
 }
 
-async function addImageFiles(files: Iterable<File>) {
-  for (const file of files) {
-    if (!file.type.startsWith("image/")) continue;
-    if (attachedImages.length >= MAX_IMAGES) {
-      appendBubble("system", `Up to ${MAX_IMAGES} images per message.`);
-      break;
+/** Wire a text input for image paste + a drop target to feed an ImageTray. */
+function wireImagePasteAndDrop(tray: ImageTray, pasteTarget: HTMLElement, dropTarget: HTMLElement) {
+  pasteTarget.addEventListener("paste", (e) => {
+    const ev = e as ClipboardEvent;
+    const files = Array.from(ev.clipboardData?.items ?? [])
+      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (files.length) {
+      e.preventDefault();
+      void tray.addFiles(files);
     }
-    try {
-      attachedImages.push(await fileToScaledDataUrl(file));
-    } catch (err) {
-      appendBubble("system", `Couldn't attach ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  });
+  for (const evt of ["dragover", "drop"] as const) {
+    dropTarget.addEventListener(evt, (e) => {
+      if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+      e.preventDefault();
+      if (evt === "drop" && e.dataTransfer?.files) void tray.addFiles(Array.from(e.dataTransfer.files));
+    });
   }
-  renderAttachments();
 }
+
+const chatTray = makeImageTray(chatAttachmentsEl, (m) => appendBubble("system", m));
 
 chatAttachBtn.addEventListener("click", () => chatImageInput.click());
 chatImageInput.addEventListener("change", () => {
-  if (chatImageInput.files) void addImageFiles(Array.from(chatImageInput.files));
+  if (chatImageInput.files) void chatTray.addFiles(Array.from(chatImageInput.files));
   chatImageInput.value = "";
 });
-// Paste a screenshot straight into the message.
-chatInput.addEventListener("paste", (e) => {
-  const files = Array.from(e.clipboardData?.items ?? [])
-    .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
-    .map((it) => it.getAsFile())
-    .filter((f): f is File => f !== null);
-  if (files.length) {
-    e.preventDefault();
-    void addImageFiles(files);
-  }
-});
-// Drag an image file onto the chat area.
-for (const evt of ["dragover", "drop"] as const) {
-  chatLog.addEventListener(evt, (e) => {
-    if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
-    e.preventDefault();
-    if (evt === "drop" && e.dataTransfer?.files) void addImageFiles(Array.from(e.dataTransfer.files));
-  });
-}
+wireImagePasteAndDrop(chatTray, chatInput, chatLog);
 
 // ---------- voice input ----------
 // Tap once to start recording, tap again to stop; the transcript is dropped
@@ -365,8 +389,7 @@ function startNewChat() {
   chatAbort = null;
   chatLog.innerHTML = "";
   chatLog.appendChild(chatEmptyEl);
-  attachedImages = [];
-  renderAttachments();
+  chatTray.clear();
   chatInput.value = "";
   autoGrowChatInput();
   setChatPending(false);
@@ -379,14 +402,13 @@ chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (chatAbort) return; // a reply is already in flight
   const typed = chatInput.value.trim();
-  const images = attachedImages;
+  const images = chatTray.images.slice();
   if (!typed && !images.length) return;
   // The model needs a prompt; supply a default when the user only attached an image.
   const message = typed || "What's in this image?";
   chatInput.value = "";
   autoGrowChatInput();
-  attachedImages = [];
-  renderAttachments();
+  chatTray.clear();
   appendUserMessage(typed, images);
   const pending = appendTypingIndicator();
   chatAbort = new AbortController();
@@ -1673,9 +1695,21 @@ const conversationEl = document.getElementById("conversation") as HTMLElement;
 const conversationEmpty = document.getElementById("conversation-empty") as HTMLElement;
 const conversationTitle = document.getElementById("conversation-title")!;
 const conversationMembers = document.getElementById("conversation-members")!;
+const conversationDelete = document.getElementById("conversation-delete") as HTMLButtonElement;
 const messageLog = document.getElementById("message-log")!;
 const messageForm = document.getElementById("message-form") as HTMLFormElement;
 const messageInput = document.getElementById("message-input") as HTMLTextAreaElement;
+const messageAttachmentsEl = document.getElementById("message-attachments")!;
+const messageAttachBtn = document.getElementById("message-attach-btn") as HTMLButtonElement;
+const messageImageInput = document.getElementById("message-image-input") as HTMLInputElement;
+
+const messageTray = makeImageTray(messageAttachmentsEl, appendMessageError);
+messageAttachBtn.addEventListener("click", () => messageImageInput.click());
+messageImageInput.addEventListener("change", () => {
+  if (messageImageInput.files) void messageTray.addFiles(Array.from(messageImageInput.files));
+  messageImageInput.value = "";
+});
+wireImagePasteAndDrop(messageTray, messageInput, messageLog);
 
 let familyMembers: FamilyMember[] = [];
 let channels: Channel[] = [];
@@ -1757,6 +1791,18 @@ function renderMessage(m: Message) {
       ? renderMarkdown(m.body)
       : escapeHtml(m.body);
   el.innerHTML = `${own ? "" : `<span class="msg-sender">${escapeHtml(nameForSender(m.senderId))}</span>`}<div class="msg-body">${bodyHtml}</div>`;
+  if (m.images?.length) {
+    const grid = document.createElement("div");
+    grid.className = "msg-images";
+    for (const src of m.images) {
+      const img = document.createElement("img");
+      img.src = src;
+      img.alt = "attached image";
+      img.loading = "lazy";
+      grid.appendChild(img);
+    }
+    el.querySelector(".msg-body")!.insertAdjacentElement("beforebegin", grid);
+  }
   messageLog.appendChild(el);
   messageLog.scrollTop = messageLog.scrollHeight;
 }
@@ -1765,6 +1811,7 @@ async function openChannel(id: string) {
   activeChannelId = id;
   lastMessageTs = null;
   renderedMessageIds = new Set();
+  messageTray.clear();
   messageLog.innerHTML = "";
   conversationEmpty.hidden = true;
   conversationEl.hidden = false;
@@ -1891,15 +1938,36 @@ channelNewForm.addEventListener("submit", async (e) => {
 autoGrow(messageInput);
 messageForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const body = messageInput.value.trim();
-  if (!body || !activeChannelId) return;
+  const typed = messageInput.value.trim();
+  const images = messageTray.images.slice();
+  if ((!typed && !images.length) || !activeChannelId) return;
+  // The server requires a non-empty body; stand in for an image-only message.
+  const body = typed || (images.length > 1 ? "(shared images)" : "(shared an image)");
   messageInput.value = "";
   messageInput.style.height = "auto";
+  messageTray.clear();
   const mentionAgent = /(^|[^\w@])@(agent|ai|assistant)\b/i.test(body);
   try {
-    await api.postMessage(activeChannelId, body, mentionAgent);
+    await api.postMessage(activeChannelId, body, mentionAgent, images);
     await pollActiveChannel();
     await refreshChannels();
+  } catch (err) {
+    appendMessageError(err instanceof Error ? err.message : String(err));
+  }
+});
+
+conversationDelete.addEventListener("click", async () => {
+  if (!activeChannelId) return;
+  const channel = channels.find((c) => c.id === activeChannelId);
+  if (!confirm(`Delete "${channel?.title ?? "this conversation"}"? Its messages are removed for everyone in it.`)) return;
+  const id = activeChannelId;
+  try {
+    await api.deleteChannel(id);
+    activeChannelId = null;
+    conversationEl.hidden = true;
+    conversationEmpty.hidden = false;
+    await refreshChannels();
+    renderChannelList();
   } catch (err) {
     appendMessageError(err instanceof Error ? err.message : String(err));
   }
@@ -2074,46 +2142,118 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !sidePanel.hidden) closeSidePanel();
 });
 
+// A PDF render in flight, and any object URLs handed to <img>/blobs — torn down
+// whenever the panel closes or shows something else.
+let activePdfRender: PdfRender | null = null;
+let panelObjectUrls: string[] = [];
+
+// Bumped every time the panel content changes — a slow fetch from a previous
+// openDocumentPanel() call checks this before touching the DOM it no longer owns.
+let panelGen = 0;
+
+function teardownPanelContent() {
+  panelGen++;
+  activePdfRender?.cancel();
+  activePdfRender = null;
+  for (const url of panelObjectUrls) URL.revokeObjectURL(url);
+  panelObjectUrls = [];
+}
+
 function closeSidePanel() {
+  teardownPanelContent();
   sidePanel.hidden = true;
-  sidePanel.classList.remove("is-open");
+  sidePanel.classList.remove("is-open", "side-panel--wide");
   sidePanelBody.innerHTML = "";
 }
 
-function openSidePanel(title: string, bodyHtml: string) {
+function openSidePanel(title: string, bodyHtml: string, opts: { wide?: boolean } = {}) {
+  teardownPanelContent();
   sidePanelTitle.textContent = title;
   sidePanelBody.innerHTML = bodyHtml;
+  sidePanel.classList.toggle("side-panel--wide", opts.wide === true);
   sidePanel.hidden = false;
   // next frame so the transition runs
   requestAnimationFrame(() => sidePanel.classList.add("is-open"));
 }
 
+function docMetaHtml(doc: Document): string {
+  const meta: string[] = [];
+  if (doc.extracted?.category) meta.push(`<span class="category-chip">${escapeHtml(doc.extracted.category)}</span>`);
+  if (doc.sourcePath) meta.push(`<span class="tag tag-local">watched folder</span>`);
+  const dates = doc.extracted?.importantDates?.length
+    ? `<p class="side-panel-hint">Important dates: ${doc.extracted.importantDates.map(escapeHtml).join(", ")}</p>`
+    : "";
+  return `${meta.length ? `<div class="side-panel-meta">${meta.join(" ")}</div>` : ""}
+     ${doc.extracted?.summary ? `<p class="side-panel-summary">${escapeHtml(doc.extracted.summary)}</p>` : ""}
+     ${dates}`;
+}
+
 async function openDocumentPanel(id: string) {
   openSidePanel("Loading…", `<p class="side-panel-hint">Loading…</p>`);
+  const gen = panelGen;
+  let doc: Document;
   try {
-    const { document: doc } = await api.getDocument(id);
-    const meta: string[] = [];
-    if (doc.extracted?.category) meta.push(`<span class="category-chip">${escapeHtml(doc.extracted.category)}</span>`);
-    if (doc.sourcePath) meta.push(`<span class="tag tag-local">watched folder</span>`);
-    const dates = doc.extracted?.importantDates?.length
-      ? `<p class="side-panel-hint">Important dates: ${doc.extracted.importantDates.map(escapeHtml).join(", ")}</p>`
-      : "";
+    doc = (await api.getDocument(id)).document;
+  } catch (err) {
+    if (gen !== panelGen) return;
+    openSidePanel("Not found", `<p class="side-panel-hint">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`);
+    return;
+  }
+  if (gen !== panelGen) return; // the user opened something else while this loaded
+
+  const isPdf = doc.originalMime === "application/pdf" || /\.pdf$/i.test(doc.filename);
+  const isImage = (doc.originalMime ?? "").startsWith("image/") || /\.(jpe?g|png|webp|gif)$/i.test(doc.filename);
+  const textBlock = `<pre class="side-panel-text">${escapeHtml(doc.rawText)}</pre>`;
+
+  if (isPdf) {
     openSidePanel(
       doc.filename,
-      `${meta.length ? `<div class="side-panel-meta">${meta.join(" ")}</div>` : ""}
-       ${doc.extracted?.summary ? `<p class="side-panel-summary">${escapeHtml(doc.extracted.summary)}</p>` : ""}
-       ${dates}
-       <pre class="side-panel-text">${escapeHtml(doc.rawText)}</pre>`
+      `${docMetaHtml(doc)}
+       <div id="pdf-scroll" class="pdf-scroll"><p class="side-panel-hint">Opening PDF…</p></div>
+       <details class="pdf-text-details"><summary>Extracted text</summary>${textBlock}</details>`,
+      { wide: true }
     );
-  } catch (err) {
-    openSidePanel("Not found", `<p class="side-panel-hint">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`);
+    const g = panelGen;
+    try {
+      const { buffer } = await api.getDocumentOriginal(id);
+      if (g !== panelGen) return;
+      const host = document.getElementById("pdf-scroll");
+      if (host) activePdfRender = renderPdf(host, buffer);
+    } catch {
+      if (g !== panelGen) return;
+      const host = document.getElementById("pdf-scroll");
+      if (host) host.innerHTML = `<p class="side-panel-hint">The original PDF isn't available — showing the extracted text below.</p>`;
+    }
+    return;
   }
+
+  if (isImage) {
+    openSidePanel(doc.filename, `${docMetaHtml(doc)}<div id="img-host"><p class="side-panel-hint">Loading image…</p></div>`);
+    const g = panelGen;
+    try {
+      const { buffer, type } = await api.getDocumentOriginal(id);
+      if (g !== panelGen) return;
+      const url = URL.createObjectURL(new Blob([buffer], { type: type || "image/*" }));
+      panelObjectUrls.push(url);
+      const host = document.getElementById("img-host");
+      if (host) host.innerHTML = `<img class="side-panel-image" src="${url}" alt="${escapeHtml(doc.filename)}" />`;
+    } catch {
+      if (g !== panelGen) return;
+      const host = document.getElementById("img-host");
+      if (host) host.innerHTML = textBlock;
+    }
+    return;
+  }
+
+  openSidePanel(doc.filename, `${docMetaHtml(doc)}${textBlock}`);
 }
 
 async function openTaskPanel(id: string) {
   openSidePanel("Loading…", `<p class="side-panel-hint">Loading…</p>`);
+  const gen = panelGen;
   try {
     const { task } = await api.getTask(id);
+    if (gen !== panelGen) return;
     const when = task.dueDate
       ? `<p class="side-panel-hint">Due ${escapeHtml(task.dueDate)}${task.dueTime ? ` at ${escapeHtml(task.dueTime)}` : ""}</p>`
       : "";
@@ -2125,6 +2265,7 @@ async function openTaskPanel(id: string) {
        <p class="side-panel-hint">Open the Events tab to reschedule or complete it.</p>`
     );
   } catch (err) {
+    if (gen !== panelGen) return;
     openSidePanel("Not found", `<p class="side-panel-hint">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`);
   }
 }

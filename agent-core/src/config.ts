@@ -115,6 +115,13 @@ export function toolsDir(): string {
   return `${config.dataDir}/tools`;
 }
 
+/** Where an uploaded document's original file is kept so it can be previewed
+ *  later (PDF viewer / image). One subdir per user; the file is named by the
+ *  document id. Watched-folder documents keep their own on-disk path instead. */
+export function documentsDir(): string {
+  return `${config.dataDir}/documents`;
+}
+
 export function dbPath(): string {
   return `${config.dataDir}/family-agent.db`;
 }

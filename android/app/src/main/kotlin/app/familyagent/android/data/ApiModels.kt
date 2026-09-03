@@ -30,6 +30,8 @@ data class Document(
     val extracted: Extracted? = null,
     val createdAt: String,
     val sourcePath: String? = null,
+    /** MIME of the stored original file (uploads), for the preview. null = none / not recorded. */
+    val originalMime: String? = null,
     /** "pending" while extraction runs, "done" once fields are saved, "failed" after retries are exhausted. */
     val extractionStatus: String = "pending",
 )
@@ -219,6 +221,8 @@ data class Message(
     val channelId: String,
     val senderId: String,
     val body: String,
+    /** Image attachments as data URIs — same as the 1:1 chat composer. */
+    val images: List<String> = emptyList(),
     val pending: Boolean = false,
     val createdAt: String,
 )
@@ -243,7 +247,11 @@ data class CreateChannelRequest(
 )
 
 @Serializable
-data class PostMessageRequest(val body: String, val mentionAgent: Boolean = false)
+data class PostMessageRequest(
+    val body: String,
+    val mentionAgent: Boolean = false,
+    val images: List<String> = emptyList(),
+)
 
 @Serializable
 data class MarkReadRequest(val ts: String)

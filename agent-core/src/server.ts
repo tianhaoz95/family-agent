@@ -3,7 +3,7 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import { z } from "zod";
 import { Store, ScopedStore, AGENT_SENDER_ID, type UserRecord } from "./db.js";
-import { config, dbPath, envLocked, userInboxDir } from "./config.js";
+import { config, dbPath, envLocked, userInboxDir, documentsDir } from "./config.js";
 import {
   buildFamilyAgent,
   askFamilyAgent,
@@ -17,8 +17,8 @@ import { warmModel } from "./warmup.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { persistSettings } from "./settingsFile.js";
 import { verifyPassword, bearerToken } from "./auth.js";
-import { rm } from "node:fs/promises";
-import { join } from "node:path";
+import { rm, mkdir, writeFile, stat, readFile } from "node:fs/promises";
+import { join, extname } from "node:path";
 import { extractText, SUPPORTED_EXTENSIONS, UnsupportedFileTypeError } from "./fileExtract.js";
 import { transcribeWav, resetTranscriber } from "./transcribe.js";
 import { listOllamaModels, ollamaListHasModel } from "./ollamaOcr.js";
@@ -39,6 +39,21 @@ declare module "fastify" {
 /** A user as sent to clients — never the password hash. */
 function publicUser(u: UserRecord) {
   return { id: u.id, username: u.username, displayName: u.displayName, role: u.role };
+}
+
+// Enough coverage for the file types this app ingests (see SUPPORTED_EXTENSIONS)
+// — used for the Content-Type of a document's original-file preview.
+const MIME_BY_EXT: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".txt": "text/plain; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+};
+function mimeFromFilename(filename: string): string {
+  return MIME_BY_EXT[extname(filename).toLowerCase()] ?? "";
 }
 
 // Routes reachable without a bearer token: discovery, and the auth handshake
@@ -484,6 +499,7 @@ export function buildServer(
     if (!data) return reply.code(400).send({ error: "No file uploaded." });
 
     const filename = data.filename || "upload";
+    const uploadMime = data.mimetype || "";
     const buffer = await data.toBuffer();
     if (buffer.length === 0) return reply.code(400).send({ error: "Uploaded file is empty." });
 
@@ -510,14 +526,60 @@ export function buildServer(
     }
 
     const doc = req.userStore.createDocument({ filename, rawText });
+    // Keep the original bytes so the document can be previewed later (PDF
+    // viewer / image), not just its extracted text. Best-effort — a failed
+    // write just means "no preview", the document itself is already saved.
+    try {
+      const dir = join(documentsDir(), req.authUser.id);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, doc.id), buffer);
+      req.userStore.setDocumentOriginalMime(doc.id, uploadMime || mimeFromFilename(filename));
+    } catch (err) {
+      req.log?.warn?.({ err }, "could not store original upload for preview");
+    }
     void extractDocument(extractionModel, req.userStore, doc);
-    return { document: doc };
+    return { document: req.userStore.getDocument(doc.id) ?? doc };
+  });
+
+  // Stream a document's original file for preview (PDF viewer / image). Comes
+  // from the per-user store dir for uploads, or the watched-folder path for
+  // inbox documents. 404 when neither exists (e.g. a pasted-text document).
+  app.get("/documents/:id/original", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const doc = req.userStore.getDocument(id);
+    if (!doc) return reply.code(404).send({ error: "document not found" });
+
+    const candidates = [
+      join(documentsDir(), req.authUser.id, id),
+      ...(doc.sourcePath ? [doc.sourcePath] : []),
+    ];
+    let path: string | null = null;
+    for (const c of candidates) {
+      try {
+        if ((await stat(c)).isFile()) {
+          path = c;
+          break;
+        }
+      } catch {
+        /* next candidate */
+      }
+    }
+    if (!path) return reply.code(404).send({ error: "no original file for this document" });
+
+    const buf = await readFile(path);
+    return reply
+      .header("Content-Type", doc.originalMime || mimeFromFilename(doc.filename) || "application/octet-stream")
+      .header("Content-Disposition", `inline; filename="${encodeURIComponent(doc.filename)}"`)
+      .header("Cache-Control", "private, max-age=60")
+      .send(buf);
   });
 
   app.delete("/documents/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const deleted = req.userStore.deleteDocument(id);
     if (!deleted) return reply.code(404).send({ error: "document not found" });
+    // Drop the stored original too (never the watched-folder source).
+    await rm(join(documentsDir(), req.authUser.id, id), { force: true }).catch(() => {});
     return { document: deleted };
   });
 
@@ -586,8 +648,11 @@ export function buildServer(
   const PostMessageBody = z.object({
     body: z.string().min(1).max(4000),
     mentionAgent: z.boolean().optional(),
+    // Image attachments as data URIs — mirrors POST /chat. Capped to keep a
+    // single row (and the multimodal planner turn) sane.
+    images: z.array(z.string().startsWith("data:image/")).max(4).optional(),
   });
-  app.post("/channels/:id/messages", { bodyLimit: 128 * 1024 }, async (req, reply) => {
+  app.post("/channels/:id/messages", { bodyLimit: 24 * 1024 * 1024 }, async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!store.isChannelMember(id, req.authUser.id)) {
       return reply.code(403).send({ error: "You're not in that conversation." });
@@ -595,7 +660,8 @@ export function buildServer(
     const parsed = PostMessageBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
     const { body } = parsed.data;
-    const message = store.postMessage(id, req.authUser.id, body);
+    const images = parsed.data.images ?? [];
+    const message = store.postMessage(id, req.authUser.id, body, images);
     req.userStore.logActivity("user", "chat.message", `${req.authUser.displayName} in a family chat: ${body}`);
 
     if (parsed.data.mentionAgent || mentionsAgent(body)) {
@@ -612,7 +678,7 @@ export function buildServer(
             .filter((m) => !m.pending)
             .map((m) => `${nameFor(m.senderId)}: ${m.body}`)
             .join("\n");
-          const replyText = await askFamilyAgentInChannel(agentFor(req.authUser.id), transcript, body);
+          const replyText = await askFamilyAgentInChannel(agentFor(req.authUser.id), transcript, body, images);
           store.resolvePendingAgentMessage(pending.id, replyText);
           store.scoped(req.authUser.id).logActivity("family-planner", "chat.reply", replyText);
         } catch (err) {
@@ -647,6 +713,15 @@ export function buildServer(
     if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
     store.markChannelRead(id, req.authUser.id, parsed.data.ts);
     return { ok: true };
+  });
+
+  app.delete("/channels/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!store.deleteChannel(id, req.authUser.id)) {
+      return reply.code(403).send({ error: "You're not in that conversation." });
+    }
+    req.userStore.logActivity("user", "chat.channel.delete", `${req.authUser.displayName} deleted a conversation`);
+    return { deleted: true };
   });
 
   // ---- sticky notes ----

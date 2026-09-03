@@ -52,7 +52,7 @@ data class ChatMessage(
 /** What the detail bottom-sheet is currently showing (a referenced item or a doc preview). */
 sealed interface DetailContent {
     data object Loading : DetailContent
-    data class DocumentDetail(val doc: Document) : DetailContent
+    data class DocumentDetail(val doc: Document, val pdfBytes: ByteArray? = null) : DetailContent
     data class TaskDetail(val task: Task) : DetailContent
     data class Failed(val message: String) : DetailContent
 }
@@ -512,6 +512,22 @@ class AppViewModel(
         refreshChannels()
     }
 
+    fun deleteChannel(id: String, onDeleted: () -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.deleteChannel(id) }.onSuccess {
+                conversationJob?.cancel()
+                conversationJob = null
+                _state.value = _state.value.copy(
+                    activeChannel = null,
+                    channelMessages = emptyList(),
+                    channels = _state.value.channels.filter { it.id != id },
+                )
+                onDeleted()
+                refreshChannels()
+            }
+        }
+    }
+
     fun startConversation(memberIds: List<String>, name: String?, onOpened: (String) -> Unit) {
         if (memberIds.isEmpty()) return
         val kind = if (memberIds.size == 1 && name.isNullOrBlank()) "dm" else "group"
@@ -524,13 +540,15 @@ class AppViewModel(
         }
     }
 
-    fun sendChannelMessage(body: String) {
+    fun sendChannelMessage(body: String, images: List<String> = emptyList()) {
         val channelId = _state.value.activeChannel?.id ?: return
-        if (body.isBlank()) return
-        val mention = Regex("(^|[^\\w@])@(agent|ai|assistant)\\b", RegexOption.IGNORE_CASE).containsMatchIn(body)
+        if (body.isBlank() && images.isEmpty()) return
+        // The server requires a non-empty body; stand in for an image-only message.
+        val text = body.trim().ifBlank { if (images.size > 1) "(shared images)" else "(shared an image)" }
+        val mention = Regex("(^|[^\\w@])@(agent|ai|assistant)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)
         viewModelScope.launch {
             _state.value = _state.value.copy(channelSending = true)
-            apiCall { api.postMessage(channelId, body.trim(), mention) }
+            apiCall { api.postMessage(channelId, text, mention, images) }
                 .onSuccess { msg ->
                     val merged = (_state.value.channelMessages + msg)
                         .associateBy { it.id }.values.sortedBy { it.createdAt }
@@ -580,7 +598,17 @@ class AppViewModel(
         _state.value = _state.value.copy(detail = DetailContent.Loading)
         viewModelScope.launch {
             apiCall { api.getDocument(id) }
-                .onSuccess { _state.value = _state.value.copy(detail = DetailContent.DocumentDetail(it)) }
+                .onSuccess { doc ->
+                    _state.value = _state.value.copy(detail = DetailContent.DocumentDetail(doc))
+                    val isPdf = doc.originalMime == "application/pdf" || doc.filename.endsWith(".pdf", ignoreCase = true)
+                    if (isPdf) {
+                        runCatching { api.documentOriginal(id) }.getOrNull()?.let { bytes ->
+                            if ((_state.value.detail as? DetailContent.DocumentDetail)?.doc?.id == id) {
+                                _state.value = _state.value.copy(detail = DetailContent.DocumentDetail(doc, bytes))
+                            }
+                        }
+                    }
+                }
                 .onFailure { _state.value = _state.value.copy(detail = DetailContent.Failed(it.message ?: "Not found")) }
         }
     }

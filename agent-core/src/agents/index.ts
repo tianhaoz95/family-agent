@@ -295,7 +295,8 @@ export function mentionsAgent(body: string): boolean {
 export async function askFamilyAgentInChannel(
   agent: FamilyAgent,
   transcript: string,
-  latestMessage: string
+  latestMessage: string,
+  images: string[] = []
 ): Promise<string> {
   const wrapped = `You are one participant in a family group chat. Here is the recent conversation:
 
@@ -303,7 +304,7 @@ ${transcript}
 
 The latest message mentioned you (@agent):
 ${latestMessage}
-
+${images.length ? "\nThe latest message also attached the image(s) below.\n" : ""}
 Reply as a single chat message — short, friendly, and directly useful. Do not prefix your reply with your name.`;
-  return askFamilyAgent(agent, wrapped);
+  return askFamilyAgent(agent, wrapped, images);
 }

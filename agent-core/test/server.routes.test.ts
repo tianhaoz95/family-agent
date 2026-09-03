@@ -238,6 +238,35 @@ describe("HTTP API", () => {
     expect(doc.rawText).toBe("hello from upload");
   });
 
+  it("GET /documents/:id/original serves an uploaded file back, 404 for pasted text", async () => {
+    const { contentType, body } = await multipart("note.txt", "original bytes here");
+    const up = await inject({
+      method: "POST",
+      url: "/documents/upload",
+      headers: { "content-type": contentType },
+      payload: body,
+    });
+    const id = up.json().document.id;
+
+    const orig = await inject({ method: "GET", url: `/documents/${id}/original` });
+    expect(orig.statusCode).toBe(200);
+    expect(orig.headers["content-type"]).toContain("text/plain");
+    expect(orig.body).toBe("original bytes here");
+
+    // A pasted-text document has no stored original.
+    const pasted = await inject({
+      method: "POST",
+      url: "/documents/ingest",
+      payload: { filename: "typed.txt", text: "just text" },
+    });
+    const pastedId = pasted.json().document.id;
+    expect((await inject({ method: "GET", url: `/documents/${pastedId}/original` })).statusCode).toBe(404);
+
+    // Gone after the document is deleted.
+    await inject({ method: "DELETE", url: `/documents/${id}` });
+    expect((await inject({ method: "GET", url: `/documents/${id}/original` })).statusCode).toBe(404);
+  });
+
   it("POST /documents/upload rejects an unsupported file type with a helpful message", async () => {
     const { contentType, body } = await multipart("resume.docx", "not real", "application/octet-stream");
     const res = await inject({
@@ -778,6 +807,61 @@ describe("HTTP API", () => {
     // A brand-new third account sees no channels at all.
     const gran = seedUser(store, { username: "gran", role: "member" });
     expect((await authInject(app, gran.token)({ method: "GET", url: "/channels" })).json().channels).toEqual([]);
+  });
+
+  it("a chat message can carry image attachments (data URIs), echoed back on read", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const created = await inject({
+      method: "POST",
+      url: "/channels",
+      payload: { kind: "dm", memberIds: [kid.user.id] },
+    });
+    const channelId = created.json().channel.id;
+    const img = "data:image/png;base64,iVBORw0KGgo=";
+
+    const posted = await inject({
+      method: "POST",
+      url: `/channels/${channelId}/messages`,
+      payload: { body: "look at this", images: [img] },
+    });
+    expect(posted.statusCode).toBe(200);
+    expect(posted.json().message.images).toEqual([img]);
+
+    const back = (await inject({ method: "GET", url: `/channels/${channelId}/messages` })).json().messages;
+    expect(back[0].images).toEqual([img]);
+
+    // A non-image data URI is rejected.
+    const bad = await inject({
+      method: "POST",
+      url: `/channels/${channelId}/messages`,
+      payload: { body: "nope", images: ["data:text/html,<script>"] },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it("DELETE /channels/:id: a member removes it for everyone, a non-member is 403", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const outsider = seedUser(store, { username: "gran", role: "member" });
+    const asKid = authInject(app, kid.token);
+    const asOutsider = authInject(app, outsider.token);
+
+    const created = await inject({
+      method: "POST",
+      url: "/channels",
+      payload: { kind: "group", name: "Household", memberIds: [kid.user.id] },
+    });
+    const channelId = created.json().channel.id;
+    await inject({ method: "POST", url: `/channels/${channelId}/messages`, payload: { body: "hi" } });
+
+    // An outsider can't delete it.
+    expect((await asOutsider({ method: "DELETE", url: `/channels/${channelId}` })).statusCode).toBe(403);
+
+    // A member can — and it's gone for the other member too.
+    const del = await asKid({ method: "DELETE", url: `/channels/${channelId}` });
+    expect(del.statusCode).toBe(200);
+    expect(del.json().deleted).toBe(true);
+    expect((await inject({ method: "GET", url: "/channels" })).json().channels).toEqual([]);
+    expect((await asKid({ method: "GET", url: `/channels/${channelId}/messages` })).statusCode).toBe(403);
   });
 
   // ---- sticky notes ----

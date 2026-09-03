@@ -71,6 +71,8 @@ export interface Document {
   extracted: { category?: string; summary?: string; importantDates?: string[] } | null;
   createdAt: string;
   sourcePath: string | null;
+  /** MIME of the stored original file (uploads), for the preview. null = none / not recorded. */
+  originalMime: string | null;
   extractionStatus: "pending" | "done" | "failed";
 }
 
@@ -135,6 +137,8 @@ export interface Message {
   /** A user id, or "_agent_" for the assistant. */
   senderId: string;
   body: string;
+  /** Image attachments as data URIs — same as the 1:1 chat composer. */
+  images: string[];
   pending: boolean;
   createdAt: string;
 }
@@ -319,6 +323,20 @@ export const api = {
   listTasks: () => request<{ tasks: Task[] }>("/tasks"),
   getTask: (id: string) => request<{ task: Task }>(`/tasks/${id}`),
   getDocument: (id: string) => request<{ document: Document }>(`/documents/${id}`),
+  /** The document's original file (PDF / image) for previewing. Throws on 404
+   *  (e.g. a pasted-text document, or one uploaded before originals were kept). */
+  getDocumentOriginal: async (id: string): Promise<{ buffer: ArrayBuffer; type: string }> => {
+    const token = getToken();
+    const res = await fetch(`${BASE_URL}/documents/${id}/original`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (res.status === 401) {
+      clearToken();
+      emitSignedOut();
+    }
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return { buffer: await res.arrayBuffer(), type: res.headers.get("content-type") ?? "" };
+  },
   /** Keyword search over task titles and notes, ranked, optionally filtered by status. */
   searchTasks: (query: string, opts: { status?: "open" | "done"; limit?: number } = {}) => {
     const p = new URLSearchParams({ q: query });
@@ -366,13 +384,14 @@ export const api = {
     const q = after ? `?after=${encodeURIComponent(after)}` : "";
     return request<{ messages: Message[] }>(`/channels/${id}/messages${q}`);
   },
-  postMessage: (id: string, body: string, mentionAgent = false) =>
+  postMessage: (id: string, body: string, mentionAgent = false, images: string[] = []) =>
     request<{ message: Message }>(`/channels/${id}/messages`, {
       method: "POST",
-      body: JSON.stringify({ body, mentionAgent }),
+      body: JSON.stringify(images.length ? { body, mentionAgent, images } : { body, mentionAgent }),
     }),
   markChannelRead: (id: string, ts: string) =>
     request<{ ok: true }>(`/channels/${id}/read`, { method: "POST", body: JSON.stringify({ ts }) }),
+  deleteChannel: (id: string) => request<{ deleted: true }>(`/channels/${id}`, { method: "DELETE" }),
 
   // ---- sticky notes ----
   listNotes: (scope: NoteScope) => request<{ notes: StickyNote[] }>(`/notes?scope=${scope}`),

@@ -82,6 +82,25 @@ fun DetailSheet(content: DetailContent, onDismiss: () -> Unit) {
                         )
                     }
                     Spacer(Modifier.height(14.dp))
+
+                    val isPdf = d.originalMime == "application/pdf" ||
+                        d.filename.endsWith(".pdf", ignoreCase = true)
+                    if (isPdf && content.pdfBytes != null) {
+                        PdfPreview(content.pdfBytes)
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "Extracted text",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AppAccents.textSecondary,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                    } else if (isPdf) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                            horizontalArrangement = Arrangement.Center,
+                        ) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) }
+                    }
+
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = MaterialTheme.shapes.medium,

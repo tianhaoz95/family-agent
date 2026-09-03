@@ -2156,18 +2156,30 @@ input[type="file"]::file-selector-button:hover {
   min-height: 0;
 }
 .channel-row {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 2px 8px;
   padding: 9px 10px;
   border-radius: var(--r-md);
   cursor: pointer;
+  transition: background 120ms ease;
 }
 .channel-row:hover {
   background: var(--surface-2);
 }
 .channel-row.is-active {
   background: var(--accent-soft);
+}
+.channel-row.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
 }
 .channel-row-title {
   font-weight: 600;
@@ -2213,28 +2225,74 @@ input[type="file"]::file-selector-button:hover {
   min-height: 0;
 }
 .conversation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 10px;
+  margin-bottom: 4px;
+}
+.conversation-head-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 .conversation-head h2 {
   margin: 0;
   font-size: 1.05rem;
+}
+.conversation-head #conversation-members {
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conversation-delete {
+  flex: none;
+  color: var(--text-muted);
+  padding: 5px 10px;
+}
+.conversation-delete:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.conversation-delete svg {
+  width: 15px;
+  height: 15px;
 }
 .message-log {
   flex: 1;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 4px 2px 12px;
+  gap: 12px;
+  padding: 12px 2px;
   min-height: 0;
 }
 .msg {
   max-width: 76%;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
+}
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 260px;
+}
+.msg-own .msg-images {
+  align-self: flex-end;
+  justify-content: flex-end;
+}
+.msg-images img {
+  max-width: 100%;
+  max-height: 220px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  object-fit: cover;
 }
 .msg-sender {
   font-size: 0.72rem;
@@ -2483,6 +2541,41 @@ input[type="file"]::file-selector-button:hover {
   border-radius: var(--r-md);
   padding: 12px;
   margin: 0;
+}
+.side-panel--wide {
+  width: min(760px, 68vw);
+}
+.pdf-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px;
+}
+.pdf-page {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.pdf-text-details {
+  margin-top: 12px;
+}
+.pdf-text-details > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.side-panel-image {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
 }
 
 .doc-preview {

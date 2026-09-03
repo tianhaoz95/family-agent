@@ -206,11 +206,22 @@
               </div>
               <div id="conversation" class="conversation" hidden>
                 <div class="conversation-head">
-                  <h2 id="conversation-title"></h2>
-                  <span id="conversation-members" class="view-sub"></span>
+                  <div class="conversation-head-main">
+                    <h2 id="conversation-title"></h2>
+                    <span id="conversation-members" class="view-sub"></span>
+                  </div>
+                  <button type="button" id="conversation-delete" class="btn-ghost conversation-delete" title="Delete this conversation for everyone">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                    <span>Delete</span>
+                  </button>
                 </div>
                 <div id="message-log" class="message-log" role="log" aria-live="polite"></div>
+                <div id="message-attachments" class="chat-attachments" hidden></div>
                 <form id="message-form" class="chat-form">
+                  <input id="message-image-input" type="file" accept="image/*" multiple hidden />
+                  <button type="button" id="message-attach-btn" class="chat-attach-btn" title="Attach image" aria-label="Attach image">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                  </button>
                   <textarea id="message-input" placeholder="Message… (@agent to ask the assistant)" rows="1"></textarea>
                   <button type="submit" id="message-send-btn">Send</button>
                 </form>

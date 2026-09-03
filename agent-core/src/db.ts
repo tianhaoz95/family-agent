@@ -86,6 +86,9 @@ export interface DocumentRecord {
   createdAt: string;
   /** Absolute path if this came from the watched inbox folder; null for API-pasted documents. */
   sourcePath: string | null;
+  /** MIME type of the stored original file (uploads), for the preview route.
+   *  null when there's no stored original or it wasn't recorded. */
+  originalMime: string | null;
   /**
    * Where field extraction got to. "pending" while the model is working (or
    * queued), "done" once fields are saved, "failed" once retries are
@@ -184,6 +187,8 @@ export interface MessageRecord {
   /** A user id, or AGENT_SENDER_ID. */
   senderId: string;
   body: string;
+  /** Image attachments as data URIs — same as the 1:1 chat composer. */
+  images: string[];
   /** True while the agent's reply is still being generated (body is ""). */
   pending: boolean;
   createdAt: string;
@@ -243,7 +248,8 @@ CREATE TABLE IF NOT EXISTS documents (
   extracted TEXT,
   created_at TEXT NOT NULL,
   source_path TEXT,
-  extraction_status TEXT NOT NULL DEFAULT 'pending'
+  extraction_status TEXT NOT NULL DEFAULT 'pending',
+  original_mime TEXT
 );
 
 CREATE TABLE IF NOT EXISTS activity (
@@ -289,6 +295,7 @@ CREATE TABLE IF NOT EXISTS messages (
   sender_id TEXT NOT NULL,
   body TEXT NOT NULL,
   pending INTEGER NOT NULL DEFAULT 0,
+  images TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -331,6 +338,12 @@ const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   { table: "documents", column: "user_id", ddl: `ALTER TABLE documents ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}'` },
   { table: "activity", column: "user_id", ddl: `ALTER TABLE activity ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}'` },
   { table: "tools", column: "user_id", ddl: `ALTER TABLE tools ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}'` },
+  // Multimodal family chat: a message can carry image attachments (JSON array
+  // of data URIs), the same way the 1:1 chat composer does.
+  { table: "messages", column: "images", ddl: "ALTER TABLE messages ADD COLUMN images TEXT" },
+  // Original-file preview: uploads keep their bytes on disk; this records the
+  // MIME so the preview route can serve the right Content-Type.
+  { table: "documents", column: "original_mime", ddl: "ALTER TABLE documents ADD COLUMN original_mime TEXT" },
 ];
 
 export class Store {
@@ -814,20 +827,28 @@ export class Store {
     return opts.afterTs ? msgs : msgs.reverse();
   }
 
-  postMessage(channelId: string, senderId: string, body: string): MessageRecord {
+  postMessage(channelId: string, senderId: string, body: string, images: string[] = []): MessageRecord {
     const rec: MessageRecord = {
       id: shortId(),
       channelId,
       senderId,
       body,
+      images,
       pending: false,
       createdAt: new Date().toISOString(),
     };
     this.db
       .prepare(
-        "INSERT INTO messages (id, channel_id, sender_id, body, pending, created_at) VALUES (?, ?, ?, ?, 0, ?)"
+        "INSERT INTO messages (id, channel_id, sender_id, body, pending, images, created_at) VALUES (?, ?, ?, ?, 0, ?, ?)"
       )
-      .run(rec.id, rec.channelId, rec.senderId, rec.body, rec.createdAt);
+      .run(
+        rec.id,
+        rec.channelId,
+        rec.senderId,
+        rec.body,
+        images.length ? JSON.stringify(images) : null,
+        rec.createdAt
+      );
     return rec;
   }
 
@@ -838,6 +859,7 @@ export class Store {
       channelId,
       senderId: AGENT_SENDER_ID,
       body: "",
+      images: [],
       pending: true,
       createdAt: new Date().toISOString(),
     };
@@ -869,6 +891,17 @@ export class Store {
     this.db
       .prepare("UPDATE channel_members SET last_read_at = ? WHERE channel_id = ? AND user_id = ?")
       .run(ts, channelId, userId);
+  }
+
+  /** Delete a channel and everything in it. Any member can — a conversation is
+   *  shared, so the delete is shared too: messages and membership go for
+   *  everyone. Returns false when the caller isn't a member. */
+  deleteChannel(channelId: string, userId: string): boolean {
+    if (!this.isChannelMember(channelId, userId)) return false;
+    this.db.prepare("DELETE FROM messages WHERE channel_id = ?").run(channelId);
+    this.db.prepare("DELETE FROM channel_members WHERE channel_id = ?").run(channelId);
+    this.db.prepare("DELETE FROM channels WHERE id = ?").run(channelId);
+    return true;
   }
 
   /** Hand every row still owned by the legacy sentinel to a real user. */
@@ -1181,6 +1214,7 @@ export class ScopedStore {
       extracted: input.extracted ?? null,
       createdAt: new Date().toISOString(),
       sourcePath: input.sourcePath ?? null,
+      originalMime: null,
       extractionStatus: input.extracted ? "done" : "pending",
     };
     this.db
@@ -1203,6 +1237,15 @@ export class ScopedStore {
       rec.sourcePath ? `Ingested "${rec.filename}" from watched folder` : `Ingested "${rec.filename}"`
     );
     return rec;
+  }
+
+  /** Record the MIME type of a stored original file (set right after an upload
+   *  is written to disk) so the preview route can serve the right Content-Type. */
+  setDocumentOriginalMime(id: string, mime: string): void {
+    if (!mime) return;
+    this.db
+      .prepare("UPDATE documents SET original_mime = ? WHERE id = ? AND user_id = ?")
+      .run(mime, id, this.userId);
   }
 
   findDocumentBySourcePath(sourcePath: string): DocumentRecord | undefined {
@@ -1528,6 +1571,7 @@ function rowToDocument(r: any): DocumentRecord {
     extracted: r.extracted ? JSON.parse(r.extracted) : null,
     createdAt: r.created_at,
     sourcePath: r.source_path ?? null,
+    originalMime: r.original_mime ?? null,
     extractionStatus: (r.extraction_status as ExtractionStatus) ?? "pending",
   };
 }
@@ -1548,9 +1592,20 @@ function rowToMessage(r: any): MessageRecord {
     channelId: r.channel_id,
     senderId: r.sender_id,
     body: r.body,
+    images: parseImages(r.images),
     pending: !!r.pending,
     createdAt: r.created_at,
   };
+}
+
+function parseImages(raw: unknown): string[] {
+  if (typeof raw !== "string" || raw.length === 0) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 function rowToStickyNote(r: any): StickyNoteRecord {

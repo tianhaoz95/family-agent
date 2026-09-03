@@ -220,7 +220,11 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
 - Document ingestion has three entry points into the same pipeline: `POST /documents/ingest`
   (paste text, JSON body), `POST /documents/upload` (multipart file — PDF/photo/scan, the
   `@fastify/multipart`-backed route), and the inbox watcher above. All three end up at
-  `store.createDocument()` + `extractDocument()`.
+  `store.createDocument()` + `extractDocument()`. An **uploaded** file's original bytes are
+  also kept at `<dataDir>/documents/<userId>/<docId>` (MIME in `documents.original_mime`) so
+  `GET /documents/:id/original` can serve it for the client-side preview (PDF viewer / image);
+  watched-folder documents are served from their on-disk `source_path` instead, pasted-text
+  ones have no original (404).
 - `config.ts` — every config value has an env var override; nothing else in the codebase should
   read `process.env` directly. `dataDir` defaults to `$XDG_DATA_HOME/family-agent`
   (`~/.local/share/family-agent`), **not** the repo tree — override with
@@ -263,12 +267,17 @@ The first data that isn't per-account. Both added narrowly rather than by loosen
   (not `ScopedStore`). Every read method takes the requesting user id and returns
   nothing when they aren't in `channel_members`. `findOrCreateDm` is idempotent per
   unordered pair; groups have a name. Routes: `GET/POST /channels`, `GET
-  /channels/:id`, `GET/POST /channels/:id/messages`, `POST /channels/:id/members`,
+  /channels/:id`, `DELETE /channels/:id` (any member — removes it for everyone),
+  `GET/POST /channels/:id/messages`, `POST /channels/:id/members`,
   `POST /channels/:id/read`, `GET /family/members` (any authed user, name + username
   only — *not* the admin `/users`). `@agent`/`@ai` in a message (`mentionsAgent()`)
   → `askFamilyAgentInChannel()` runs the mentioner's planner and
   `resolvePendingAgentMessage()` fills in the `_agent_` placeholder row. Clients
-  poll. Desktop: `#view-messages` in `main.ts`. Android: `Destination.Messages` +
+  poll. A message can carry image attachments (`messages.images`, JSON array of
+  data URIs) exactly like `POST /chat` — both composers reuse the 1:1-chat attach
+  flow, and an `@agent` turn passes the images to the multimodal planner. Desktop:
+  `#view-messages` in `main.ts` (`makeImageTray` is shared by both composers).
+  Android: `Destination.Messages` +
   nested `conversation/{id}` route, `MessagesScreen.kt`, poll loop in `AppViewModel`.
 - **Sticky board** — `sticky_notes` on `ScopedStore`: `scope='private'` is
   `AND user_id = ?`, `scope='shared'` is open to every member (author tracked in
@@ -279,7 +288,11 @@ The first data that isn't per-account. Both added narrowly rather than by loosen
   (`agents/references.ts`); `server.ts` collects per `/chat` turn and returns
   `references: [{type,id,label}]`. Clients open the item in a side panel (desktop)
   / bottom sheet (Android), also reused by the document Preview button. `GET
-  /tasks/:id` and `GET /documents/:id` back it.
+  /tasks/:id` and `GET /documents/:id` back it. For a PDF/image document the panel
+  shows the actual file, not just the extracted text: desktop renders PDFs with
+  pdf.js (`desktop/src/pdfPreview.ts` — the Linux webview has no built-in PDF
+  viewer, so an `<iframe>` won't do), Android with the platform `PdfRenderer`
+  (`android/.../ui/PdfPreview.kt`); both fetch `GET /documents/:id/original`.
 
 ## Scope notes
 

@@ -226,6 +226,9 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         sending = state.channelSending,
                         currentUserId = (state.auth as? AuthState.Authenticated)?.user?.id ?: "",
                         onSend = viewModel::sendChannelMessage,
+                        onDelete = {
+                            viewModel.deleteChannel(id) { navController.popBackStack() }
+                        },
                         onBack = {
                             viewModel.closeChannel()
                             navController.popBackStack()
