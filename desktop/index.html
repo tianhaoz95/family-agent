@@ -292,6 +292,19 @@
             </p>
           </div>
 
+          <div class="doc-search" role="search">
+            <svg class="doc-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="document-search" type="search" autocomplete="off" spellcheck="false"
+                   placeholder="Search documents — by name, content, or meaning" aria-label="Search documents" />
+            <select id="document-search-mode" aria-label="Search strategy" title="How to match your query">
+              <option value="hybrid">Smart</option>
+              <option value="keyword">Exact words</option>
+              <option value="fuzzy">Typo-tolerant</option>
+              <option value="semantic">By meaning</option>
+            </select>
+          </div>
+          <p id="document-search-status" class="settings-hint" hidden></p>
+
           <label id="document-upload-form" class="upload-zone">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
             <span class="upload-zone-text">Choose a PDF, photo, or scan to add to the family archive — it uploads as soon as you pick it. Accepts <code>.pdf</code>, <code>.txt</code>, <code>.md</code>, <code>.jpg</code>, <code>.png</code>, <code>.webp</code>.</span>

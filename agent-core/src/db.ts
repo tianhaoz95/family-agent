@@ -36,6 +36,78 @@ export function toFtsMatchQuery(raw: string): string {
     .join(" OR ");
 }
 
+// ---- fuzzy (trigram) search ----
+// FTS5's `trigram` tokenizer indexes every 3-character run in a column, so a
+// MATCH on a quoted string is really a case-insensitive substring test. That
+// already beats the prefix-only keyword index for mid-word hits ("surance"),
+// but on its own it still can't tolerate a typo — "insurnce" is not a
+// substring of "insurance". So rather than matching the query as one string,
+// this breaks every query word into its OWN trigrams and ORs them: a
+// misspelling still shares most of its trigrams with the real word, bm25()
+// ranks the document with the most overlap first, and `trigramSimilarity()`
+// below re-scores the shortlist to drop the long tail of 1-trigram
+// coincidences. Returns "" when the query has no word of length ≥ 3 (nothing
+// for the trigram tokenizer to bite on); the caller then falls back to the
+// keyword path.
+export function toTrigramMatchQuery(raw: string): string {
+  const words = (raw ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  const grams = new Set<string>();
+  for (const w of words.slice(0, 12)) {
+    if (w.length < 3) continue;
+    for (let i = 0; i <= w.length - 3; i++) grams.add(w.slice(i, i + 3));
+  }
+  // Quote each gram so a run like "or"+space can't be read as the OR operator,
+  // and cap the count so a pasted paragraph can't build a 500-term MATCH.
+  return [...grams].slice(0, 60).map((g) => `"${g.replace(/"/g, '""')}"`).join(" OR ");
+}
+
+/** Trigram multiset of a string, space-padded so short words still yield grams. */
+function trigramSet(s: string): Set<string> {
+  const norm = ` ${(s ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
+  const out = new Set<string>();
+  for (let i = 0; i <= norm.length - 3; i++) {
+    const g = norm.slice(i, i + 3);
+    if (g.trim().length > 0) out.add(g);
+  }
+  return out;
+}
+
+/**
+ * Sørensen–Dice coefficient of two strings' trigram sets, 0…1. Robust to
+ * typos, transpositions, and word-order changes ("insurnce" vs "insurance" ≈
+ * 0.6; "auto policy" vs "policy auto" ≈ 1). Used to re-rank and gate fuzzy
+ * search hits.
+ */
+export function trigramSimilarity(a: string, b: string): number {
+  const A = trigramSet(a);
+  const B = trigramSet(b);
+  if (A.size === 0 || B.size === 0) return 0;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter++;
+  return (2 * inter) / (A.size + B.size);
+}
+
+// ---- embedding-vector math (for ScopedStore's semantic search) ----
+// Vectors are stored as little-endian Float32 BLOBs. A SQLite BLOB comes back
+// as a Uint8Array whose underlying ArrayBuffer may be pooled and unaligned, so
+// copy into a fresh, 8-byte-aligned buffer before viewing it as Float32.
+function bytesToFloat32(u8: Uint8Array): Float32Array {
+  const ab = new ArrayBuffer(u8.byteLength);
+  new Uint8Array(ab).set(u8);
+  return new Float32Array(ab);
+}
+
+function dotProduct(a: Float32Array, b: Float32Array): number {
+  let sum = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) sum += a[i] * b[i];
+  return sum;
+}
+
+function vectorNorm(a: Float32Array): number {
+  return Math.sqrt(dotProduct(a, a));
+}
+
 // The owner assigned to any pre-existing row when a single-user database is
 // upgraded to the multi-user schema. `reassignLegacyData()` moves these to
 // the first real admin the moment one is created during setup.
@@ -324,6 +396,24 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sticky_scope ON sticky_notes(scope, user_id);
+
+-- Semantic search: one row per text chunk of a document. The vec column is a
+-- little-endian Float32 BLOB; the model column records which embedding model
+-- produced it so a model change can invalidate stale rows. Populated off the
+-- ingest path by embeddings.ts and cleaned up by the documents DELETE trigger
+-- (see migrateSearchIndex). Brute-force cosine scan at query time -- fine at
+-- family scale; see docs/DECISIONS.md for why no vector-index extension.
+CREATE TABLE IF NOT EXISTS document_embeddings (
+  doc_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  chunk_text TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dim INTEGER NOT NULL,
+  vec BLOB NOT NULL,
+  PRIMARY KEY (doc_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_document_embeddings_user ON document_embeddings(user_id, model);
 `;
 
 // Columns added after a release. `CREATE TABLE IF NOT EXISTS` is a no-op
@@ -429,6 +519,9 @@ export class Store {
     // and reconcileFtsTable() below repopulates from scratch anyway.
     this.dropFtsTableIfColumnsDiffer("documents_fts", ["doc_id", "user_id", "filename", "body", "summary", "category"]);
     this.dropFtsTableIfColumnsDiffer("tasks_fts", ["task_id", "user_id", "title", "notes"]);
+    // Fuzzy/substring mirror of documents (trigram tokenizer). Documents only —
+    // task titles are short enough that keyword + prefix already covers typos.
+    this.dropFtsTableIfColumnsDiffer("documents_trigram", ["doc_id", "user_id", "filename", "body", "summary"]);
 
     // Triggers are dropped and recreated every start (not CREATE IF NOT
     // EXISTS) so the trigger body always matches the column list this build
@@ -443,6 +536,10 @@ export class Store {
         task_id UNINDEXED, user_id UNINDEXED, title, notes,
         tokenize = 'unicode61 remove_diacritics 2'
       );
+      CREATE VIRTUAL TABLE IF NOT EXISTS documents_trigram USING fts5(
+        doc_id UNINDEXED, user_id UNINDEXED, filename, body, summary,
+        tokenize = 'trigram'
+      );
 
       DROP TRIGGER IF EXISTS documents_fts_ai;
       DROP TRIGGER IF EXISTS documents_fts_ad;
@@ -451,21 +548,34 @@ export class Store {
       DROP TRIGGER IF EXISTS tasks_fts_ad;
       DROP TRIGGER IF EXISTS tasks_fts_au;
 
+      -- The documents_fts_* triggers below also maintain documents_trigram and
+      -- clear document_embeddings on delete, so all four document-search
+      -- mirrors move in lockstep with the base row no matter which code path
+      -- wrote it (same "can't drift" rule as the activity log).
       CREATE TRIGGER documents_fts_ai AFTER INSERT ON documents BEGIN
         INSERT INTO documents_fts(doc_id, user_id, filename, body, summary, category)
         VALUES (new.id, new.user_id, new.filename, new.raw_text,
                 COALESCE(json_extract(new.extracted, '$.summary'), ''),
                 COALESCE(json_extract(new.extracted, '$.category'), ''));
+        INSERT INTO documents_trigram(doc_id, user_id, filename, body, summary)
+        VALUES (new.id, new.user_id, new.filename, new.raw_text,
+                COALESCE(json_extract(new.extracted, '$.summary'), ''));
       END;
       CREATE TRIGGER documents_fts_ad AFTER DELETE ON documents BEGIN
         DELETE FROM documents_fts WHERE doc_id = old.id;
+        DELETE FROM documents_trigram WHERE doc_id = old.id;
+        DELETE FROM document_embeddings WHERE doc_id = old.id;
       END;
       CREATE TRIGGER documents_fts_au AFTER UPDATE ON documents BEGIN
         DELETE FROM documents_fts WHERE doc_id = old.id;
+        DELETE FROM documents_trigram WHERE doc_id = old.id;
         INSERT INTO documents_fts(doc_id, user_id, filename, body, summary, category)
         VALUES (new.id, new.user_id, new.filename, new.raw_text,
                 COALESCE(json_extract(new.extracted, '$.summary'), ''),
                 COALESCE(json_extract(new.extracted, '$.category'), ''));
+        INSERT INTO documents_trigram(doc_id, user_id, filename, body, summary)
+        VALUES (new.id, new.user_id, new.filename, new.raw_text,
+                COALESCE(json_extract(new.extracted, '$.summary'), ''));
       END;
 
       CREATE TRIGGER tasks_fts_ai AFTER INSERT ON tasks BEGIN
@@ -492,6 +602,12 @@ export class Store {
         "COALESCE(json_extract(extracted, '$.category'), '')"
     );
     this.reconcileFtsTable(
+      "documents_trigram",
+      "documents",
+      "doc_id, user_id, filename, body, summary",
+      "id, user_id, filename, raw_text, COALESCE(json_extract(extracted, '$.summary'), '')"
+    );
+    this.reconcileFtsTable(
       "tasks_fts",
       "tasks",
       "task_id, user_id, title, notes",
@@ -516,14 +632,21 @@ export class Store {
     this.db.exec(`INSERT INTO ${ftsTable}(${insertCols}) SELECT ${selectExpr} FROM ${base}`);
   }
 
-  /** Drop and rebuild both search mirrors from the base tables. For ops/tests. */
+  /** Drop and rebuild the keyword + fuzzy search mirrors from the base tables.
+   *  For ops/tests. Does NOT touch document_embeddings — that mirror is rebuilt
+   *  by embeddings.ts's backfill, which needs the model. */
   rebuildSearchIndex() {
     this.db.exec("DELETE FROM documents_fts");
     this.db.exec("DELETE FROM tasks_fts");
+    this.db.exec("DELETE FROM documents_trigram");
     this.db.exec(
       "INSERT INTO documents_fts(doc_id, user_id, filename, body, summary, category) " +
         "SELECT id, user_id, filename, raw_text, COALESCE(json_extract(extracted, '$.summary'), ''), " +
         "COALESCE(json_extract(extracted, '$.category'), '') FROM documents"
+    );
+    this.db.exec(
+      "INSERT INTO documents_trigram(doc_id, user_id, filename, body, summary) " +
+        "SELECT id, user_id, filename, raw_text, COALESCE(json_extract(extracted, '$.summary'), '') FROM documents"
     );
     this.db.exec(
       "INSERT INTO tasks_fts(task_id, user_id, title, notes) " +
@@ -625,6 +748,7 @@ export class Store {
     // soft "disable". A family removing an account wants the data gone.
     for (const table of [
       "tasks",
+      "document_embeddings",
       "documents",
       "activity",
       "tools",
@@ -1359,17 +1483,33 @@ export class ScopedStore {
   }
 
   /**
-   * Keyword search over this user's documents (filename + full text +
-   * extracted summary), best match first, with optional structured filters
-   * on the extracted `category` and `importantDates`. An empty / unparseable
-   * query falls back to a recency listing, so `searchDocuments("", { category:
-   * "bill" })` is "my bills". See `toFtsMatchQuery`.
+   * Search this user's documents (filename + full text + extracted summary),
+   * best match first, with optional structured filters on the extracted
+   * `category` and `importantDates`. An empty / unparseable query falls back to
+   * a recency listing, so `searchDocuments("", { category: "bill" })` is "my
+   * bills".
+   *
+   * `mode`:
+   *  - `"keyword"` (default) — FTS5 prefix match, ranked by bm25. See `toFtsMatchQuery`.
+   *  - `"fuzzy"` — trigram match (typo- and substring-tolerant), re-ranked and
+   *    gated by `trigramSimilarity`. See `toTrigramMatchQuery`.
+   *
+   * Semantic (embedding) search and the keyword+fuzzy+semantic merge live in
+   * `embeddings.ts` (`searchDocumentsSmart`), which calls this method for its
+   * lexical legs — this stays a pure, synchronous, model-free SQL method.
    */
   searchDocuments(
     query: string,
-    opts: { category?: string; dueAfter?: string; dueBefore?: string; limit?: number } = {}
+    opts: {
+      category?: string;
+      dueAfter?: string;
+      dueBefore?: string;
+      limit?: number;
+      mode?: "keyword" | "fuzzy";
+    } = {}
   ): DocumentSearchHit[] {
     const limit = Math.min(Math.max(opts.limit ?? 8, 1), 50);
+    if (opts.mode === "fuzzy") return this.fuzzyDocuments(query, opts, limit);
     const match = toFtsMatchQuery(query);
     const where: string[] = ["d.user_id = ?"];
     const params: unknown[] = [this.userId];
@@ -1421,18 +1561,219 @@ export class ScopedStore {
       )
       .all(...(params as any[]), limit) as any[];
 
-    return rows.map((r) => {
-      const extracted = r.extracted ? JSON.parse(r.extracted) : null;
-      return {
-        id: r.id,
-        filename: r.filename,
-        category: (extracted?.category as string) ?? null,
-        summary: (extracted?.summary as string) ?? null,
-        snippet: String(r.snippet ?? "").trim(),
-        createdAt: r.created_at,
-        extractionStatus: (r.extraction_status as ExtractionStatus) ?? "pending",
-      };
+    return rows.map(rowToDocumentHit);
+  }
+
+  /** Structured-filter WHERE fragments shared by the keyword and fuzzy paths.
+   *  Appends to `where` / `params` in place; `d` is the documents alias. */
+  private appendDocumentFilters(
+    where: string[],
+    params: unknown[],
+    opts: { category?: string; dueAfter?: string; dueBefore?: string }
+  ): void {
+    if (opts.category) {
+      where.push("json_extract(d.extracted, '$.category') = ?");
+      params.push(opts.category);
+    }
+    if (opts.dueAfter) {
+      where.push(
+        "json_extract(d.extracted, '$.importantDates') IS NOT NULL AND " +
+          "EXISTS (SELECT 1 FROM json_each(d.extracted, '$.importantDates') WHERE value >= ?)"
+      );
+      params.push(opts.dueAfter);
+    }
+    if (opts.dueBefore) {
+      where.push(
+        "json_extract(d.extracted, '$.importantDates') IS NOT NULL AND " +
+          "EXISTS (SELECT 1 FROM json_each(d.extracted, '$.importantDates') WHERE value <= ?)"
+      );
+      params.push(opts.dueBefore);
+    }
+  }
+
+  /**
+   * Trigram (fuzzy / substring) document search. FTS5's trigram MATCH pulls a
+   * generous candidate pool — every doc sharing a few 3-char runs with the
+   * query, bm25-ordered — which is then re-scored with `trigramSimilarity` and
+   * gated at a low threshold so a bare 1-trigram coincidence ("the", "ing")
+   * doesn't surface. With no trigram-usable word in the query (nothing ≥ 3
+   * chars) it degrades to the keyword path, which also owns the empty-query /
+   * filter-only recency fallback.
+   */
+  private fuzzyDocuments(
+    query: string,
+    opts: { category?: string; dueAfter?: string; dueBefore?: string },
+    limit: number
+  ): DocumentSearchHit[] {
+    const match = toTrigramMatchQuery(query);
+    if (!match) return this.searchDocuments(query, { ...opts, limit, mode: "keyword" });
+
+    const where = ["d.user_id = ?", "tg.user_id = ?", "documents_trigram MATCH ?"];
+    const params: unknown[] = [this.userId, this.userId, match];
+    this.appendDocumentFilters(where, params, opts);
+
+    // Candidate pool: wider than `limit` so the re-rank has room to work, but
+    // bounded so a common trigram can't drag in the whole corpus.
+    const pool = Math.min(Math.max(limit * 5, 50), 250);
+    const rows = this.db
+      .prepare(
+        `SELECT d.id, d.filename, d.extracted, d.created_at, d.extraction_status,
+                snippet(documents_trigram, 3, '', '', ' … ', 14) AS snippet
+         FROM documents_trigram tg JOIN documents d ON d.id = tg.doc_id
+         WHERE ${where.join(" AND ")}
+         ORDER BY bm25(documents_trigram)
+         LIMIT ?`
+      )
+      .all(...(params as any[]), pool) as any[];
+
+    const scored = rows.map((r, i) => {
+      const hit = rowToDocumentHit(r);
+      const hay = [hit.filename, hit.summary ?? "", hit.snippet].filter(Boolean).join(" ");
+      // Blend similarity to the short fields with a small bm25-rank bonus so
+      // ties fall back to FTS's own ordering.
+      const score = trigramSimilarity(query, hay) + (rows.length - i) / (rows.length * 50);
+      return { hit, score };
     });
+
+    return scored
+      .filter((s) => s.score >= 0.1)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((s) => s.hit);
+  }
+
+  // ---- semantic search (document embeddings) ----
+  // These store and read the vector index; the embedding model itself is never
+  // touched here (that's embeddings.ts). Vectors are little-endian Float32
+  // BLOBs. See docs/DECISIONS.md → "Semantic + fuzzy document search".
+
+  /**
+   * Replace this document's embedding rows with `chunks` (one embedded text
+   * span each), tagged with the `model` that produced them. Wrapped in a
+   * transaction so a crash mid-write never leaves a document half-indexed.
+   * No-op if the document doesn't belong to this user.
+   */
+  upsertDocumentEmbeddings(
+    docId: string,
+    model: string,
+    chunks: { text: string; vector: Float32Array }[]
+  ): void {
+    if (!this.getDocument(docId)) return;
+    const del = this.db.prepare("DELETE FROM document_embeddings WHERE doc_id = ? AND user_id = ?");
+    const ins = this.db.prepare(
+      "INSERT INTO document_embeddings (doc_id, user_id, chunk_index, chunk_text, model, dim, vec) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    );
+    this.db.exec("BEGIN");
+    try {
+      del.run(docId, this.userId);
+      chunks.forEach((c, i) => {
+        ins.run(
+          docId,
+          this.userId,
+          i,
+          c.text.slice(0, 4000),
+          model,
+          c.vector.length,
+          Buffer.from(c.vector.buffer, c.vector.byteOffset, c.vector.byteLength)
+        );
+      });
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  /**
+   * Best cosine similarity to `queryVector` per document, for this user, over
+   * every embedded chunk — brute force, which is fine at family scale. Returns
+   * docs scoring at least `minScore` (default 0.2), best first, capped at
+   * `limit`. Structured filters mirror `searchDocuments`. Synchronous: the
+   * caller embeds the query text and hands the vector in.
+   */
+  searchDocumentChunksByVector(
+    queryVector: Float32Array,
+    opts: {
+      limit?: number;
+      minScore?: number;
+      model?: string;
+      category?: string;
+      dueAfter?: string;
+      dueBefore?: string;
+    } = {}
+  ): { id: string; score: number; snippet: string }[] {
+    const limit = Math.min(Math.max(opts.limit ?? 8, 1), 50);
+    const minScore = opts.minScore ?? 0.2;
+    const where = ["e.user_id = ?"];
+    const params: unknown[] = [this.userId];
+    if (opts.model) {
+      where.push("e.model = ?");
+      params.push(opts.model);
+    }
+    this.appendDocumentFilters(where, params, opts);
+
+    const rows = this.db
+      .prepare(
+        `SELECT e.doc_id, e.chunk_text, e.dim, e.vec
+         FROM document_embeddings e JOIN documents d ON d.id = e.doc_id
+         WHERE ${where.join(" AND ")}`
+      )
+      .all(...(params as any[])) as any[];
+
+    const q = queryVector;
+    const qNorm = vectorNorm(q);
+    if (qNorm === 0) return [];
+    const best = new Map<string, { score: number; snippet: string }>();
+    for (const r of rows) {
+      if (r.dim !== q.length) continue; // a stale row from a different model
+      const v = bytesToFloat32(r.vec as Uint8Array);
+      const vNorm = vectorNorm(v);
+      if (vNorm === 0) continue;
+      const score = dotProduct(q, v) / (qNorm * vNorm);
+      const prev = best.get(r.doc_id);
+      if (!prev || score > prev.score) {
+        best.set(r.doc_id, { score, snippet: String(r.chunk_text ?? "").replace(/\s+/g, " ").trim().slice(0, 240) });
+      }
+    }
+    return [...best.entries()]
+      .map(([id, b]) => ({ id, score: b.score, snippet: b.snippet }))
+      .filter((h) => h.score >= minScore)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
+  /** Ids of this user's documents that have no embedding rows for `model` yet
+   *  (have some text to embed). Drives the startup backfill. Newest first. */
+  documentIdsMissingEmbeddings(model: string, limit = 1000): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT d.id FROM documents d
+         WHERE d.user_id = ?
+           AND TRIM(d.raw_text) <> ''
+           AND NOT EXISTS (
+             SELECT 1 FROM document_embeddings e WHERE e.doc_id = d.id AND e.model = ?
+           )
+         ORDER BY d.created_at DESC
+         LIMIT ?`
+      )
+      .all(this.userId, model, limit) as any[];
+    return rows.map((r) => r.id);
+  }
+
+  /** Drop this user's embedding rows not produced by `keepModel` (model
+   *  changed). Returns how many were removed. */
+  pruneEmbeddingsNotMatching(keepModel: string): number {
+    const info = this.db
+      .prepare("DELETE FROM document_embeddings WHERE user_id = ? AND model <> ?")
+      .run(this.userId, keepModel);
+    return Number(info.changes ?? 0);
+  }
+
+  /** How many embedding chunks this user has indexed (for /health, tests). */
+  embeddingChunkCount(): number {
+    return Number(
+      (this.db.prepare("SELECT COUNT(*) AS n FROM document_embeddings WHERE user_id = ?").get(this.userId) as any).n
+    );
   }
 
   // ---- builder tools ----
@@ -1656,6 +1997,20 @@ function rowToDocument(r: any): DocumentRecord {
     sourcePath: r.source_path ?? null,
     originalMime: r.original_mime ?? null,
     originalDiskName: r.original_disk_name ?? null,
+    extractionStatus: (r.extraction_status as ExtractionStatus) ?? "pending",
+  };
+}
+
+/** A documents row (joined with a `snippet` column) → a DocumentSearchHit. */
+function rowToDocumentHit(r: any): DocumentSearchHit {
+  const extracted = r.extracted ? JSON.parse(r.extracted) : null;
+  return {
+    id: r.id,
+    filename: r.filename,
+    category: (extracted?.category as string) ?? null,
+    summary: (extracted?.summary as string) ?? null,
+    snippet: String(r.snippet ?? "").trim(),
+    createdAt: r.created_at,
     extractionStatus: (r.extraction_status as ExtractionStatus) ?? "pending",
   };
 }

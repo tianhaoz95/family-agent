@@ -7,6 +7,7 @@ import { makeTaskTools } from "./taskTools.js";
 import { makeDocumentTools } from "./documentTools.js";
 import { makeNoteTools } from "./noteTools.js";
 import type { OnReference } from "./references.js";
+import type { Embedder } from "../embeddings.js";
 
 export const PLANNER_PROMPT = `You are the coordinating agent for a local-first family
 organization assistant. You never see raw documents or personal detail yourself
@@ -137,6 +138,8 @@ export interface FamilyAgentDeps {
   startToolBuild?: (description: string) => void;
   /** Notified of each task / document a subagent retrieves this turn. */
   onReference?: OnReference;
+  /** Current embedding client (or null) — enables semantic document search. */
+  getEmbedder?: () => Embedder | null;
 }
 
 export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {}) {
@@ -182,10 +185,10 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
       {
         name: "document-agent",
         description:
-          "Searches the family's documents by keyword, reads one by id, and extracts its category, summary, and important dates.",
+          "Searches the family's documents by meaning or keyword (typo-tolerant), reads one by id, and extracts its category, summary, and important dates.",
         systemPrompt: DOCUMENT_AGENT_PROMPT,
         model,
-        tools: makeDocumentTools(store, deps.onReference),
+        tools: makeDocumentTools(store, deps.onReference, deps.getEmbedder),
       },
       {
         name: "builder-agent",

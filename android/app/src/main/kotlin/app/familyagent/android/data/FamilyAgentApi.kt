@@ -156,18 +156,26 @@ class FamilyAgentApi(
 
     suspend fun listDocuments(): List<Document> = json.decodeFromString<DocumentsResponse>(get("/documents")).documents
 
-    /** Keyword search over documents (filename + full text + summary), ranked, with optional filters. */
+    /**
+     * Search documents (filename + full text + summary), ranked, with optional
+     * filters. [mode] picks the strategy: keyword | fuzzy (typo-tolerant) |
+     * semantic (by meaning) | hybrid (all, the server default).
+     */
     suspend fun searchDocuments(
         query: String,
+        mode: String? = null,
         category: String? = null,
         dueBefore: String? = null,
         dueAfter: String? = null,
+        limit: Int? = null,
     ): List<DocumentSearchHit> {
         val params = buildString {
             append("q=").append(query.encodeQuery())
+            mode?.let { append("&mode=").append(it.encodeQuery()) }
             category?.let { append("&category=").append(it.encodeQuery()) }
             dueBefore?.let { append("&dueBefore=").append(it.encodeQuery()) }
             dueAfter?.let { append("&dueAfter=").append(it.encodeQuery()) }
+            limit?.let { append("&limit=").append(it) }
         }
         return json.decodeFromString<DocumentSearchResponse>(get("/documents/search?$params")).results
     }

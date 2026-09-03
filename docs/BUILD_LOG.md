@@ -489,3 +489,111 @@ upload collision, rename collision, legacy `<docId>` + backfill). Fast suite
 green (184 pass / 1 skip), typecheck + `npm run build` clean. **`dist/`
 rebuilt** — restart agent-core / the desktop app to pick this up. Existing
 extensionless files are renamed automatically on the next start.
+
+## Semantic + fuzzy document search
+
+Asked for "a semantic and fuzz search feature for documents". Built both, all
+behind the existing `searchDocuments` / `GET /documents/search` /
+`search_documents` seam — the FTS5 pass had deliberately left the contract
+"backend-shaped" for exactly this. Full rationale in `docs/DECISIONS.md` →
+"Follow-up: semantic + fuzzy document search".
+
+- **Fuzzy** — new `documents_trigram` FTS5 mirror (`trigram` tokenizer,
+  confirmed built into `node:sqlite`'s SQLite with a one-line probe), fed by
+  the same `documents_fts_*` triggers. `toTrigramMatchQuery()` decomposes each
+  query word into its own 3-grams and ORs them (pg_trgm-style), so a typo
+  still shares most trigrams; `trigramSimilarity()` (Dice on trigram sets)
+  re-ranks and gates the shortlist. `db.ts` stays synchronous + model-free.
+- **Semantic** — new `agent-core/src/embeddings.ts` (same off-planner shape as
+  `extraction.ts`): `nomic-embed-text` via `@langchain/ollama`'s
+  `OllamaEmbeddings`, chunked (`chunkDocumentText`), stored as Float32 BLOBs
+  in `document_embeddings` on `ScopedStore`, brute-force cosine at query time
+  (`searchDocumentChunksByVector`). `FAMILY_AGENT_EMBED=0` / empty
+  `config.embedModel` disables it.
+- **Merge** — `searchDocumentsSmart()` orchestrates; `GET /documents/search`
+  gains `?mode=keyword|fuzzy|semantic|hybrid` (default hybrid). Hybrid fuses
+  the legs with reciprocal-rank fusion (`rrfMerge`) and falls back to
+  keyword+fuzzy whenever the embedding model is off/unreachable (an
+  `/api/tags` probe, same guard the live-model tests use).
+- Wiring: all 3 ingest paths fire `embedDocumentSafely` alongside
+  `extractDocument`; `buildServer` + `PUT /settings` (new `embedModel` field,
+  admin-gated, validated against `ollama list`) kick `backfillEmbeddings`;
+  `/health` reports `semanticSearch`.
+
+Gotcha hit along the way: two Ollama instances on this box — the `ollama` CLI
+talks to `$OLLAMA_HOST` (a tailnet node), the app/tests use
+`config.ollamaBaseUrl` = `127.0.0.1:11434`. `ollama pull nomic-embed-text`
+went to the wrong one and the integration test skipped; re-pulled with
+`OLLAMA_HOST=127.0.0.1:11434`.
+
+Also fixed mid-change: a backtick inside a SQL comment (`` `vec` ``) inside the
+`SCHEMA` template literal silently terminated the string — TS parse errors
+until the backticks were removed.
+
+Tests: `embeddings.test.ts` new (28 — trigram sim, chunking, RRF, vector
+store/search, `searchDocumentsSmart` with an offline fake embedder);
+`db.test.ts` +8 (fuzzy: typo, substring, filters, scoping, mirror sync,
+rebuild); `server.routes.test.ts` +5 (fuzzy route, unknown-mode fallback,
+`/health.semanticSearch`, `embedModel` settings + admin gate + validation);
+`semanticSearch.integration.test.ts` new (6, live `nomic-embed-text`,
+self-skips) — **verified green against the real model** (paraphrases with no
+shared keyword retrieve the right doc). agent-core fast suite: 225 pass / 1
+skip (excludes both live-model integration files); with
+`semanticSearch.integration.test.ts` in: 231 pass / 1 skip. desktop
+`npm test` 31/31.
+
+`agents.integration.test.ts` (unchanged file): 4/5 — the one failure,
+"answers 'what documents do I have' correctly once one exists", was reproduced
+**identically on a clean `git worktree` at HEAD** (planner emits malformed
+output, `askFamilyAgent` returns its fallback string, no tool call made) — a
+pre-existing gemma4:e2b reliability issue with that prompt, not caused by this
+change. The "what is my insurance number" test, which does exercise the
+reworked `search_documents` tool, passes; `searchDocumentsSmart` was also
+fuzz-checked against a dozen odd query shapes ("", "*", "a", whitespace, …)
+with no throw.
+
+Typecheck + `npm run build` clean, **`dist/` rebuilt** — restart agent-core /
+the desktop app to pick this up. Existing documents are indexed by the startup
+backfill once an embedding model is pulled.
+
+## Documents search box (desktop + Android)
+
+Follow-up: the search UI the two prior search passes had each deferred. Same
+feature, both design systems.
+
+- **Desktop** — a search `<input type="search">` with a leading magnifier + a
+  mode `<select>` (Smart / Exact words / Typo-tolerant / By meaning) above the
+  upload zone (`desktop/index.html`, `#view-documents`). `main.ts`:
+  `documentSearch` state, `runDocumentSearch()` (debounced 220ms, seq-guarded
+  against stale responses), `buildDocumentRow()` factored out of
+  `renderDocuments()` so the list and the hits share one card renderer; a hit
+  renders an FTS `snippet` with query terms `<mark>`-highlighted
+  (`highlightSnippet`). `refreshDocuments()` re-runs the active search so a
+  delete / rename / extraction poll re-ranks instead of dropping to the list;
+  adding a document clears the search. `api.ts` `searchDocuments` gained
+  `mode`; `Health` gained `semanticSearch` → the "By meaning" option is
+  relabelled "needs a model" when it's `"off"`.
+- **Android** — an `OutlinedTextField` + a `SingleChoiceSegmentedButtonRow`
+  (Smart / Exact / Fuzzy / Meaning) that appears once there's a query
+  (`DocumentsScreen.kt`; segmented row copied from `BoardScreen`). Search
+  state on `AppUiState` (`documentSearchQuery/Mode/Results/Searching`,
+  `semanticSearchEnabled`), `AppViewModel.setDocumentSearch` debounced 220ms.
+  Card renderer factored into `DocumentCard`; snippet bolds query terms
+  (`highlightTerms` → `AnnotatedString`). `FamilyAgentApi.searchDocuments`
+  gained `mode` + `limit`; `HealthResponse` gained `semanticSearch`.
+- Both: query-term highlight uses a 3-char minimum so "is" / "my" / "of" in
+  the query don't speckle the snippet.
+
+**Verified live on both.** Ran agent-core (with `nomic-embed-text` pulled) +
+seeded five documents. Desktop (headless Chromium, the Tauri webview's engine):
+drove all four modes — `keyword "insurnce"` → 0, `fuzzy "insurnce"` → the
+insurance policy, `semantic "how much does my car cover cost"` → the policy
+#1, empty query → the full list; screenshot sent. Android (emulator, live
+server over `10.0.2.2`): the search field, the mode selector appearing on
+input, "5 matches", and correctly-ranked results with snippets all confirmed
+by screenshot.
+
+Tests: `desktop/test/api.test.ts` +2 (mode/limit in the query string; omitted
+when absent) → 33/33. `android/.../FamilyAgentApiTest.kt` +2 (mode/limit;
+`semanticSearch` parse + default) → 21/21. Desktop `tsc --noEmit` + `vite
+build` clean; Android `assembleDebug` clean. No agent-core change in this pass.

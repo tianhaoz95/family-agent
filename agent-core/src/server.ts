@@ -14,6 +14,15 @@ import {
 import { extractDocument } from "./agents/extraction.js";
 import { suggestDocumentName } from "./agents/rename.js";
 import { createLocalModel } from "./model.js";
+import {
+  createEmbedder,
+  embedDocumentSafely,
+  embeddingsEnabled,
+  backfillEmbeddings,
+  searchDocumentsSmart,
+  type Embedder,
+  type SearchMode,
+} from "./embeddings.js";
 import { warmModel } from "./warmup.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { persistSettings } from "./settingsFile.js";
@@ -138,6 +147,10 @@ export function buildServer(
   // langchain ChatOllama binds its base URL and model at construction, and
   // the deepagents graph binds the model.
   let extractionModel = createLocalModel();
+  // Embedding client for semantic document search. Null when the feature is
+  // off (config.embedEnabled / FAMILY_AGENT_EMBED=0). Rebuilt on a model /
+  // Ollama-URL change, same as extractionModel.
+  let embedder: Embedder | null = createEmbedder();
 
   const startToolBuild = (userId: string, prompt: string) => {
     if (!config.toolsEnabled) return;
@@ -159,6 +172,7 @@ export function buildServer(
       a = buildFamilyAgent(store.scoped(userId), {
         startToolBuild: (p) => startToolBuild(userId, p),
         onReference: (ref) => chatRefs.get(userId)?.push(ref),
+        getEmbedder: () => embedder,
       });
       agents.set(userId, a);
     }
@@ -187,7 +201,13 @@ export function buildServer(
   };
   const rebuildModelClients = () => {
     extractionModel = createLocalModel();
+    embedder = createEmbedder();
     agents.clear();
+  };
+  // Just the embedder — for an embedModel change that leaves the chat model
+  // (and its warmed prefix cache, watchers, planner graphs) untouched.
+  const rebuildEmbedder = () => {
+    embedder = createEmbedder();
   };
 
   // Rows left mid-flight by a previous run will never finish on their own —
@@ -196,6 +216,12 @@ export function buildServer(
   store.failStaleBuildingTools();
   store.failStalePendingMessages();
   store.purgeExpiredSessions();
+
+  // Build the semantic-search vector index for any document that predates the
+  // feature (or a model change). Fire-and-forget and self-skipping when the
+  // embedding model isn't reachable — never blocks startup or the API. No-op
+  // when the feature is off (embedder is null).
+  void backfillEmbeddings(store, () => embedder);
 
   // ---- health / discovery (public) ----
   app.get("/health", async () => ({
@@ -209,6 +235,9 @@ export function buildServer(
     toolsEnabled: config.toolsEnabled && supervisor.denoAvailable() ? "full" : config.toolsEnabled ? "static-only" : "off",
     // Both chat UIs hide the mic button when this is false.
     asrEnabled: config.asrEnabled,
+    // "on" once a model is configured; actual reachability is checked lazily
+    // and search falls back to keyword + fuzzy if it's down.
+    semanticSearch: embeddingsEnabled() ? "on" : "off",
   }));
 
   app.post("/_diag", async (req) => {
@@ -476,18 +505,24 @@ export function buildServer(
   // ---- documents ----
   app.get("/documents", async (req) => ({ documents: req.userStore.listDocuments() }));
 
-  // Keyword search (filename + full text + summary), ranked, with optional
+  // Document search (filename + full text + summary), ranked, with optional
   // category / important-date-range filters. `q` empty + a filter set is a
   // pure structured query, e.g. ?category=bill&dueBefore=2026-10-01.
+  // `mode` (default "hybrid"): keyword | fuzzy | semantic | hybrid. hybrid
+  // merges keyword + trigram-fuzzy + (when the embedding model is available)
+  // semantic search by reciprocal-rank fusion. See embeddings.ts.
+  const SEARCH_MODES: SearchMode[] = ["keyword", "fuzzy", "semantic", "hybrid"];
   app.get("/documents/search", async (req) => {
     const q = req.query as Record<string, string | undefined>;
     const limit = q.limit ? Number(q.limit) : undefined;
+    const mode = SEARCH_MODES.includes(q.mode as SearchMode) ? (q.mode as SearchMode) : undefined;
     return {
-      results: req.userStore.searchDocuments(q.q ?? "", {
+      results: await searchDocumentsSmart(embedder, req.userStore, q.q ?? "", {
         category: q.category || undefined,
         dueBefore: q.dueBefore || undefined,
         dueAfter: q.dueAfter || undefined,
         limit: Number.isFinite(limit) ? limit : undefined,
+        mode,
       }),
     };
   });
@@ -504,6 +539,7 @@ export function buildServer(
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
     const doc = req.userStore.createDocument({ filename: parsed.data.filename, rawText: parsed.data.text });
     void extractDocument(extractionModel, req.userStore, doc);
+    void embedDocumentSafely(embedder, req.userStore, doc);
     return { document: doc };
   });
 
@@ -551,6 +587,7 @@ export function buildServer(
       req.log?.warn?.({ err }, "could not store original upload for preview");
     }
     void extractDocument(extractionModel, req.userStore, doc);
+    void embedDocumentSafely(embedder, req.userStore, doc);
     return { document: req.userStore.getDocument(doc.id) ?? doc };
   });
 
@@ -876,6 +913,8 @@ export function buildServer(
     ocrModel: config.ocrModel,
     asrModel: config.asrModel,
     asrEnabled: config.asrEnabled,
+    embedModel: config.embedModel,
+    embedEnabled: config.embedEnabled,
     serverName: config.serverName,
     isAdmin: user.role === "admin",
     envLocked,
@@ -893,6 +932,7 @@ export function buildServer(
       .optional(),
     ocrModel: z.string().optional(),
     asrModel: z.string().trim().max(120).optional(),
+    embedModel: z.string().trim().max(120).optional(),
     serverName: z.string().trim().min(1).max(60).optional(),
   });
   app.put("/settings", async (req, reply) => {
@@ -903,12 +943,12 @@ export function buildServer(
       return reply.code(400).send({ error: "Nothing to update." });
     }
 
-    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "serverName"] as const;
+    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "embedModel", "serverName"] as const;
     if (req.authUser.role !== "admin" && adminFields.some((f) => patch[f] !== undefined)) {
       return reply.code(403).send({ error: "Only an admin can change machine settings." });
     }
 
-    for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "asrModel", "serverName"] as const) {
+    for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "asrModel", "embedModel", "serverName"] as const) {
       if (patch[key] !== undefined && envLocked[key]) {
         return reply.code(400).send({
           error: `"${key}" is pinned by an environment variable and can't be changed here.`,
@@ -916,13 +956,16 @@ export function buildServer(
       }
     }
 
-    // Validate model / ocrModel against the Ollama we'd be using *after* this
-    // change, when that Ollama is reachable to check.
+    // Validate model / ocrModel / embedModel against the Ollama we'd be using
+    // *after* this change, when that Ollama is reachable to check.
     const effectiveBaseUrl = patch.ollamaBaseUrl ?? config.ollamaBaseUrl;
-    if (patch.model !== undefined || (patch.ocrModel !== undefined && patch.ocrModel !== "")) {
+    const checkModels = [patch.model, patch.ocrModel, patch.embedModel].filter(
+      (m): m is string => m !== undefined && m !== ""
+    );
+    if (checkModels.length > 0) {
       const available = await listOllamaModels(effectiveBaseUrl);
       if (available) {
-        for (const m of [patch.model, patch.ocrModel]) {
+        for (const m of checkModels) {
           if (m && !ollamaListHasModel(available, m)) {
             return reply.code(400).send({
               error: `"${m}" isn't pulled into Ollama at ${effectiveBaseUrl}. Run: ollama pull ${m}`,
@@ -937,15 +980,20 @@ export function buildServer(
       ollamaBaseUrl: patch.ollamaBaseUrl,
       ocrModel: patch.ocrModel,
       asrModel: patch.asrModel,
+      embedModel: patch.embedModel,
       serverName: patch.serverName,
     };
     if (Object.values(machinePatch).some((v) => v !== undefined)) {
       persistSettings(config.dataDir, machinePatch);
     }
 
-    const modelClientsChanged = patch.model !== undefined || patch.ollamaBaseUrl !== undefined;
+    // The chat/planner + extraction + inbox-watcher clients only care about
+    // model / ollamaBaseUrl. The embedder additionally cares about embedModel.
+    const chatModelChanged = patch.model !== undefined || patch.ollamaBaseUrl !== undefined;
+    const semanticIndexChanged = patch.embedModel !== undefined || patch.ollamaBaseUrl !== undefined;
     if (patch.ollamaBaseUrl !== undefined) config.ollamaBaseUrl = patch.ollamaBaseUrl;
     if (patch.model !== undefined) config.model = patch.model;
+    if (patch.embedModel !== undefined) config.embedModel = patch.embedModel;
     if (patch.ocrModel !== undefined) config.ocrModel = patch.ocrModel;
     if (patch.asrModel !== undefined) {
       config.asrModel = patch.asrModel || "Xenova/whisper-base";
@@ -958,9 +1006,16 @@ export function buildServer(
       req.authUser.inboxDir = patch.inboxDir;
       await hooks.onUserInboxChange?.(req.authUser.id, patch.inboxDir);
     }
-    if (modelClientsChanged) {
+    if (chatModelChanged) {
       rebuildModelClients();
       await hooks.onModelChange?.();
+    } else if (semanticIndexChanged) {
+      rebuildEmbedder();
+    }
+    if (semanticIndexChanged) {
+      // Re-index from scratch on the new model / address — fire-and-forget,
+      // self-skips if the embedding model isn't reachable.
+      void backfillEmbeddings(store, () => embedder);
     }
     if (patch.serverName !== undefined) await hooks.onServerNameChange?.(patch.serverName);
 
@@ -974,6 +1029,12 @@ export function buildServer(
         patch.ocrModel !== undefined,
       ],
       [`Voice-input model set to "${config.asrModel}"`, patch.asrModel !== undefined],
+      [
+        patch.embedModel
+          ? `Semantic-search model set to "${patch.embedModel}"`
+          : "Semantic-search model cleared",
+        patch.embedModel !== undefined,
+      ],
     ] as const) {
       if (changed) req.userStore.logActivity("system", "settings.updated", msg);
     }

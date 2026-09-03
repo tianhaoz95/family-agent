@@ -137,6 +137,27 @@ describe("api client", () => {
     expect((init as RequestInit).headers).toBeUndefined();
   });
 
+  it("searchDocuments() GETs /documents/search with the query, mode, and filters", async () => {
+    const fetchMock = mockFetchOnce(200, { results: [] });
+    await api.searchDocuments("car cover renewal", { mode: "semantic", category: "insurance", limit: 12 });
+    const [url, init] = fetchMock.mock.calls[0];
+    const u = new URL(String(url), "http://x");
+    expect(u.pathname).toBe("/documents/search");
+    expect(u.searchParams.get("q")).toBe("car cover renewal");
+    expect(u.searchParams.get("mode")).toBe("semantic");
+    expect(u.searchParams.get("category")).toBe("insurance");
+    expect(u.searchParams.get("limit")).toBe("12");
+    expect((init as RequestInit)?.method ?? "GET").toBe("GET");
+  });
+
+  it("searchDocuments() omits mode when not given", async () => {
+    const fetchMock = mockFetchOnce(200, { results: [] });
+    await api.searchDocuments("water bill");
+    const u = new URL(String(fetchMock.mock.calls[0][0]), "http://x");
+    expect(u.searchParams.has("mode")).toBe(false);
+    expect(u.searchParams.get("q")).toBe("water bill");
+  });
+
   it("updateSettings() PUTs only the fields in the patch", async () => {
     const fetchMock = mockFetchOnce(200, { inboxDir: "/x", model: "m", ollamaBaseUrl: "u", ocrModel: "glm-ocr:latest" });
     await api.updateSettings({ model: "llama3.1:8b", ollamaBaseUrl: "http://10.0.0.2:11434" });

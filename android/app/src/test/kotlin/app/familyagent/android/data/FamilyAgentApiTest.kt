@@ -192,15 +192,40 @@ class FamilyAgentApiTest {
                 """{"results":[{"id":"DOC12345","filename":"car-insurance.pdf","category":"insurance","summary":"Auto policy","snippet":"… renewal …","createdAt":"2026-09-01T00:00:00.000Z","extractionStatus":"done"}]}"""
             )
         )
-        val hits = api.searchDocuments("car insurance", category = "insurance", dueBefore = "2026-10-01")
+        val hits = api.searchDocuments(
+            "car insurance",
+            mode = "semantic",
+            category = "insurance",
+            dueBefore = "2026-10-01",
+            limit = 12,
+        )
         assertEquals(1, hits.size)
         assertEquals("Auto policy", hits[0].summary)
 
         val recorded = server.takeRequest()
         assertTrue(recorded.path!!.startsWith("/documents/search?"))
         assertTrue(recorded.path!!.contains("q=car+insurance") || recorded.path!!.contains("q=car%20insurance"))
+        assertTrue(recorded.path!!.contains("mode=semantic"))
         assertTrue(recorded.path!!.contains("category=insurance"))
         assertTrue(recorded.path!!.contains("dueBefore=2026-10-01"))
+        assertTrue(recorded.path!!.contains("limit=12"))
+    }
+
+    @Test
+    fun `searchDocuments omits mode and limit when not given`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"results":[]}"""))
+        api.searchDocuments("water bill")
+        val path = server.takeRequest().path!!
+        assertTrue(!path.contains("mode="))
+        assertTrue(!path.contains("limit="))
+    }
+
+    @Test
+    fun `health parses semanticSearch, defaulting to off`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"ok":true,"model":"m","semanticSearch":"on"}"""))
+        assertEquals("on", api.health().semanticSearch)
+        server.enqueue(MockResponse().setBody("""{"ok":true,"model":"m"}"""))
+        assertEquals("off", api.health().semanticSearch)
     }
 
     @Test

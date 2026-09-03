@@ -4,6 +4,7 @@ import { basename, extname } from "node:path";
 import type { ScopedStore } from "./db.js";
 import type { ChatOllama } from "@langchain/ollama";
 import { extractDocument } from "./agents/extraction.js";
+import { createEmbedder, embedDocumentSafely } from "./embeddings.js";
 import { extractText, SUPPORTED_EXTENSIONS, UnsupportedFileTypeError } from "./fileExtract.js";
 
 /**
@@ -70,4 +71,9 @@ async function handleNewFile(store: ScopedStore, model: ChatOllama, path: string
 
   const doc = store.createDocument({ filename, rawText, sourcePath: path });
   await extractDocument(model, store, doc);
+  // Build the semantic-search vector index too (no-op when the feature is off).
+  // Runs after extraction so the extracted summary is embedded as well.
+  // createEmbedder() reads config fresh, so a model change is picked up here
+  // without threading a rebuilt client through the watcher.
+  await embedDocumentSafely(createEmbedder(), store, store.getDocument(doc.id) ?? doc);
 }

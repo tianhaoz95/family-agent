@@ -32,6 +32,7 @@ export const envLocked = {
   inboxDir: process.env.FAMILY_AGENT_INBOX_DIR !== undefined,
   ocrModel: process.env.FAMILY_AGENT_OCR_MODEL !== undefined,
   asrModel: process.env.FAMILY_AGENT_ASR_MODEL !== undefined,
+  embedModel: process.env.FAMILY_AGENT_EMBED_MODEL !== undefined,
   serverName: process.env.FAMILY_AGENT_SERVER_NAME !== undefined,
 } as const;
 
@@ -84,6 +85,21 @@ export const config = {
   // ONNX weight precision for the ASR model: fp32 | fp16 | q8 | q4. q8 roughly
   // halves the download and speeds inference for a small accuracy cost.
   asrDtype: process.env.FAMILY_AGENT_ASR_DTYPE ?? "q8",
+
+  // ---- Semantic search (document embeddings) ----
+  // Optional: an Ollama embedding model used to build a vector index over each
+  // document's text, so document search can match on meaning, not just shared
+  // words — "car cover renewal" then finds a file titled "Auto Insurance
+  // Policy". It is layered *on top of* the FTS5 keyword + trigram-fuzzy index
+  // in db.ts and merged with reciprocal-rank fusion (embeddings.ts), never a
+  // replacement: if the model is unreachable, search silently falls back to
+  // keyword + fuzzy. `FAMILY_AGENT_EMBED=0` turns it off entirely — nothing is
+  // embedded on ingest and /documents/search is keyword+fuzzy only.
+  embedEnabled: process.env.FAMILY_AGENT_EMBED !== "0",
+  // The embedding model pulled into Ollama. Small + CPU-friendly by default
+  // (nomic-embed-text: 768-dim, ~275 MB). Must support the /api/embed
+  // endpoint. Precedence matches model/ocrModel: env var > persisted > default.
+  embedModel: process.env.FAMILY_AGENT_EMBED_MODEL ?? persisted.embedModel ?? "nomic-embed-text",
 
   // Advertise this node on the LAN via mDNS/DNS-SD so the Android app can
   // find it without a hand-typed address. Off = manual URL entry only.

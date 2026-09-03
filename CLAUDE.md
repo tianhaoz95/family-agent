@@ -40,6 +40,9 @@ desktop change does **not** imply an Android change (or vice versa).
   (default model; override with `FAMILY_AGENT_MODEL`). The model **must** support tool-calling in
   Ollama's serving layer — that's a property of the specific model, not something deepagents
   provides. Not every model does; confirmed failures and the reasoning are in `docs/DECISIONS.md`.
+  - *Optional:* `ollama pull nomic-embed-text` enables semantic document search (`config.embedModel`,
+    `FAMILY_AGENT_EMBED=0` to turn off). Without it, document search is keyword + trigram-fuzzy only —
+    no error, it just falls back. See `docs/DECISIONS.md` → "Follow-up: semantic + fuzzy document search".
 - Android toolchain (JDK 17, Android SDK) lives in `.toolchains/` at the repo root, gitignored and
   machine-local — see `docs/BUILD_LOG.md`'s "android" section if it's missing and needs
   reinstalling.
@@ -169,8 +172,18 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   text for the user to review. Clients send a 16 kHz mono WAV so the module is a
   dependency-free header parse (`decodeWav`), not an audio-codec problem. `FAMILY_AGENT_ASR=0`
   disables it (route 403s, `/health.asrEnabled` false, both clients hide the mic button).
+- `embeddings.ts` — semantic document search. A local Ollama embedding model (`config.embedModel`,
+  default `nomic-embed-text`; `FAMILY_AGENT_EMBED=0` disables) turns each document's chunks into
+  vectors stored by `db.ts` (`document_embeddings`); a query is embedded and matched by
+  brute-force cosine. Same off-planner shape as `extraction.ts` / `transcribe.ts` — kicked off
+  the ingest path, degrades to keyword+fuzzy when the model's unreachable (an `/api/tags` probe,
+  same guard the integration tests use). `searchDocumentsSmart()` is the one orchestrator the
+  `GET /documents/search` route and `search_documents` tool call: dispatches on `mode`
+  (`keyword|fuzzy|semantic|hybrid`, default hybrid) and merges the legs with reciprocal-rank
+  fusion (`rrfMerge`). `chunkDocumentText()` is paragraph-aware. `backfillEmbeddings()` runs at
+  startup and after a `PUT /settings` model change.
 - `settingsFile.ts` — persists the settings the desktop Settings page can change
-  (`inboxDir`, `model`, `ollamaBaseUrl`, `ocrModel`, `asrModel`) to `<dataDir>/settings.json` as one
+  (`inboxDir`, `model`, `ollamaBaseUrl`, `ocrModel`, `asrModel`, `embedModel`) to `<dataDir>/settings.json` as one
   merged JSON object. Precedence in `config.ts` for each: env var > persisted file > default —
   the env var always wins so an operator's explicit override can't be shadowed by something
   saved from the UI earlier, and when an env var is set that field is `envLocked` (UI shows it
@@ -212,8 +225,19 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   backfills a legacy DB. `ScopedStore.searchDocuments()` / `searchTasks()` do `bm25()` ranking +
   `snippet()` + structured filters (category / important-date range read straight out of the
   extracted-fields JSON); `toFtsMatchQuery()` turns free text into a safe `MATCH` expression (a
-  raw NL string is an FTS syntax error, not a no-op). Empty query = filtered recency list. Full
-  rationale (and why not an external search engine) in `docs/DECISIONS.md`.
+  raw NL string is an FTS syntax error, not a no-op). Empty query = filtered recency list.
+  **Documents also get fuzzy + semantic search** (`docs/DECISIONS.md` → "Follow-up: semantic +
+  fuzzy document search"): a third mirror `documents_trigram` (FTS5 `trigram` tokenizer, same
+  triggers) for typo/substring tolerance, re-ranked by `trigramSimilarity()` (Dice on trigram
+  sets); and `document_embeddings` (Float32 BLOB vectors from a local Ollama embedding model,
+  `config.embedModel`, `FAMILY_AGENT_EMBED=0` to disable) with a brute-force cosine scan.
+  `agent-core/src/embeddings.ts` owns the embedding path (same off-planner shape as
+  `extraction.ts`) and `searchDocumentsSmart()` — the single orchestrator that `GET
+  /documents/search` (`?mode=keyword|fuzzy|semantic|hybrid`, default hybrid) and the
+  `search_documents` tool call; it merges the legs with reciprocal-rank fusion and falls back to
+  keyword+fuzzy whenever the embedding model is off/unreachable. Vectors are (re)built off every
+  ingest path and by a startup/`PUT /settings` backfill. `tasks` search stays keyword-only.
+  Full rationale (and why not an external engine / `sqlite-vec`) in `docs/DECISIONS.md`.
 - `inboxWatcher.ts` — chokidar watch on `config.inboxDir`. Delegates to `fileExtract.ts` for
   whatever's supported there (text, PDF, images); anything else is logged as skipped, not
   silently ignored. Dedupes on `source_path` so restarts don't reprocess files.
@@ -244,7 +268,9 @@ process via `node`, with `PR_SET_PDEATHSIG` set on the child (Linux, via `libc::
 in `localStorage` and attaches it to every request; a `401` clears it and fires
 `family-agent:signed-out`, which `main.ts` handles by reloading to the login screen. `main.ts`
 gates the whole app behind `boot()` (setup → login → app) and shows a "Family" nav item + admin
-machine-settings only when the signed-in user is an admin.
+machine-settings only when the signed-in user is an admin. The Documents view has a search box
+(`#document-search` + a mode `<select>`: Smart/Exact/Typo-tolerant/By meaning) → `searchDocumentsSmart`
+via `GET /documents/search?mode=`; empty query shows the full list. See `db.ts` / `embeddings.ts` above.
 
 **android** (`android/app/src/main/kotlin/app/familyagent/android/`): single-Activity Compose
 app, `AppViewModel` holds all state as one `StateFlow<AppUiState>` (including `auth: AuthState`,
@@ -261,7 +287,9 @@ alias for the host machine running agent-core. `DocumentsScreen` uploads files v
 picker (`GetContent`) or camera capture (`TakePicture` + a `FileProvider` — see
 `res/xml/file_paths.xml` and the `<provider>` entry in `AndroidManifest.xml`); both paths funnel
 into `FamilyAgentApi.uploadDocument()`, an OkHttp `MultipartBody` POST to the same
-`/documents/upload` route the desktop upload UI uses.
+`/documents/upload` route the desktop upload UI uses. `DocumentsScreen` also has a search field
++ a `SingleChoiceSegmentedButtonRow` (Smart/Exact/Fuzzy/Meaning); search state lives on
+`AppUiState` (`documentSearch*`), debounced in `AppViewModel.setDocumentSearch`.
 
 ## Cross-account: chat + shared board
 

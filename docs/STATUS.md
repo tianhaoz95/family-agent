@@ -16,8 +16,9 @@ that broke and how it was fixed.
 ## What's here
 
 ```
-agent-core/   Node/TS backend — local HTTP API, SQLite storage (incl. FTS5
-              keyword search over documents + tasks), the deepagents planner +
+agent-core/   Node/TS backend — local HTTP API, SQLite storage (FTS5 keyword +
+              trigram-fuzzy + Ollama-embedding semantic search over documents,
+              FTS5 keyword search over tasks), the deepagents planner +
               task-agent/document-agent subagents, Ollama client.
 desktop/      Tauri v2 app. Spawns agent-core as a local sidecar process.
               Chat / Tasks / Documents / Activity UI.
@@ -178,10 +179,7 @@ second machine.
 2. Actually run the Android app on a real phone at least once — it's been
    verified on an emulator, but a real device (real touch input, real
    network conditions) is still a step removed from that.
-3. Wire a search box into the desktop Documents screen and the Android app —
-   the backend + client API methods for FTS5 search are in (see "Later
-   changes"), only the UI is missing.
-4. Pick up the deferred pieces in whatever order matters most: **content
+3. Pick up the deferred pieces in whatever order matters most: **content
    sharing between family accounts** (the natural follow-on now that
    multi-user auth + isolation is in — see the multi-user entry under "Later
    changes"), Tailscale transport, the compute mesh.
@@ -373,6 +371,36 @@ Later changes (not part of the original autonomous session):
   - **Not yet**: no search box in either client UI — that needs a design pass
     against the two independent design systems and live-app verification. The
     client API methods are in place; wiring a UI is the remaining step.
+- **Semantic + fuzzy document search** (follow-up to the above). Documents now
+  also get: **fuzzy** matching (typo/substring tolerant) via a
+  `documents_trigram` FTS5 mirror re-ranked by trigram (Dice) similarity; and
+  **semantic** matching via a local Ollama embedding model
+  (`nomic-embed-text` by default; `agent-core/src/embeddings.ts`,
+  `document_embeddings` vector table, brute-force cosine). `GET
+  /documents/search?mode=keyword|fuzzy|semantic|hybrid` (default **hybrid** —
+  all three merged by reciprocal-rank fusion); the `search_documents` tool
+  goes through the same `searchDocumentsSmart()`. Degrades to keyword+fuzzy
+  when no embedding model is pulled — `FAMILY_AGENT_EMBED=0` turns semantic
+  off entirely. Vectors built off every ingest path + a startup/settings-change
+  backfill. `tasks` search stays keyword-only. Rationale in
+  `docs/DECISIONS.md` → "Follow-up: semantic + fuzzy document search".
+  - **Client UI shipped this time.** Both Documents screens have a search box
+    + a Smart / Exact / Typo-tolerant / Meaning mode selector; results show a
+    highlighted match snippet. Desktop `#document-search` in `main.ts`;
+    Android search state on `AppUiState` + a segmented control in
+    `DocumentsScreen.kt`. Empty query ⇒ the normal list.
+  - Verified: agent-core fast suite green (225 pass / 1 skip; 231 / 1 with the
+    semantic integration file); new `embeddings.test.ts` (28), `db.test.ts`
+    +8, `server.routes.test.ts` +5; `semanticSearch.integration.test.ts` (6)
+    **green against real `nomic-embed-text`**. Desktop `npm test` 33/33 (+2),
+    typecheck + `vite build` clean; Android `testDebugUnitTest` 21/21 (+2),
+    `assembleDebug` clean. **Verified live on both clients** against a running
+    server with the model pulled: desktop drove all four modes (keyword typo
+    → 0, fuzzy typo → hit, semantic paraphrase → right doc #1); Android on the
+    emulator showed the search box, the mode selector, "N matches", and
+    correctly-ranked results with snippets. `agents.integration.test.ts` 4/5 —
+    its one failure reproduces on a clean checkout at HEAD (pre-existing
+    small-model flakiness), see `docs/BUILD_LOG.md`.
 - **"Tasks" is now "Events"** in both apps — a UI-label rename only. Routes,
   the `tasks` table, `task-agent`, and its tools are unchanged (see
   `docs/DECISIONS.md` → "Tasks renamed to Events").

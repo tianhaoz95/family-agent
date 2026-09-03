@@ -197,7 +197,12 @@ export interface Health {
   toolsEnabled: "full" | "static-only" | "off";
   /** Whether the server offers speech-to-text — the chat mic button hides when false. */
   asrEnabled: boolean;
+  /** "on" when an embedding model is configured for semantic document search. */
+  semanticSearch?: "on" | "off";
 }
+
+/** Document search strategy — see agent-core embeddings.ts. */
+export type DocumentSearchMode = "keyword" | "fuzzy" | "semantic" | "hybrid";
 
 export interface AuthStatus {
   needsSetup: boolean;
@@ -357,16 +362,27 @@ export const api = {
   rescheduleTask: (id: string, patch: { dueDate?: string | null; dueTime?: string | null }) =>
     request<{ task: Task }>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   listDocuments: () => request<{ documents: Document[] }>("/documents"),
-  /** Keyword search over documents (filename + full text + summary), ranked, with optional filters. */
+  /**
+   * Search documents (filename + full text + summary), ranked, with optional
+   * filters. `mode` (default "hybrid" server-side) picks the strategy:
+   * keyword | fuzzy (typo-tolerant) | semantic (by meaning) | hybrid (all).
+   */
   searchDocuments: (
     query: string,
-    opts: { category?: string; dueBefore?: string; dueAfter?: string; limit?: number } = {}
+    opts: {
+      category?: string;
+      dueBefore?: string;
+      dueAfter?: string;
+      limit?: number;
+      mode?: DocumentSearchMode;
+    } = {}
   ) => {
     const p = new URLSearchParams({ q: query });
     if (opts.category) p.set("category", opts.category);
     if (opts.dueBefore) p.set("dueBefore", opts.dueBefore);
     if (opts.dueAfter) p.set("dueAfter", opts.dueAfter);
     if (opts.limit) p.set("limit", String(opts.limit));
+    if (opts.mode) p.set("mode", opts.mode);
     return request<{ results: DocumentSearchHit[] }>(`/documents/search?${p.toString()}`);
   },
   ingestDocument: (filename: string, text: string) =>

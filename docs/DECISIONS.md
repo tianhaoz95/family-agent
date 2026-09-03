@@ -612,13 +612,84 @@ does expose `loadExtension`) is the natural next step behind that same
 signature; it's not built here because keyword + structured filters covers
 the realistic query set and embeddings add a model to the ingest path.
 
-**Not done: client search UI.** The desktop Documents screen and the Android
-app still only *list*. `desktop/src/api.ts` and `android/.../FamilyAgentApi.kt`
-gained `searchDocuments` / `searchTasks` client methods (with tests), but no
-search box is wired into either UI — that needs a design pass against the two
-independent design systems and live-app verification, which is a poor fit for
-an unattended session. The agent path — the thing actually asked about — is
-complete end to end.
+**Client search UI** was deferred here (only `desktop/src/api.ts` and
+`android/.../FamilyAgentApi.kt` gained `searchDocuments` / `searchTasks`
+methods) — it needed a design pass against the two independent design systems
+and live-app verification. It was built in the semantic+fuzzy follow-up below;
+see "Client search UI (added in a follow-up)" in that section.
+
+### Follow-up: semantic + fuzzy document search
+
+The FTS5 section above ends "if a family ever outgrows FTS5 the backend can
+change without touching the agent or the clients … semantic search is the
+natural next step behind that same signature." That step is now taken, for
+**documents** (not tasks — task titles are short, keyword + prefix already
+covers them, and a second index there wasn't worth the write cost). Two
+capabilities, both layered *behind* `searchDocuments` /
+`GET /documents/search` / the `search_documents` tool — the contract and every
+caller are unchanged; only a new optional `mode` param
+(`keyword | fuzzy | semantic | hybrid`, default **hybrid**) is added.
+
+**Fuzzy (typo- and substring-tolerant).** A third FTS5 mirror,
+`documents_trigram`, using the built-in **`trigram` tokenizer** (verified
+present in `node:sqlite`'s SQLite, same as FTS5 itself — no extension). Kept
+in step by the *same* `documents_fts_*` triggers as the keyword mirror, so all
+the document search indexes still move in lockstep with the row. A trigram
+MATCH is really a case-insensitive substring test, which already beats the
+prefix-only keyword index for mid-word hits — but a raw MATCH still can't
+tolerate a dropped letter. So `toTrigramMatchQuery()` decomposes each query
+*word* into its own 3-grams and ORs them (à la `pg_trgm`): a misspelling still
+shares most of its trigrams with the real word, `bm25()` floats the document
+with the most overlap, and `trigramSimilarity()` (Sørensen–Dice on the trigram
+sets) re-ranks the shortlist and gates the long tail of 1-trigram
+coincidences. All pure SQL + a little JS — `searchDocuments` stays synchronous
+and model-free.
+
+**Semantic (meaning-based).** A local **Ollama embedding model**
+(`config.embedModel`, default `nomic-embed-text` — 768-dim, ~275 MB, CPU-
+friendly; `FAMILY_AGENT_EMBED=0` / empty model disables the whole thing).
+`embeddings.ts` is a new inference path with the *exact same shape* as
+`agents/extraction.ts` and `transcribe.ts`: heavy, off the planner graph,
+kicked off the ingest path with no user in the loop, degrades silently when
+the model is unreachable. Chunks (`chunkDocumentText`, paragraph-aware, ~1200
+chars, summary prepended) are embedded and stored as little-endian Float32
+BLOBs in a new `document_embeddings` table on `ScopedStore` (`WHERE user_id`
+is still the one isolation boundary; a DELETE trigger on `documents` clears
+them). Query time is a **brute-force cosine scan** in JS —
+`searchDocumentChunksByVector`, best chunk per doc. No `sqlite-vec` / vector
+index: it's a real (near-)native dependency to reintroduce, and a few thousand
+768-float dot products is sub-millisecond at family scale. If a household ever
+outgrows that, the swap is contained to one method.
+
+**Merge: Reciprocal-Rank Fusion.** `hybrid` runs keyword + fuzzy +
+(when available) semantic and fuses them with RRF —
+`score = Σ 1/(k + rank)`, `k = 60`. Parameter-free and scale-free, so there's
+no need to normalise `bm25()` against cosine. Lists are passed lexical-first
+so an FTS `snippet()` wins over a semantic chunk excerpt for the same doc.
+When semantic search is off or the model is down, `hybrid` is just
+keyword + fuzzy — the feature never *removes* results.
+
+**Ingest + backfill.** All three ingest entry points (`/documents/ingest`,
+`/documents/upload`, the inbox watcher) fire a fire-and-forget
+`embedDocumentSafely` alongside the existing `extractDocument`. Startup
+(`buildServer`) and any embed-model change (`PUT /settings`) kick
+`backfillEmbeddings`, which indexes anything missing vectors for the current
+model and prunes vectors from a previous one — self-skipping via an
+`/api/tags` probe (the same guard the live-model integration tests use) so a
+box without the model set up just runs keyword + fuzzy with no errors.
+
+**Client search UI (added in a follow-up).** Both apps' Documents screens now
+have a search box + a mode selector (Smart / Exact / Typo-tolerant / Meaning),
+default Smart = hybrid. Desktop: an input + `<select>` above the upload zone
+(`#document-search` in `main.ts`), results reuse the document-row card with an
+FTS `snippet` under it, query terms `<mark>`-highlighted; empty query ⇒ the
+normal list; a delete / rename / extraction-poll re-runs the active search.
+Android: an `OutlinedTextField` + a `SingleChoiceSegmentedButtonRow` that
+appears once there's a query (`DocumentsScreen.kt`), same card + bold-term
+snippet, search state on `AppUiState` (`documentSearch*`), debounced in
+`AppViewModel.setDocumentSearch`. `/health.semanticSearch` drives whether
+"Meaning" is annotated as falling back. `searchTasks` still has no UI and
+stays keyword-only.
 
 ## Warming the model so the first chat isn't slow
 

@@ -14,16 +14,23 @@ import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import app.familyagent.android.data.Document
@@ -32,10 +39,32 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private data class DocRow(
+    val id: String,
+    val filename: String,
+    val category: String?,
+    val summary: String?,
+    val extractionStatus: String,
+    val snippet: String? = null,
+)
+
+private val SEARCH_MODES = listOf(
+    "hybrid" to "Smart",
+    "keyword" to "Exact",
+    "fuzzy" to "Fuzzy",
+    "semantic" to "Meaning",
+)
+
 @Composable
 fun DocumentsScreen(
     documents: List<Document>,
     uploadStatus: String?,
+    searchQuery: String,
+    searchMode: String,
+    searchResults: List<app.familyagent.android.data.DocumentSearchHit>?,
+    searching: Boolean,
+    semanticEnabled: Boolean,
+    onSearchChange: (query: String, mode: String) -> Unit,
     onIngest: (filename: String, text: String) -> Unit,
     onUpload: (filename: String, bytes: ByteArray, mimeType: String?) -> Unit,
     onDelete: (id: String) -> Unit,
@@ -65,6 +94,52 @@ fun DocumentsScreen(
         title = "Documents",
         subtitle = "Upload a PDF or photo, or scan a document with the camera.",
     ) {
+        // ---- search ----
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { onSearchChange(it, searchMode) },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("Search — by name, content, or meaning") },
+            singleLine = true,
+            shape = MaterialTheme.shapes.medium,
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { onSearchChange("", searchMode) }) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Clear search", modifier = Modifier.size(18.dp))
+                    }
+                }
+            },
+        )
+        AnimatedVisibility(searchQuery.isNotBlank()) {
+            Column {
+                Spacer(Modifier.height(8.dp))
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    SEARCH_MODES.forEachIndexed { i, (key, label) ->
+                        SegmentedButton(
+                            selected = searchMode == key,
+                            onClick = { onSearchChange(searchQuery, key) },
+                            shape = SegmentedButtonDefaults.itemShape(i, SEARCH_MODES.size),
+                        ) { Text(label, style = MaterialTheme.typography.labelMedium) }
+                    }
+                }
+                val note = when {
+                    searchMode == "semantic" && !semanticEnabled ->
+                        "No embedding model on the server — showing keyword + fuzzy results."
+                    searching -> "Searching…"
+                    searchResults != null ->
+                        "${searchResults.size} ${if (searchResults.size == 1) "match" else "matches"}"
+                    else -> null
+                }
+                note?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = { pickFileLauncher.launch("*/*") },
@@ -145,8 +220,31 @@ fun DocumentsScreen(
 
         Spacer(Modifier.height(14.dp))
 
-        if (documents.isEmpty()) {
-            EmptyState(
+        val searchActive = searchQuery.isNotBlank()
+        val rows: List<DocRow> = if (searchActive) {
+            (searchResults ?: emptyList()).map {
+                DocRow(it.id, it.filename, it.category, it.summary, it.extractionStatus, it.snippet.ifBlank { null })
+            }
+        } else {
+            documents.map { DocRow(it.id, it.filename, it.extracted?.category, it.extracted?.summary, it.extractionStatus) }
+        }
+
+        when {
+            searchActive && searchResults == null -> {
+                // first search in flight — the "Searching…" note above covers it
+            }
+            searchActive && rows.isEmpty() -> EmptyState(
+                text = "No documents match “$searchQuery”.",
+                icon = {
+                    Icon(
+                        Icons.Rounded.Search,
+                        contentDescription = null,
+                        modifier = Modifier.size(30.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                },
+            )
+            !searchActive && rows.isEmpty() -> EmptyState(
                 text = "No documents yet. Upload or scan one to get started.",
                 icon = {
                     Icon(
@@ -157,82 +255,19 @@ fun DocumentsScreen(
                     )
                 },
             )
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(documents, key = { it.id }) { doc ->
-                    AppCard(onClick = { onPreview(doc.id) }) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                doc.filename,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            doc.extracted?.category?.let { category ->
-                                Spacer(Modifier.width(8.dp))
-                                Chip(category)
-                            }
-                            IconButton(
-                                onClick = { renameTarget = doc },
-                                modifier = Modifier.size(32.dp),
-                            ) {
-                                Icon(
-                                    Icons.Rounded.DriveFileRenameOutline,
-                                    contentDescription = "Rename ${doc.filename}",
-                                    modifier = Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            IconButton(
-                                onClick = { onDelete(doc.id) },
-                                modifier = Modifier.size(32.dp),
-                            ) {
-                                Icon(
-                                    Icons.Rounded.Delete,
-                                    contentDescription = "Delete ${doc.filename}",
-                                    modifier = Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(6.dp))
-                        val summary = doc.extracted?.summary
-                        when {
-                            summary != null -> Text(
-                                summary,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            doc.extractionStatus == "failed" -> Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text(
-                                    "Couldn't read this document.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.weight(1f, fill = false),
-                                )
-                                TextButton(
-                                    onClick = { onRetry(doc.id) },
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                ) { Text("Retry") }
-                            }
-                            else -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(12.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    "Extracting…",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(rows, key = { it.id }) { row ->
+                    DocumentCard(
+                        row = row,
+                        query = searchQuery,
+                        onPreview = { onPreview(row.id) },
+                        onRename = {
+                            renameTarget = documents.firstOrNull { it.id == row.id }
+                                ?: Document(id = row.id, filename = row.filename, rawText = "", createdAt = "")
+                        },
+                        onDelete = { onDelete(row.id) },
+                        onRetry = { onRetry(row.id) },
+                    )
                 }
             }
         }
@@ -248,6 +283,119 @@ fun DocumentsScreen(
             },
             onDismiss = { renameTarget = null },
         )
+    }
+}
+
+@Composable
+private fun DocumentCard(
+    row: DocRow,
+    query: String,
+    onPreview: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    AppCard(onClick = onPreview) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                row.filename,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            row.category?.let { category ->
+                Spacer(Modifier.width(8.dp))
+                Chip(category)
+            }
+            IconButton(onClick = onRename, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Rounded.DriveFileRenameOutline,
+                    contentDescription = "Rename ${row.filename}",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Rounded.Delete,
+                    contentDescription = "Delete ${row.filename}",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        when {
+            row.summary != null -> Text(
+                row.summary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            row.extractionStatus == "failed" -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Couldn't read this document.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                TextButton(
+                    onClick = onRetry,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                ) { Text("Retry") }
+            }
+            else -> Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Extracting…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        row.snippet?.let { snippet ->
+            Spacer(Modifier.height(6.dp))
+            Text(
+                highlightTerms(snippet, query),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/**
+ * Bold the query's word tokens (3+ chars, so filler like "is" / "my" doesn't
+ * speckle the snippet) wherever they appear in [text].
+ */
+@Composable
+private fun highlightTerms(text: String, query: String): AnnotatedString {
+    val terms = Regex("[\\p{L}\\p{N}]{3,}").findAll(query.lowercase()).map { it.value }.toSet()
+    if (terms.isEmpty()) return AnnotatedString(text)
+    val lower = text.lowercase()
+    val marks = BooleanArray(text.length)
+    for (t in terms) {
+        var from = lower.indexOf(t)
+        while (from >= 0) {
+            for (i in from until from + t.length) marks[i] = true
+            from = lower.indexOf(t, from + t.length)
+        }
+    }
+    return buildAnnotatedString {
+        var i = 0
+        while (i < text.length) {
+            val on = marks[i]
+            val start = i
+            while (i < text.length && marks[i] == on) i++
+            if (on) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(text.substring(start, i)) }
+            else append(text.substring(start, i))
+        }
     }
 }
 

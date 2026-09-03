@@ -9,6 +9,8 @@ import {
   SIGNED_OUT_EVENT,
   type Task,
   type Document,
+  type DocumentSearchHit,
+  type DocumentSearchMode,
   type ActivityEntry,
   type Settings,
   type SettingsPatch,
@@ -84,6 +86,9 @@ let toolsEnabled: Health["toolsEnabled"] = "full";
 // Whether the server offers speech-to-text — learned from /health, gates the
 // chat mic button.
 let voiceEnabled = false;
+// True when no embedding model is configured — the Documents "By meaning"
+// search option then annotates that it falls back to keyword + fuzzy.
+let semanticSearchOff = false;
 
 async function refreshStatus() {
   try {
@@ -94,6 +99,14 @@ async function refreshStatus() {
     if (health.toolsEnabled) toolsEnabled = health.toolsEnabled;
     voiceEnabled = health.asrEnabled === true;
     chatMicBtn.hidden = !voiceEnabled;
+    semanticSearchOff = health.semanticSearch === "off";
+    const meaningOpt = documentSearchMode.querySelector<HTMLOptionElement>('option[value="semantic"]');
+    if (meaningOpt) {
+      meaningOpt.textContent = semanticSearchOff ? "By meaning (needs a model)" : "By meaning";
+      meaningOpt.title = semanticSearchOff
+        ? "Run `ollama pull nomic-embed-text` on the server to enable — falls back to keyword + fuzzy for now"
+        : "";
+    }
   } catch {
     statusPill.className = "status-pill status-error";
     statusText.textContent = "agent-core unreachable";
@@ -865,124 +878,237 @@ const documentForm = document.getElementById("document-form") as HTMLFormElement
 const documentFilenameInput = document.getElementById("document-filename") as HTMLInputElement;
 const documentTextInput = document.getElementById("document-text") as HTMLTextAreaElement;
 const documentList = document.getElementById("document-list")!;
+const documentSearchInput = document.getElementById("document-search") as HTMLInputElement;
+const documentSearchMode = document.getElementById("document-search-mode") as HTMLSelectElement;
+const documentSearchStatus = document.getElementById("document-search-status")!;
+
+// One row shape for both the full list (Document) and a search hit
+// (DocumentSearchHit) — search hits have no sourcePath and carry a match snippet.
+interface DocRow {
+  id: string;
+  filename: string;
+  category: string | null;
+  summary: string | null;
+  extractionStatus: Document["extractionStatus"];
+  sourcePath?: string | null;
+  snippet?: string | null;
+}
+const rowFromDocument = (d: Document): DocRow => ({
+  id: d.id,
+  filename: d.filename,
+  category: d.extracted?.category ?? null,
+  summary: d.extracted?.summary ?? null,
+  extractionStatus: d.extractionStatus,
+  sourcePath: d.sourcePath,
+});
+const rowFromHit = (h: DocumentSearchHit): DocRow => ({ ...h, snippet: h.snippet });
+
+function buildDocumentRow(row: DocRow): HTMLLIElement {
+  const li = document.createElement("li");
+  li.className = "document-row";
+
+  const head = document.createElement("div");
+  head.className = "document-row-head";
+  const name = document.createElement("span");
+  name.className = "document-filename";
+  name.textContent = row.filename;
+  head.appendChild(name);
+  if (row.sourcePath) {
+    const tag = document.createElement("span");
+    tag.className = "tag tag-local";
+    tag.textContent = "watched folder";
+    tag.title = row.sourcePath;
+    head.appendChild(tag);
+  }
+  if (row.category) {
+    const chip = document.createElement("span");
+    chip.className = "category-chip";
+    chip.textContent = row.category;
+    head.appendChild(chip);
+  }
+
+  const preview = document.createElement("button");
+  preview.className = "doc-preview";
+  preview.type = "button";
+  preview.textContent = "Preview";
+  preview.title = "Open a preview in the side panel";
+  preview.addEventListener("click", () => void openDocumentPanel(row.id));
+  head.appendChild(preview);
+
+  const rename = document.createElement("button");
+  rename.className = "doc-preview";
+  rename.type = "button";
+  rename.textContent = "Rename";
+  rename.title = "Rename this document, or let the agent suggest a name";
+  rename.addEventListener("click", () =>
+    beginDocumentRename({ id: row.id, filename: row.filename }, li, head)
+  );
+  head.appendChild(rename);
+
+  const del = document.createElement("button");
+  del.className = "doc-delete";
+  del.type = "button";
+  del.title = "Delete document";
+  del.setAttribute("aria-label", `Delete ${row.filename}`);
+  del.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+  del.addEventListener("click", async () => {
+    del.disabled = true;
+    try {
+      await api.deleteDocument(row.id);
+      void refreshDocuments();
+      void refreshActivity();
+    } catch (err) {
+      del.disabled = false;
+      documentUploadStatus.textContent = `Could not delete: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  });
+  head.appendChild(del);
+  li.appendChild(head);
+
+  if (row.summary) {
+    const detail = document.createElement("p");
+    detail.className = "document-summary";
+    detail.textContent = row.summary;
+    li.appendChild(detail);
+  } else if (row.extractionStatus === "failed") {
+    const failed = document.createElement("div");
+    failed.className = "document-failed";
+    const msg = document.createElement("span");
+    msg.textContent = "Couldn't read this document.";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "doc-retry";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      retry.textContent = "Retrying…";
+      try {
+        await api.retryExtraction(row.id);
+        void pollForExtraction();
+      } catch (err) {
+        retry.disabled = false;
+        retry.textContent = "Retry";
+        documentUploadStatus.textContent = `Retry failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    });
+    failed.append(msg, retry);
+    li.appendChild(failed);
+  } else {
+    const detail = document.createElement("p");
+    detail.className = "document-pending";
+    detail.textContent = "Extracting…";
+    li.appendChild(detail);
+  }
+
+  if (row.snippet) {
+    const snip = document.createElement("p");
+    snip.className = "document-snippet";
+    // The snippet is plain text from FTS; wrap the query terms in <mark>.
+    snip.innerHTML = highlightSnippet(row.snippet, documentSearch.q);
+    li.appendChild(snip);
+  }
+
+  return li;
+}
 
 function renderDocuments(docs: Document[]) {
   documentList.innerHTML = "";
   if (docs.length === 0) {
-    documentList.innerHTML = emptyState("documents", "No documents yet. Upload one above or drop a file in the watched folder.");
+    documentList.innerHTML = emptyState(
+      "documents",
+      "No documents yet. Upload one above or drop a file in the watched folder."
+    );
     return;
   }
-  for (const doc of docs) {
-    const li = document.createElement("li");
-    li.className = "document-row";
+  for (const doc of docs) documentList.appendChild(buildDocumentRow(rowFromDocument(doc)));
+}
 
-    const head = document.createElement("div");
-    head.className = "document-row-head";
-    const name = document.createElement("span");
-    name.className = "document-filename";
-    name.textContent = doc.filename;
-    head.appendChild(name);
-    if (doc.sourcePath) {
-      const tag = document.createElement("span");
-      tag.className = "tag tag-local";
-      tag.textContent = "watched folder";
-      tag.title = doc.sourcePath;
-      head.appendChild(tag);
-    }
-    if (doc.extracted?.category) {
-      const chip = document.createElement("span");
-      chip.className = "category-chip";
-      chip.textContent = doc.extracted.category;
-      head.appendChild(chip);
-    }
+function renderDocumentHits(hits: DocumentSearchHit[]) {
+  documentList.innerHTML = "";
+  if (hits.length === 0) {
+    documentList.innerHTML = emptyState("documents", `No documents match “${documentSearch.q}”.`);
+    return;
+  }
+  for (const hit of hits) documentList.appendChild(buildDocumentRow(rowFromHit(hit)));
+}
 
-    const preview = document.createElement("button");
-    preview.className = "doc-preview";
-    preview.type = "button";
-    preview.textContent = "Preview";
-    preview.title = "Open a preview in the side panel";
-    preview.addEventListener("click", () => void openDocumentPanel(doc.id));
-    head.appendChild(preview);
+// Escape for HTML, then wrap each whitespace-separated query token (2+ chars)
+// in <mark>. Keeps the snippet safe to set as innerHTML.
+function highlightSnippet(text: string, query: string): string {
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+  let html = esc(text);
+  // 3+ chars so filler like "is" / "my" / "of" in the query doesn't speckle
+  // the snippet with highlights.
+  const terms = [...new Set((query.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []))];
+  for (const t of terms) {
+    const re = new RegExp(`(${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+    html = html.replace(re, "<mark>$1</mark>");
+  }
+  return html;
+}
 
-    const rename = document.createElement("button");
-    rename.className = "doc-preview";
-    rename.type = "button";
-    rename.textContent = "Rename";
-    rename.title = "Rename this document, or let the agent suggest a name";
-    rename.addEventListener("click", () => beginDocumentRename(doc, li, head));
-    head.appendChild(rename);
+// Search state: empty query ⇒ show the full list; otherwise the ranked hits.
+// `refreshDocuments()` honours this, so a delete / rename / extraction poll
+// re-runs the active search rather than dropping the user back to the list.
+const documentSearch = { q: "", mode: "hybrid" as DocumentSearchMode };
+let documentSearchSeq = 0;
 
-    const del = document.createElement("button");
-    del.className = "doc-delete";
-    del.type = "button";
-    del.title = "Delete document";
-    del.setAttribute("aria-label", `Delete ${doc.filename}`);
-    del.innerHTML =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
-    del.addEventListener("click", async () => {
-      del.disabled = true;
-      try {
-        await api.deleteDocument(doc.id);
-        void refreshDocuments();
-        void refreshActivity();
-      } catch (err) {
-        del.disabled = false;
-        documentUploadStatus.textContent = `Could not delete: ${err instanceof Error ? err.message : String(err)}`;
-      }
+async function runDocumentSearch(): Promise<Array<Pick<Document, "extractionStatus">>> {
+  const seq = ++documentSearchSeq;
+  documentSearchStatus.hidden = false;
+  documentSearchStatus.textContent = "Searching…";
+  try {
+    const { results } = await api.searchDocuments(documentSearch.q, {
+      mode: documentSearch.mode,
+      limit: 12,
     });
-    head.appendChild(del);
-    li.appendChild(head);
-
-    if (doc.extracted?.summary) {
-      const detail = document.createElement("p");
-      detail.className = "document-summary";
-      detail.textContent = doc.extracted.summary;
-      li.appendChild(detail);
-    } else if (doc.extractionStatus === "failed") {
-      const failed = document.createElement("div");
-      failed.className = "document-failed";
-      const msg = document.createElement("span");
-      msg.textContent = "Couldn't read this document.";
-      const retry = document.createElement("button");
-      retry.type = "button";
-      retry.className = "doc-retry";
-      retry.textContent = "Retry";
-      retry.addEventListener("click", async () => {
-        retry.disabled = true;
-        retry.textContent = "Retrying…";
-        try {
-          await api.retryExtraction(doc.id);
-          void pollForExtraction();
-        } catch (err) {
-          retry.disabled = false;
-          retry.textContent = "Retry";
-          documentUploadStatus.textContent = `Retry failed: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      });
-      failed.append(msg, retry);
-      li.appendChild(failed);
-    } else {
-      const detail = document.createElement("p");
-      detail.className = "document-pending";
-      detail.textContent = "Extracting…";
-      li.appendChild(detail);
+    if (seq !== documentSearchSeq) return results; // a newer search superseded this one
+    renderDocumentHits(results);
+    documentSearchStatus.textContent =
+      `${results.length} ${results.length === 1 ? "match" : "matches"}` +
+      (documentSearch.mode === "semantic" && semanticSearchOff ? " · by meaning needs an embedding model — showing keyword + fuzzy" : "");
+    return results;
+  } catch (err) {
+    if (seq === documentSearchSeq) {
+      documentList.innerHTML = "";
+      documentSearchStatus.textContent = `Search failed: ${err instanceof Error ? err.message : String(err)}`;
     }
-
-    documentList.appendChild(li);
+    return [];
   }
 }
 
-async function refreshDocuments(): Promise<Document[]> {
+async function refreshDocuments(): Promise<Array<Pick<Document, "extractionStatus">>> {
+  if (documentSearch.q.trim()) return runDocumentSearch();
+  documentSearchStatus.hidden = true;
   const { documents } = await api.listDocuments();
   renderDocuments(documents);
   return documents;
 }
 
+let docSearchDebounce: number | undefined;
+documentSearchInput.addEventListener("input", () => {
+  documentSearch.q = documentSearchInput.value;
+  window.clearTimeout(docSearchDebounce);
+  docSearchDebounce = window.setTimeout(() => void refreshDocuments(), 220);
+});
+documentSearchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && documentSearchInput.value) {
+    documentSearchInput.value = "";
+    documentSearch.q = "";
+    void refreshDocuments();
+  }
+});
+documentSearchMode.addEventListener("change", () => {
+  documentSearch.mode = documentSearchMode.value as DocumentSearchMode;
+  if (documentSearch.q.trim()) void refreshDocuments();
+});
+
 // Inline rename editor: type a new name, or ask the agent to propose one from
 // the document's content. The agent only ever *suggests* — the name is applied
 // only when the user clicks Save, and an AI-sourced name is logged as coming
 // from the document-agent.
-function beginDocumentRename(doc: Document, li: HTMLLIElement, head: HTMLElement) {
+function beginDocumentRename(doc: { id: string; filename: string }, li: HTMLLIElement, head: HTMLElement) {
   if (li.querySelector(".doc-rename")) return;
   head.hidden = true;
 
@@ -1113,8 +1239,17 @@ documentForm.addEventListener("submit", async (e) => {
   await api.ingestDocument(filename, text);
   documentFilenameInput.value = "";
   documentTextInput.value = "";
+  clearDocumentSearch();
   void pollForExtraction();
 });
+
+// After adding a document, drop out of any active search so the new file is
+// visible in the list (it may not match the current query).
+function clearDocumentSearch() {
+  if (!documentSearch.q) return;
+  documentSearchInput.value = "";
+  documentSearch.q = "";
+}
 
 // Picking a file uploads it immediately — there's no separate Upload button.
 documentFileInput.addEventListener("change", async () => {
@@ -1125,6 +1260,7 @@ documentFileInput.addEventListener("change", async () => {
   try {
     const { document: doc } = await api.uploadDocument(file);
     documentUploadStatus.textContent = `Uploaded "${doc.filename}" — extracting…`;
+    clearDocumentSearch();
     await pollForExtraction();
     documentUploadStatus.textContent = "";
   } catch (err) {

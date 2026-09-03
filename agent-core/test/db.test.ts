@@ -478,3 +478,84 @@ describe("ScopedStore — full-text search", () => {
     expect(store.searchTasks("", { status: "open" }).map((h) => h.id)).toEqual([open1.id]);
   });
 });
+
+describe("ScopedStore — fuzzy (trigram) document search", () => {
+  let raw: Store;
+  let store: ScopedStore;
+
+  beforeEach(() => {
+    raw = new Store(":memory:");
+    store = raw.scoped(raw.createUser({ username: "owner", displayName: "Owner", password: "sekret123" }).id);
+  });
+
+  it("finds a document despite a typo the keyword index misses", () => {
+    const doc = store.createDocument({
+      filename: "Auto Insurance Policy.pdf",
+      rawText: "State Farm vehicle coverage, premium and deductible details",
+    });
+    store.createDocument({ filename: "grocery.txt", rawText: "milk eggs bread bananas" });
+
+    expect(store.searchDocuments("insurnce")).toHaveLength(0); // keyword: no match
+    expect(store.searchDocuments("insurnce", { mode: "fuzzy" }).map((h) => h.id)).toEqual([doc.id]);
+    expect(store.searchDocuments("insurACE polcy", { mode: "fuzzy" }).map((h) => h.id)).toEqual([doc.id]);
+  });
+
+  it("matches a mid-word substring the prefix index can't", () => {
+    const doc = store.createDocument({ filename: "notes.txt", rawText: "annual homeowners insurance summary" });
+    // "owners" is in the middle of "homeowners" — a prefix MATCH would miss it.
+    expect(store.searchDocuments("owners", { mode: "fuzzy" }).map((h) => h.id)).toEqual([doc.id]);
+  });
+
+  it("does not surface an unrelated document on an incidental shared trigram", () => {
+    store.createDocument({ filename: "insurance.pdf", rawText: "auto policy renewal declaration" });
+    const noise = store.createDocument({ filename: "recipe.txt", rawText: "the quick brown fox jumps" });
+    const hits = store.searchDocuments("insurance", { mode: "fuzzy" });
+    expect(hits.map((h) => h.id)).not.toContain(noise.id);
+  });
+
+  it("applies category and date filters like the keyword path", () => {
+    const bill = store.createDocument({ filename: "electric.pdf", rawText: "electricity usage this month" });
+    store.updateDocumentExtraction(bill.id, { category: "bill", summary: "Electric bill", importantDates: ["2026-10-01"] });
+    const other = store.createDocument({ filename: "electric-guide.pdf", rawText: "how electricity works" });
+    store.updateDocumentExtraction(other.id, { category: "other", summary: "explainer" });
+
+    expect(store.searchDocuments("electricty", { mode: "fuzzy", category: "bill" }).map((h) => h.id)).toEqual([bill.id]);
+    expect(
+      store.searchDocuments("electricty", { mode: "fuzzy", dueBefore: "2026-12-31" }).map((h) => h.id)
+    ).toEqual([bill.id]);
+  });
+
+  it("stays scoped to one family member", () => {
+    const other = raw.scoped(raw.createUser({ username: "kid", displayName: "Kid", password: "sekret123" }).id);
+    store.createDocument({ filename: "mine.txt", rawText: "orthodontist appointment reminder" });
+    other.createDocument({ filename: "theirs.txt", rawText: "orthodontist appointment reminder" });
+
+    expect(store.searchDocuments("orthdontist", { mode: "fuzzy" }).map((h) => h.filename)).toEqual(["mine.txt"]);
+    expect(other.searchDocuments("orthdontist", { mode: "fuzzy" }).map((h) => h.filename)).toEqual(["theirs.txt"]);
+  });
+
+  it("degrades to the keyword path when the query is too short to trigram", () => {
+    const doc = store.createDocument({ filename: "a.txt", rawText: "hi ok" });
+    store.updateDocumentExtraction(doc.id, { category: "bill", summary: "x" });
+    // No word ≥ 3 chars → toTrigramMatchQuery returns "" → keyword fallback,
+    // which still honours the filter.
+    expect(store.searchDocuments("", { mode: "fuzzy", category: "bill" }).map((h) => h.id)).toEqual([doc.id]);
+  });
+
+  it("keeps the trigram mirror in sync through update and delete", () => {
+    const doc = store.createDocument({ filename: "scan.pdf", rawText: "unreadable" });
+    expect(store.searchDocuments("hydroquebec", { mode: "fuzzy" })).toHaveLength(0);
+    store.updateDocumentExtraction(doc.id, { category: "bill", summary: "Hydro Quebec electricity bill" });
+    expect(store.searchDocuments("hydroquebc", { mode: "fuzzy" }).map((h) => h.id)).toEqual([doc.id]);
+    store.deleteDocument(doc.id);
+    expect(store.searchDocuments("hydroquebc", { mode: "fuzzy" })).toHaveLength(0);
+  });
+
+  it("rebuildSearchIndex() repopulates the trigram mirror too", () => {
+    store.createDocument({ filename: "insurance.pdf", rawText: "auto coverage" });
+    raw.handle.exec("DELETE FROM documents_trigram");
+    expect(store.searchDocuments("insurnce", { mode: "fuzzy" })).toHaveLength(0);
+    raw.rebuildSearchIndex();
+    expect(store.searchDocuments("insurnce", { mode: "fuzzy" })).toHaveLength(1);
+  });
+});

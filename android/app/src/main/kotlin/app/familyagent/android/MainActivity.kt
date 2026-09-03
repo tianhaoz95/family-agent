@@ -264,6 +264,12 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                     DocumentsScreen(
                         documents = state.documents,
                         uploadStatus = state.documentUploadStatus,
+                        searchQuery = state.documentSearchQuery,
+                        searchMode = state.documentSearchMode,
+                        searchResults = state.documentSearchResults,
+                        searching = state.documentSearching,
+                        semanticEnabled = state.semanticSearchEnabled,
+                        onSearchChange = viewModel::setDocumentSearch,
                         onIngest = viewModel::ingestDocument,
                         onUpload = viewModel::uploadDocument,
                         onDelete = viewModel::deleteDocument,

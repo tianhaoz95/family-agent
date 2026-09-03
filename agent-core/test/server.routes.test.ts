@@ -185,6 +185,33 @@ describe("HTTP API", () => {
     expect((await asMember({ method: "GET", url: "/documents/search?q=receipt" })).json().results.map((r: any) => r.filename)).toEqual(["kid.txt"]);
   });
 
+  it("GET /documents/search?mode=fuzzy tolerates a misspelled query", async () => {
+    await inject({
+      method: "POST",
+      url: "/documents/ingest",
+      payload: { filename: "Auto Insurance Policy.pdf", text: "vehicle coverage premium deductible" },
+    });
+    await inject({ method: "POST", url: "/documents/ingest", payload: { filename: "grocery.txt", text: "milk eggs bread" } });
+
+    const strict = await inject({ method: "GET", url: "/documents/search?q=insurnce&mode=keyword" });
+    expect(strict.json().results).toHaveLength(0);
+
+    const fuzzy = await inject({ method: "GET", url: "/documents/search?q=insurnce&mode=fuzzy" });
+    expect(fuzzy.statusCode).toBe(200);
+    expect(fuzzy.json().results.map((r: any) => r.filename)).toContain("Auto Insurance Policy.pdf");
+  });
+
+  it("GET /documents/search ignores an unknown mode and defaults to hybrid", async () => {
+    await inject({ method: "POST", url: "/documents/ingest", payload: { filename: "car-insurance.pdf", text: "auto policy renewal" } });
+    const res = await inject({ method: "GET", url: "/documents/search?q=insurance%20renewal&mode=bogus" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().results.map((r: any) => r.filename)).toEqual(["car-insurance.pdf"]);
+  });
+
+  it("GET /health reports semanticSearch off when embeddings are disabled", async () => {
+    expect((await app.inject({ method: "GET", url: "/health" })).json().semanticSearch).toBe("off");
+  });
+
   it("GET /tasks/search finds a task by keyword and filters by status", async () => {
     await inject({ method: "POST", url: "/tasks", payload: { title: "Renew car registration" } });
     await inject({ method: "POST", url: "/tasks", payload: { title: "Buy stamps" } });
@@ -681,6 +708,51 @@ describe("HTTP API", () => {
     } finally {
       restore();
       config.ocrModel = original;
+      if (existsSync(settingsFilePath)) rmSync(settingsFilePath);
+    }
+  });
+
+  it("PUT /settings saves an embedding model Ollama has, and admin-gates it", async () => {
+    const original = config.embedModel;
+    const settingsFilePath = `${config.dataDir}/settings.json`;
+    const restore = stubOllamaTags(["gemma4:e2b", "nomic-embed-text:latest"]);
+    try {
+      expect((await inject({ method: "GET", url: "/settings" })).json()).toMatchObject({
+        embedModel: original,
+        embedEnabled: false, // disabled in the test suite (see test/setup.ts)
+      });
+
+      const set = await inject({ method: "PUT", url: "/settings", payload: { embedModel: "nomic-embed-text:latest" } });
+      expect(set.statusCode).toBe(200);
+      expect(set.json().embedModel).toBe("nomic-embed-text:latest");
+      expect(config.embedModel).toBe("nomic-embed-text:latest");
+
+      const member = seedUser(store, { username: "kid-embed", role: "member" });
+      const denied = await authInject(app, member.token)({
+        method: "PUT",
+        url: "/settings",
+        payload: { embedModel: "gemma4:e2b" },
+      });
+      expect(denied.statusCode).toBe(403);
+    } finally {
+      restore();
+      config.embedModel = original;
+      if (existsSync(settingsFilePath)) rmSync(settingsFilePath);
+    }
+  });
+
+  it("PUT /settings rejects an embedding model Ollama doesn't have", async () => {
+    const original = config.embedModel;
+    const settingsFilePath = `${config.dataDir}/settings.json`;
+    const restore = stubOllamaTags(["gemma4:e2b"]);
+    try {
+      const res = await inject({ method: "PUT", url: "/settings", payload: { embedModel: "no-such-embed" } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/ollama pull no-such-embed/);
+      expect(config.embedModel).toBe(original);
+    } finally {
+      restore();
+      config.embedModel = original;
       if (existsSync(settingsFilePath)) rmSync(settingsFilePath);
     }
   });

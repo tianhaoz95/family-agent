@@ -86,6 +86,8 @@ data class HealthResponse(
     val toolsEnabled: String = "off",
     /** Whether the server offers speech-to-text — the chat mic button hides when false. */
     val asrEnabled: Boolean = false,
+    /** "on" when an embedding model is configured for semantic document search. */
+    val semanticSearch: String = "off",
 )
 
 @Serializable

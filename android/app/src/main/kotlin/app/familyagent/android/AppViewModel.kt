@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import app.familyagent.android.data.ActivityEntry
 import app.familyagent.android.data.Channel
 import app.familyagent.android.data.Document
+import app.familyagent.android.data.DocumentSearchHit
 import app.familyagent.android.data.FamilyAgentApi
 import app.familyagent.android.data.FamilyMember
 import app.familyagent.android.data.Message
@@ -72,6 +73,15 @@ data class AppUiState(
     val documents: List<Document> = emptyList(),
     val activity: List<ActivityEntry> = emptyList(),
     val documentUploadStatus: String? = null,
+    // ---- document search ----
+    /** Server has an embedding model — "By meaning" search works (else it falls back). */
+    val semanticSearchEnabled: Boolean = true,
+    val documentSearchQuery: String = "",
+    /** keyword | fuzzy | semantic | hybrid */
+    val documentSearchMode: String = "hybrid",
+    /** null ⇒ not searching (show the full list); a list ⇒ show these ranked hits. */
+    val documentSearchResults: List<DocumentSearchHit>? = null,
+    val documentSearching: Boolean = false,
     val tools: List<Tool> = emptyList(),
     val toolStatus: String? = null,
     /** Base URL of the tools server, derived from serverUrl + /health's toolsPort. */
@@ -218,6 +228,7 @@ class AppViewModel(
                         connection = ConnectionStatus.Connected(h.model),
                         toolsBaseUrl = toolsBaseUrl(_state.value.serverUrl, h.toolsPort),
                         voiceEnabled = h.asrEnabled,
+                        semanticSearchEnabled = h.semanticSearch == "on",
                     )
                 }
                 .onFailure {
@@ -374,11 +385,65 @@ class AppViewModel(
         viewModelScope.launch {
             apiCall { api.listDocuments() }.onSuccess { _state.value = _state.value.copy(documents = it) }
         }
+        // Keep an active search fresh too, so a delete / rename / extraction poll
+        // re-ranks rather than dropping the user back to the list.
+        _state.value.documentSearchQuery.takeIf { it.isNotBlank() }?.let {
+            runDocumentSearch(it, _state.value.documentSearchMode)
+        }
+    }
+
+    // ---- document search ----
+
+    private var docSearchJob: Job? = null
+
+    /** Update the query / mode from the Documents search bar (debounced). Blank
+     *  query ⇒ clear results and show the full list. */
+    fun setDocumentSearch(query: String, mode: String) {
+        _state.value = _state.value.copy(documentSearchQuery = query, documentSearchMode = mode)
+        docSearchJob?.cancel()
+        if (query.isBlank()) {
+            _state.value = _state.value.copy(documentSearchResults = null, documentSearching = false)
+            return
+        }
+        docSearchJob = viewModelScope.launch {
+            delay(220)
+            runDocumentSearch(query, mode)
+        }
+    }
+
+    private fun runDocumentSearch(query: String, mode: String) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(documentSearching = true)
+            apiCall { api.searchDocuments(query, mode = mode, limit = 12) }
+                .onSuccess {
+                    // Ignore a stale response if the query moved on.
+                    if (_state.value.documentSearchQuery == query) {
+                        _state.value = _state.value.copy(documentSearchResults = it, documentSearching = false)
+                    }
+                }
+                .onFailure { err ->
+                    _state.value = _state.value.copy(
+                        documentSearching = false,
+                        documentUploadStatus = "Search failed: ${err.message}",
+                    )
+                }
+        }
+    }
+
+    /** Drop out of search — used after adding a document so the new file shows. */
+    private fun clearDocumentSearch() {
+        docSearchJob?.cancel()
+        _state.value = _state.value.copy(
+            documentSearchQuery = "",
+            documentSearchResults = null,
+            documentSearching = false,
+        )
     }
 
     fun ingestDocument(filename: String, text: String) {
         viewModelScope.launch {
             apiCall { api.ingestDocument(filename, text) }.onSuccess {
+                clearDocumentSearch()
                 refreshActivity()
                 pollDocuments()
             }
@@ -446,6 +511,7 @@ class AppViewModel(
             apiCall { api.uploadDocument(filename, bytes, mimeType) }
                 .onSuccess {
                     _state.value = _state.value.copy(documentUploadStatus = "Uploaded \"${it.filename}\" — extracting…")
+                    clearDocumentSearch()
                     refreshActivity()
                     pollDocuments()
                     _state.value = _state.value.copy(documentUploadStatus = null)

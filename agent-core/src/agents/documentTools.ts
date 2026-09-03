@@ -2,11 +2,17 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { ScopedStore } from "../db.js";
 import type { OnReference } from "./references.js";
+import { searchDocumentsSmart, type Embedder } from "../embeddings.js";
 
 // Bound to one user's ScopedStore — see agents/index.ts. `onReference` (when
 // given) is notified of each document this turn retrieved, so /chat can return
-// clickable references.
-export function makeDocumentTools(store: ScopedStore, onReference?: OnReference) {
+// clickable references. `getEmbedder` (when given) enables semantic search in
+// the search_documents tool — otherwise it is keyword + fuzzy only.
+export function makeDocumentTools(
+  store: ScopedStore,
+  onReference?: OnReference,
+  getEmbedder?: () => Embedder | null
+) {
   const saveExtraction = tool(
     async ({ documentId, summary, category, importantDates }) => {
       const extracted = {
@@ -40,7 +46,12 @@ export function makeDocumentTools(store: ScopedStore, onReference?: OnReference)
 
   const searchDocuments = tool(
     async ({ query, category, dueBefore, dueAfter }) => {
-      const hits = store.searchDocuments(query ?? "", { category, dueBefore, dueAfter, limit: 8 });
+      const hits = await searchDocumentsSmart(getEmbedder?.() ?? null, store, query ?? "", {
+        category,
+        dueBefore,
+        dueAfter,
+        limit: 8,
+      });
       const label = [query?.trim(), category && `category:${category}`].filter(Boolean).join(" ") || "(all)";
       store.logActivity(
         "document-agent",
@@ -68,7 +79,7 @@ export function makeDocumentTools(store: ScopedStore, onReference?: OnReference)
     {
       name: "search_documents",
       description:
-        "Find family documents by keyword — searches the filename, the full text, and the extracted summary, and returns the best matches (with their ids) first. Optionally narrow by category (bill, medical, school, insurance, tax, receipt, other) or by an important-date range (dueBefore / dueAfter, ISO YYYY-MM-DD). Use this for any 'do we have…', 'find the…', 'when is … due' question; only fall back to list_documents to browse everything with no particular query.",
+        "Find family documents by meaning or keyword — searches the filename, the full text, and the extracted summary (matching on related wording, not just exact words) and returns the best matches (with their ids) first. Tolerates typos. Optionally narrow by category (bill, medical, school, insurance, tax, receipt, other) or by an important-date range (dueBefore / dueAfter, ISO YYYY-MM-DD). Use this for any 'do we have…', 'find the…', 'when is … due' question; only fall back to list_documents to browse everything with no particular query.",
       schema: z.object({
         query: z
           .string()
