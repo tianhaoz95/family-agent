@@ -3,7 +3,7 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import { z } from "zod";
 import { Store, ScopedStore, AGENT_SENDER_ID, type UserRecord } from "./db.js";
-import { config, dbPath, envLocked, userInboxDir, documentsDir } from "./config.js";
+import { config, dbPath, envLocked, userInboxDir } from "./config.js";
 import {
   buildFamilyAgent,
   askFamilyAgent,
@@ -18,8 +18,15 @@ import { warmModel } from "./warmup.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { persistSettings } from "./settingsFile.js";
 import { verifyPassword, bearerToken } from "./auth.js";
-import { rm, mkdir, writeFile, stat, readFile } from "node:fs/promises";
+import { rm, readFile } from "node:fs/promises";
 import { join, extname } from "node:path";
+import {
+  storeOriginalUpload,
+  renameOriginal,
+  deleteOriginal,
+  resolveOriginalPath,
+  backfillOriginalDiskNames,
+} from "./documentFiles.js";
 import { extractText, SUPPORTED_EXTENSIONS, UnsupportedFileTypeError } from "./fileExtract.js";
 import { transcribeWav, resetTranscriber } from "./transcribe.js";
 import { listOllamaModels, ollamaListHasModel } from "./ollamaOcr.js";
@@ -533,12 +540,12 @@ export function buildServer(
 
     const doc = req.userStore.createDocument({ filename, rawText });
     // Keep the original bytes so the document can be previewed later (PDF
-    // viewer / image), not just its extracted text. Best-effort — a failed
+    // viewer / image), not just its extracted text — saved under the doc's own
+    // filename so the documents folder stays browsable. Best-effort: a failed
     // write just means "no preview", the document itself is already saved.
     try {
-      const dir = join(documentsDir(), req.authUser.id);
-      await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, doc.id), buffer);
+      const diskName = await storeOriginalUpload(req.authUser.id, doc.filename, buffer);
+      req.userStore.setDocumentOriginalDiskName(doc.id, diskName);
       req.userStore.setDocumentOriginalMime(doc.id, uploadMime || mimeFromFilename(filename));
     } catch (err) {
       req.log?.warn?.({ err }, "could not store original upload for preview");
@@ -555,21 +562,7 @@ export function buildServer(
     const doc = req.userStore.getDocument(id);
     if (!doc) return reply.code(404).send({ error: "document not found" });
 
-    const candidates = [
-      join(documentsDir(), req.authUser.id, id),
-      ...(doc.sourcePath ? [doc.sourcePath] : []),
-    ];
-    let path: string | null = null;
-    for (const c of candidates) {
-      try {
-        if ((await stat(c)).isFile()) {
-          path = c;
-          break;
-        }
-      } catch {
-        /* next candidate */
-      }
-    }
+    const path = await resolveOriginalPath(req.authUser.id, id, doc.originalDiskName, doc.sourcePath);
     if (!path) return reply.code(404).send({ error: "no original file for this document" });
 
     const buf = await readFile(path);
@@ -584,8 +577,10 @@ export function buildServer(
     const { id } = req.params as { id: string };
     const deleted = req.userStore.deleteDocument(id);
     if (!deleted) return reply.code(404).send({ error: "document not found" });
-    // Drop the stored original too (never the watched-folder source).
-    await rm(join(documentsDir(), req.authUser.id, id), { force: true }).catch(() => {});
+    // Drop the stored original too (never the watched-folder source). Cover
+    // both the tracked filename and the legacy <docId> path.
+    await deleteOriginal(req.authUser.id, deleted.originalDiskName);
+    await deleteOriginal(req.authUser.id, id);
     return { document: deleted };
   });
 
@@ -594,17 +589,26 @@ export function buildServer(
   // once the user confirms — the model never renames anything on its own.
   const RenameBody = z.object({ filename: z.string().min(1).max(160) });
   app.patch("/documents/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
     const parsed = RenameBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.message });
     const by =
       (req.body as { by?: unknown }).by === "document-agent" ? "document-agent" : "user";
-    const doc = req.userStore.renameDocument(
-      (req.params as { id: string }).id,
-      parsed.data.filename,
-      by
-    );
+    const doc = req.userStore.renameDocument(id, parsed.data.filename, by);
     if (!doc) return reply.code(404).send({ error: "document not found" });
-    return { document: doc };
+    // Keep the on-disk original's name in step with the document's. Uploads
+    // only — renameOriginal() no-ops when there's nothing in the user's
+    // documents dir (watched-folder / pasted-text docs), and resolves a
+    // collision with a " (2)" suffix rather than clobbering another file.
+    try {
+      const moved = await renameOriginal(req.authUser.id, doc.originalDiskName ?? id, doc.filename);
+      if (moved && moved !== doc.originalDiskName) {
+        req.userStore.setDocumentOriginalDiskName(id, moved);
+      }
+    } catch (err) {
+      req.log?.warn?.({ err }, "could not rename stored original");
+    }
+    return { document: req.userStore.getDocument(id) ?? doc };
   });
 
   // Ask the local model for a better filename from the document's content.
@@ -982,6 +986,11 @@ export function buildServer(
 
 async function main() {
   const store = new Store(dbPath());
+  // Give any pre-existing uploads still named after their doc id their real
+  // filename on disk, so the documents folder is browsable. One-time, idempotent.
+  await backfillOriginalDiskNames(store).catch((err) =>
+    console.error("could not backfill document filenames:", (err as Error)?.message ?? err)
+  );
   let watcherModel = createLocalModel();
   const watchers = new Map<string, Awaited<ReturnType<typeof startInboxWatcher>>>();
   const supervisor = new ToolSupervisor();

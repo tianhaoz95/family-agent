@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, rmSync, mkdtempSync } from "node:fs";
+import { existsSync, rmSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -305,6 +305,77 @@ describe("HTTP API", () => {
     // Gone after the document is deleted.
     await inject({ method: "DELETE", url: `/documents/${id}` });
     expect((await inject({ method: "GET", url: `/documents/${id}/original` })).statusCode).toBe(404);
+  });
+
+  const userDocsDir = () => join(config.dataDir, "documents", admin.user.id);
+  const uploadText = async (filename: string, content: string) => {
+    const { contentType, body } = await multipart(filename, content);
+    const res = await inject({
+      method: "POST",
+      url: "/documents/upload",
+      headers: { "content-type": contentType },
+      payload: body,
+    });
+    return res.json().document.id as string;
+  };
+
+  it("stores an uploaded original under its real filename, extension and all", async () => {
+    const id = await uploadText("Tax Return 2025.txt", "line one of the return");
+    expect(readdirSync(userDocsDir())).toContain("Tax Return 2025.txt");
+    expect(readdirSync(userDocsDir())).not.toContain(id);
+    expect((await inject({ method: "GET", url: `/documents/${id}/original` })).body).toBe("line one of the return");
+  });
+
+  it("moves the on-disk original when the document is renamed", async () => {
+    const id = await uploadText("scan_001.txt", "scanned body text");
+    expect(readdirSync(userDocsDir())).toContain("scan_001.txt");
+
+    await inject({ method: "PATCH", url: `/documents/${id}`, payload: { filename: "Passport scan.txt" } });
+    const files = readdirSync(userDocsDir());
+    expect(files).toContain("Passport scan.txt");
+    expect(files).not.toContain("scan_001.txt");
+    expect((await inject({ method: "GET", url: `/documents/${id}/original` })).body).toBe("scanned body text");
+  });
+
+  it("suffixes a colliding on-disk name instead of clobbering another document", async () => {
+    const a = await uploadText("Receipt.txt", "first receipt");
+    const b = await uploadText("Receipt.txt", "second receipt");
+
+    const files = readdirSync(userDocsDir()).sort();
+    expect(files).toEqual(["Receipt (2).txt", "Receipt.txt"]);
+    // Both documents still resolve to their own bytes.
+    expect((await inject({ method: "GET", url: `/documents/${a}/original` })).body).toBe("first receipt");
+    expect((await inject({ method: "GET", url: `/documents/${b}/original` })).body).toBe("second receipt");
+  });
+
+  it("renaming onto an existing name gets a suffix, not a collision", async () => {
+    const a = await uploadText("a.txt", "aaa");
+    await uploadText("b.txt", "bbb");
+    await inject({ method: "PATCH", url: `/documents/${a}`, payload: { filename: "b.txt" } });
+    const files = readdirSync(userDocsDir()).sort();
+    expect(files).toEqual(["b (2).txt", "b.txt"]);
+    expect((await inject({ method: "GET", url: `/documents/${a}/original` })).body).toBe("aaa");
+  });
+
+  it("still serves a legacy original saved at the bare <docId> path", async () => {
+    const id = (
+      await inject({ method: "POST", url: "/documents/ingest", payload: { filename: "old.pdf", text: "legacy body" } })
+    ).json().document.id;
+    // Simulate a pre-upgrade upload: bytes at documents/<userId>/<docId>, no
+    // original_disk_name recorded.
+    mkdirSync(userDocsDir(), { recursive: true });
+    writeFileSync(join(userDocsDir(), id), "legacy pdf bytes");
+
+    const orig = await inject({ method: "GET", url: `/documents/${id}/original` });
+    expect(orig.statusCode).toBe(200);
+    expect(orig.body).toBe("legacy pdf bytes");
+
+    // The startup backfill renames it to the real filename and records it.
+    const { backfillOriginalDiskNames } = await import("../src/documentFiles.js");
+    await backfillOriginalDiskNames(store);
+    expect(readdirSync(userDocsDir())).toEqual(["old.pdf"]);
+    expect(admin.scoped.getDocument(id)?.originalDiskName).toBe("old.pdf");
+    expect((await inject({ method: "GET", url: `/documents/${id}/original` })).body).toBe("legacy pdf bytes");
   });
 
   it("POST /documents/upload rejects an unsupported file type with a helpful message", async () => {

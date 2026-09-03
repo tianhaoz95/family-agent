@@ -221,10 +221,15 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   (paste text, JSON body), `POST /documents/upload` (multipart file — PDF/photo/scan, the
   `@fastify/multipart`-backed route), and the inbox watcher above. All three end up at
   `store.createDocument()` + `extractDocument()`. An **uploaded** file's original bytes are
-  also kept at `<dataDir>/documents/<userId>/<docId>` (MIME in `documents.original_mime`) so
+  also kept under `<dataDir>/documents/<userId>/` (MIME in `documents.original_mime`) so
   `GET /documents/:id/original` can serve it for the client-side preview (PDF viewer / image);
   watched-folder documents are served from their on-disk `source_path` instead, pasted-text
-  ones have no original (404).
+  ones have no original (404). `agent-core/src/documentFiles.ts` owns that on-disk store: the
+  file is saved under the document's **own filename** (sanitized, extension kept, `" (2)"`
+  suffix on collision — recorded in `documents.original_disk_name`), a rename moves it to
+  match, and `backfillOriginalDiskNames()` at startup renames any legacy `<docId>`-named
+  originals from before this. `resolveOriginalPath()` still falls back to the old `<docId>`
+  path so an un-migrated file keeps working.
 - `config.ts` — every config value has an env var override; nothing else in the codebase should
   read `process.env` directly. `dataDir` defaults to `$XDG_DATA_HOME/family-agent`
   (`~/.local/share/family-agent`), **not** the repo tree — override with

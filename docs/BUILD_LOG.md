@@ -457,3 +457,35 @@ Fixed in three layers (full write-up in `docs/DECISIONS.md`):
 Tests: `askFamilyAgent.test.ts` +3 (fast), `agents.integration.test.ts` +1
 (live model). Fast suite green, typecheck clean. **`dist/` rebuilt** — the
 user must restart agent-core / the desktop app to pick this up.
+
+## Document originals now keep their real filename on disk
+
+The user opened `~/.local/share/family-agent/documents/ACMAHBEK/` and found
+extensionless blobs (`7D547MX2`, `KHNB5CCF`) — the bytes were intact (a PNG and
+a PDF, verified with `file`), but every stored upload was named after its doc
+id, so the folder wasn't browsable.
+
+Changed so an uploaded original is saved under the document's own filename:
+
+- New `agent-core/src/documentFiles.ts` — `sanitizeDiskName()` (one safe path
+  segment, extension kept, length-capped), `uniqueInDir()` (`" (2)"`, `" (3)"`
+  … suffix on collision), `storeOriginalUpload()`, `renameOriginal()`,
+  `deleteOriginal()`, `resolveOriginalPath()` (tracked name → legacy `<docId>`
+  → watched-folder `source_path`), and `backfillOriginalDiskNames()`.
+- `documents.original_disk_name` column (nullable; migration added). null =
+  no stored original, or a legacy `<docId>`-named file not yet migrated.
+- `server.ts`: `POST /documents/upload` writes under the filename and records
+  the disk name; `PATCH /documents/:id` moves the file to track a rename
+  (collision-suffixed, never clobbers another doc); `DELETE` removes both the
+  tracked name and the legacy path; `GET /documents/:id/original` resolves via
+  `resolveOriginalPath()`. `main()` runs `backfillOriginalDiskNames()` once at
+  startup to rename pre-existing `<docId>` files.
+- Clients unchanged — they only ever hit `GET /documents/:id/original`. The
+  extra `originalDiskName` field on the document JSON is ignored (desktop is
+  structural, Android is `ignoreUnknownKeys = true`).
+
+Tests: `server.routes.test.ts` +5 (real-filename storage, rename-moves-file,
+upload collision, rename collision, legacy `<docId>` + backfill). Fast suite
+green (184 pass / 1 skip), typecheck + `npm run build` clean. **`dist/`
+rebuilt** — restart agent-core / the desktop app to pick this up. Existing
+extensionless files are renamed automatically on the next start.

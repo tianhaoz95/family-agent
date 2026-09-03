@@ -89,6 +89,11 @@ export interface DocumentRecord {
   /** MIME type of the stored original file (uploads), for the preview route.
    *  null when there's no stored original or it wasn't recorded. */
   originalMime: string | null;
+  /** Basename the stored original is saved under in documents/<userId>/ — the
+   *  document's own filename, sanitized, with a " (2)" suffix on collision.
+   *  null when there's no stored original, or it predates this and still lives
+   *  at the legacy documents/<userId>/<docId> path. */
+  originalDiskName: string | null;
   /**
    * Where field extraction got to. "pending" while the model is working (or
    * queued), "done" once fields are saved, "failed" once retries are
@@ -252,7 +257,8 @@ CREATE TABLE IF NOT EXISTS documents (
   created_at TEXT NOT NULL,
   source_path TEXT,
   extraction_status TEXT NOT NULL DEFAULT 'pending',
-  original_mime TEXT
+  original_mime TEXT,
+  original_disk_name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS activity (
@@ -349,6 +355,12 @@ const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   // Original-file preview: uploads keep their bytes on disk; this records the
   // MIME so the preview route can serve the right Content-Type.
   { table: "documents", column: "original_mime", ddl: "ALTER TABLE documents ADD COLUMN original_mime TEXT" },
+  // Browsable documents folder: a stored original now keeps its real filename
+  // (+ extension) on disk instead of being named after the doc id. This column
+  // is that on-disk basename, relative to documents/<userId>/. null = no stored
+  // original, or an upload from before this that's still at the <docId> path
+  // (backfillOriginalDiskNames() migrates those on the next startup).
+  { table: "documents", column: "original_disk_name", ddl: "ALTER TABLE documents ADD COLUMN original_disk_name TEXT" },
   // Corkboard: sticky notes carry an (x, y) position. A DB from before this
   // has none — add both columns and scatter the existing notes so they don't
   // all land on top of each other at (0, 0).
@@ -1231,6 +1243,7 @@ export class ScopedStore {
       createdAt: new Date().toISOString(),
       sourcePath: input.sourcePath ?? null,
       originalMime: null,
+      originalDiskName: null,
       extractionStatus: input.extracted ? "done" : "pending",
     };
     this.db
@@ -1262,6 +1275,16 @@ export class ScopedStore {
     this.db
       .prepare("UPDATE documents SET original_mime = ? WHERE id = ? AND user_id = ?")
       .run(mime, id, this.userId);
+  }
+
+  /** Record the basename a stored original is saved under (see
+   *  DocumentRecord.originalDiskName). Set right after the file is written or
+   *  moved on disk. */
+  setDocumentOriginalDiskName(id: string, diskName: string): void {
+    if (!diskName) return;
+    this.db
+      .prepare("UPDATE documents SET original_disk_name = ? WHERE id = ? AND user_id = ?")
+      .run(diskName, id, this.userId);
   }
 
   findDocumentBySourcePath(sourcePath: string): DocumentRecord | undefined {
@@ -1632,6 +1655,7 @@ function rowToDocument(r: any): DocumentRecord {
     createdAt: r.created_at,
     sourcePath: r.source_path ?? null,
     originalMime: r.original_mime ?? null,
+    originalDiskName: r.original_disk_name ?? null,
     extractionStatus: (r.extraction_status as ExtractionStatus) ?? "pending",
   };
 }
