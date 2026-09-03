@@ -38,6 +38,7 @@ fun DocumentsScreen(
     onUpload: (filename: String, bytes: ByteArray, mimeType: String?) -> Unit,
     onDelete: (id: String) -> Unit,
     onRetry: (id: String) -> Unit,
+    onPreview: (id: String) -> Unit = {},
 ) {
     val context = LocalContext.current
     var pasteFilename by remember { mutableStateOf("") }
@@ -154,7 +155,7 @@ fun DocumentsScreen(
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(documents, key = { it.id }) { doc ->
-                    AppCard {
+                    AppCard(onClick = { onPreview(doc.id) }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 doc.filename,

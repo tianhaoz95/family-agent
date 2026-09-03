@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/server.js";
 import { Store } from "../src/db.js";
@@ -14,8 +16,14 @@ describe("HTTP API", () => {
   let store: Store;
   let admin: SeededUser;
   let inject: ReturnType<typeof authInject>;
+  // The settings.json tests write real files under config.dataDir — which now
+  // defaults to the user's home. Redirect it to a throwaway dir so a test run
+  // can never touch a developer's actual local store.
+  let realDataDir: string;
 
   beforeEach(() => {
+    realDataDir = config.dataDir;
+    config.dataDir = mkdtempSync(join(tmpdir(), "family-agent-test-"));
     store = new Store(":memory:");
     app = buildServer(store);
     admin = seedUser(store, { username: "owner", role: "admin" });
@@ -24,6 +32,8 @@ describe("HTTP API", () => {
 
   afterEach(async () => {
     await app.close();
+    rmSync(config.dataDir, { recursive: true, force: true });
+    config.dataDir = realDataDir;
   });
 
   it("GET /health reports ok, the model, and setup/discovery fields", async () => {
@@ -667,5 +677,154 @@ describe("HTTP API", () => {
     const h = (await app.inject({ method: "GET", url: "/health" })).json();
     expect(typeof h.toolsPort).toBe("number");
     expect(["full", "static-only", "off"]).toContain(h.toolsEnabled);
+  });
+
+  it("GET /tasks/:id and /documents/:id fetch one item, 404 for a stranger's", async () => {
+    const t = admin.scoped.createTask({ title: "Book dentist" });
+    const d = admin.scoped.createDocument({ filename: "bill.txt", rawText: "amount due 42" });
+    expect((await inject({ method: "GET", url: `/tasks/${t.id}` })).json().task.title).toBe("Book dentist");
+    expect((await inject({ method: "GET", url: `/documents/${d.id}` })).json().document.filename).toBe("bill.txt");
+
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const asKid = authInject(app, kid.token);
+    expect((await asKid({ method: "GET", url: `/tasks/${t.id}` })).statusCode).toBe(404);
+    expect((await asKid({ method: "GET", url: `/documents/${d.id}` })).statusCode).toBe(404);
+  });
+
+  // ---- family directory + chat ----
+
+  it("GET /family/members lists every account (name + username only) for any user", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const res = await authInject(app, kid.token)({ method: "GET", url: "/family/members" });
+    expect(res.statusCode).toBe(200);
+    const members = res.json().members;
+    expect(members.map((m: any) => m.username).sort()).toEqual(["kid", "owner"]);
+    expect(members[0]).not.toHaveProperty("role");
+  });
+
+  it("a DM: create, post, the other member reads it, a non-member is 403", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const outsider = seedUser(store, { username: "gran", role: "member" });
+    const asKid = authInject(app, kid.token);
+    const asOutsider = authInject(app, outsider.token);
+
+    const created = await inject({
+      method: "POST",
+      url: "/channels",
+      payload: { kind: "dm", memberIds: [kid.user.id] },
+    });
+    expect(created.statusCode).toBe(200);
+    const channelId = created.json().channel.id;
+
+    // Idempotent from the other side.
+    const again = await asKid({
+      method: "POST",
+      url: "/channels",
+      payload: { kind: "dm", memberIds: [admin.user.id] },
+    });
+    expect(again.json().channel.id).toBe(channelId);
+
+    await inject({ method: "POST", url: `/channels/${channelId}/messages`, payload: { body: "hi kid" } });
+
+    const kidView = await asKid({ method: "GET", url: `/channels/${channelId}/messages` });
+    expect(kidView.json().messages.map((m: any) => m.body)).toEqual(["hi kid"]);
+
+    expect((await asOutsider({ method: "GET", url: `/channels/${channelId}` })).statusCode).toBe(403);
+    expect(
+      (await asOutsider({ method: "GET", url: `/channels/${channelId}/messages` })).statusCode
+    ).toBe(403);
+    expect(
+      (await asOutsider({ method: "POST", url: `/channels/${channelId}/messages`, payload: { body: "sneak" } }))
+        .statusCode
+    ).toBe(403);
+  });
+
+  it("an @agent mention drops a pending assistant message into the channel", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const created = await inject({
+      method: "POST",
+      url: "/channels",
+      payload: { kind: "dm", memberIds: [kid.user.id] },
+    });
+    const channelId = created.json().channel.id;
+
+    await inject({
+      method: "POST",
+      url: `/channels/${channelId}/messages`,
+      payload: { body: "@agent what documents do we have?" },
+    });
+
+    const msgs = (await inject({ method: "GET", url: `/channels/${channelId}/messages` })).json().messages;
+    const pending = msgs.find((m: any) => m.senderId === "_agent_");
+    expect(pending).toBeTruthy();
+    expect(pending.pending).toBe(true); // model call is fire-and-forget; no live model in this suite
+  });
+
+  it("GET /channels shows unread counts and is scoped to the caller", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const created = await inject({
+      method: "POST",
+      url: "/channels",
+      payload: { kind: "group", name: "Household", memberIds: [kid.user.id] },
+    });
+    const channelId = created.json().channel.id;
+    await inject({ method: "POST", url: `/channels/${channelId}/messages`, payload: { body: "chores today" } });
+
+    const kidChannels = (await authInject(app, kid.token)({ method: "GET", url: "/channels" })).json().channels;
+    expect(kidChannels).toHaveLength(1);
+    expect(kidChannels[0].unreadCount).toBe(1);
+    expect(kidChannels[0].title).toBe("Household");
+
+    // A brand-new third account sees no channels at all.
+    const gran = seedUser(store, { username: "gran", role: "member" });
+    expect((await authInject(app, gran.token)({ method: "GET", url: "/channels" })).json().channels).toEqual([]);
+  });
+
+  // ---- sticky notes ----
+
+  it("sticky notes: shared board is common, private board is per-user", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const asKid = authInject(app, kid.token);
+
+    const shared = await inject({
+      method: "POST",
+      url: "/notes",
+      payload: { scope: "shared", text: "buy milk", color: "mint" },
+    });
+    expect(shared.statusCode).toBe(200);
+    await inject({ method: "POST", url: "/notes", payload: { scope: "private", text: "owner secret" } });
+    await asKid({ method: "POST", url: "/notes", payload: { scope: "private", text: "kid secret" } });
+
+    // Both see the shared note.
+    expect((await asKid({ method: "GET", url: "/notes?scope=shared" })).json().notes.map((n: any) => n.text)).toEqual([
+      "buy milk",
+    ]);
+    // Private boards don't cross over.
+    expect((await asKid({ method: "GET", url: "/notes?scope=private" })).json().notes.map((n: any) => n.text)).toEqual([
+      "kid secret",
+    ]);
+    expect((await inject({ method: "GET", url: "/notes?scope=private" })).json().notes.map((n: any) => n.text)).toEqual([
+      "owner secret",
+    ]);
+  });
+
+  it("PATCH /notes: a member can edit a shared note but not another's private note", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const asKid = authInject(app, kid.token);
+
+    const sharedId = (
+      await inject({ method: "POST", url: "/notes", payload: { scope: "shared", text: "draft" } })
+    ).json().note.id;
+    const privId = (
+      await inject({ method: "POST", url: "/notes", payload: { scope: "private", text: "mine" } })
+    ).json().note.id;
+
+    expect(
+      (await asKid({ method: "PATCH", url: `/notes/${sharedId}`, payload: { text: "final" } })).statusCode
+    ).toBe(200);
+    expect(
+      (await asKid({ method: "PATCH", url: `/notes/${privId}`, payload: { text: "hacked" } })).statusCode
+    ).toBe(404);
+    expect((await asKid({ method: "DELETE", url: `/notes/${privId}` })).statusCode).toBe(404);
   });
 });

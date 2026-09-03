@@ -2,9 +2,15 @@ import Fastify, { type FastifyRequest, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import { z } from "zod";
-import { Store, ScopedStore, type UserRecord } from "./db.js";
+import { Store, ScopedStore, AGENT_SENDER_ID, type UserRecord } from "./db.js";
 import { config, dbPath, envLocked, userInboxDir } from "./config.js";
-import { buildFamilyAgent, askFamilyAgent, type FamilyAgent } from "./agents/index.js";
+import {
+  buildFamilyAgent,
+  askFamilyAgent,
+  askFamilyAgentInChannel,
+  mentionsAgent,
+  type FamilyAgent,
+} from "./agents/index.js";
 import { extractDocument } from "./agents/extraction.js";
 import { createLocalModel } from "./model.js";
 import { warmModel } from "./warmup.js";
@@ -120,13 +126,41 @@ export function buildServer(
   // One planner graph per user, built on first use, bound to that user's
   // scoped store so a subagent can never see another family member's data.
   const agents = new Map<string, FamilyAgent>();
+  // Per-user sink for "the agent looked this up" hints — a fresh array is set
+  // just before each /chat turn and read back after, so the reply can carry
+  // clickable task / document references.
+  const chatRefs = new Map<string, { type: "document" | "task"; id: string }[]>();
   const agentFor = (userId: string): FamilyAgent => {
     let a = agents.get(userId);
     if (!a) {
-      a = buildFamilyAgent(store.scoped(userId), { startToolBuild: (p) => startToolBuild(userId, p) });
+      a = buildFamilyAgent(store.scoped(userId), {
+        startToolBuild: (p) => startToolBuild(userId, p),
+        onReference: (ref) => chatRefs.get(userId)?.push(ref),
+      });
       agents.set(userId, a);
     }
     return a;
+  };
+  // Resolve collected hints to {type, id, label}, deduped and capped.
+  const resolveReferences = (userStore: ScopedStore, userId: string) => {
+    const collected = chatRefs.get(userId) ?? [];
+    chatRefs.delete(userId);
+    const seen = new Set<string>();
+    const out: { type: "document" | "task"; id: string; label: string }[] = [];
+    for (const r of collected) {
+      const key = `${r.type}:${r.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (r.type === "document") {
+        const d = userStore.getDocument(r.id);
+        if (d) out.push({ type: "document", id: r.id, label: d.filename });
+      } else {
+        const t = userStore.getTask(r.id);
+        if (t) out.push({ type: "task", id: r.id, label: t.title });
+      }
+      if (out.length >= 8) break;
+    }
+    return out;
   };
   const rebuildModelClients = () => {
     extractionModel = createLocalModel();
@@ -137,6 +171,7 @@ export function buildServer(
   // mark them failed so the UI offers a retry instead of a stuck spinner.
   store.failStalePendingExtractions();
   store.failStaleBuildingTools();
+  store.failStalePendingMessages();
   store.purgeExpiredSessions();
 
   // ---- health / discovery (public) ----
@@ -310,10 +345,13 @@ export function buildServer(
       images.length ? `${message}  [+${images.length} image${images.length > 1 ? "s" : ""}]` : message
     );
     try {
+      chatRefs.set(req.authUser.id, []);
       const responseText = await askFamilyAgent(agentFor(req.authUser.id), message, images);
+      const references = resolveReferences(req.userStore, req.authUser.id);
       req.userStore.logActivity("family-planner", "chat.reply", responseText);
-      return { reply: responseText };
+      return { reply: responseText, references };
     } catch (err) {
+      chatRefs.delete(req.authUser.id);
       req.log?.error?.(err);
       return reply.code(502).send({
         error: "The local model could not be reached. Is Ollama running with the configured model pulled?",
@@ -371,6 +409,12 @@ export function buildServer(
     };
   });
 
+  app.get("/tasks/:id", async (req, reply) => {
+    const task = req.userStore.getTask((req.params as { id: string }).id);
+    if (!task) return reply.code(404).send({ error: "task not found" });
+    return { task };
+  });
+
   const CreateTaskBody = z.object({
     title: z.string().min(1),
     notes: z.string().optional(),
@@ -418,6 +462,12 @@ export function buildServer(
         limit: Number.isFinite(limit) ? limit : undefined,
       }),
     };
+  });
+
+  app.get("/documents/:id", async (req, reply) => {
+    const doc = req.userStore.getDocument((req.params as { id: string }).id);
+    if (!doc) return reply.code(404).send({ error: "document not found" });
+    return { document: doc };
   });
 
   const IngestBody = z.object({ filename: z.string().min(1), text: z.string().min(1) });
@@ -481,6 +531,162 @@ export function buildServer(
   });
 
   app.get("/activity", async (req) => ({ activity: req.userStore.listActivity() }));
+
+  // ---- family directory ----
+  // Every authenticated user can see who else has an account (name + username
+  // only) so they can start a chat or @-mention someone. NOT the admin-only
+  // /users route.
+  app.get("/family/members", async () => ({ members: store.listFamilyMembers() }));
+
+  // ---- family chat (DMs + group channels) ----
+  // The first cross-account feature. Membership is the access control: each
+  // handler passes req.authUser.id to a Store method that returns nothing when
+  // the caller isn't in the channel.
+  app.get("/channels", async (req) => ({
+    channels: store.listChannelsForUser(req.authUser.id),
+  }));
+
+  const CreateChannelBody = z.object({
+    kind: z.enum(["dm", "group"]),
+    memberIds: z.array(z.string().min(1)).min(1),
+    name: z.string().trim().min(1).max(60).optional(),
+  });
+  app.post("/channels", async (req, reply) => {
+    const parsed = CreateChannelBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const { kind, memberIds, name } = parsed.data;
+    const others = memberIds.filter((id) => id !== req.authUser.id);
+    for (const id of others) {
+      if (!store.getUser(id)) return reply.code(400).send({ error: "One of those people isn't on this home." });
+    }
+    if (kind === "dm") {
+      if (others.length !== 1) return reply.code(400).send({ error: "A direct message needs exactly one other person." });
+      return { channel: store.findOrCreateDm(req.authUser.id, others[0]) };
+    }
+    if (!name) return reply.code(400).send({ error: "A group needs a name." });
+    return { channel: store.createGroupChannel(req.authUser.id, name, others) };
+  });
+
+  app.get("/channels/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const channel = store.getChannelForUser(id, req.authUser.id);
+    if (!channel) return reply.code(403).send({ error: "You're not in that conversation." });
+    return { channel };
+  });
+
+  app.get("/channels/:id/messages", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!store.isChannelMember(id, req.authUser.id)) {
+      return reply.code(403).send({ error: "You're not in that conversation." });
+    }
+    const after = (req.query as any)?.after as string | undefined;
+    return { messages: store.listMessages(id, req.authUser.id, { afterTs: after || null }) };
+  });
+
+  const PostMessageBody = z.object({
+    body: z.string().min(1).max(4000),
+    mentionAgent: z.boolean().optional(),
+  });
+  app.post("/channels/:id/messages", { bodyLimit: 128 * 1024 }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!store.isChannelMember(id, req.authUser.id)) {
+      return reply.code(403).send({ error: "You're not in that conversation." });
+    }
+    const parsed = PostMessageBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const { body } = parsed.data;
+    const message = store.postMessage(id, req.authUser.id, body);
+    req.userStore.logActivity("user", "chat.message", `${req.authUser.displayName} in a family chat: ${body}`);
+
+    if (parsed.data.mentionAgent || mentionsAgent(body)) {
+      const pending = store.insertPendingAgentMessage(id);
+      // Fire-and-forget: the client polls for the pending row to fill in.
+      void (async () => {
+        try {
+          const recent = store.listMessages(id, req.authUser.id, { limit: 20 });
+          const nameFor = (senderId: string) =>
+            senderId === AGENT_SENDER_ID
+              ? "Assistant"
+              : store.getUser(senderId)?.displayName ?? "Someone";
+          const transcript = recent
+            .filter((m) => !m.pending)
+            .map((m) => `${nameFor(m.senderId)}: ${m.body}`)
+            .join("\n");
+          const replyText = await askFamilyAgentInChannel(agentFor(req.authUser.id), transcript, body);
+          store.resolvePendingAgentMessage(pending.id, replyText);
+          store.scoped(req.authUser.id).logActivity("family-planner", "chat.reply", replyText);
+        } catch (err) {
+          console.error("in-channel agent reply failed:", err);
+          store.resolvePendingAgentMessage(
+            pending.id,
+            "Sorry — I couldn't reach the local model just now."
+          );
+        }
+      })();
+    }
+    return { message };
+  });
+
+  const AddMembersBody = z.object({ memberIds: z.array(z.string().min(1)).min(1) });
+  app.post("/channels/:id/members", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = AddMembersBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const updated = store.addChannelMembers(id, req.authUser.id, parsed.data.memberIds);
+    if (!updated) return reply.code(403).send({ error: "Can't add people to that conversation." });
+    return { channel: updated };
+  });
+
+  const ReadBody = z.object({ ts: z.string().min(1) });
+  app.post("/channels/:id/read", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!store.isChannelMember(id, req.authUser.id)) {
+      return reply.code(403).send({ error: "You're not in that conversation." });
+    }
+    const parsed = ReadBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    store.markChannelRead(id, req.authUser.id, parsed.data.ts);
+    return { ok: true };
+  });
+
+  // ---- sticky notes ----
+  app.get("/notes", async (req) => {
+    const scope = (req.query as any)?.scope === "private" ? "private" : "shared";
+    return { notes: req.userStore.listStickyNotes(scope) };
+  });
+
+  const CreateNoteBody = z.object({
+    scope: z.enum(["shared", "private"]),
+    text: z.string().trim().min(1).max(2000),
+    color: z.string().trim().max(24).optional(),
+  });
+  app.post("/notes", async (req, reply) => {
+    const parsed = CreateNoteBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    return { note: req.userStore.createStickyNote(parsed.data) };
+  });
+
+  const UpdateNoteBody = z
+    .object({
+      text: z.string().trim().min(1).max(2000).optional(),
+      color: z.string().trim().max(24).optional(),
+    })
+    .refine((b) => b.text !== undefined || b.color !== undefined, { message: "Nothing to update." });
+  app.patch("/notes/:id", async (req, reply) => {
+    const parsed = UpdateNoteBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const { id } = req.params as { id: string };
+    const note = req.userStore.updateStickyNote(id, parsed.data);
+    if (!note) return reply.code(404).send({ error: "note not found" });
+    return { note };
+  });
+
+  app.delete("/notes/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const note = req.userStore.deleteStickyNote(id);
+    if (!note) return reply.code(404).send({ error: "note not found" });
+    return { note };
+  });
 
   // ---- builder tools ----
   const toolView = (t: ReturnType<ScopedStore["getTool"]>) =>

@@ -137,7 +137,10 @@ data class ChatRequest(
 )
 
 @Serializable
-data class ChatResponse(val reply: String)
+data class ChatReference(val type: String, val id: String, val label: String)
+
+@Serializable
+data class ChatResponse(val reply: String, val references: List<ChatReference> = emptyList())
 
 @Serializable
 data class TranscribeResponse(val text: String)
@@ -174,3 +177,98 @@ data class RescheduleTaskRequest(val dueDate: String?, val dueTime: String?)
 
 @Serializable
 data class IngestDocumentRequest(val filename: String, val text: String)
+
+// ---- family chat ----
+
+/** senderId of an assistant message (mirrors AGENT_SENDER_ID server-side). */
+const val AGENT_SENDER_ID = "_agent_"
+
+@Serializable
+data class FamilyMember(val id: String, val username: String, val displayName: String)
+
+@Serializable
+data class FamilyMembersResponse(val members: List<FamilyMember>)
+
+@Serializable
+data class ChannelMember(val id: String, val username: String, val displayName: String)
+
+@Serializable
+data class ChannelLastMessage(
+    val senderId: String,
+    val body: String,
+    val createdAt: String,
+    val pending: Boolean = false,
+)
+
+@Serializable
+data class Channel(
+    val id: String,
+    val kind: String,
+    val name: String? = null,
+    val createdBy: String,
+    val createdAt: String,
+    val members: List<ChannelMember> = emptyList(),
+    val title: String = "",
+    val lastMessage: ChannelLastMessage? = null,
+    val unreadCount: Int = 0,
+)
+
+@Serializable
+data class Message(
+    val id: String,
+    val channelId: String,
+    val senderId: String,
+    val body: String,
+    val pending: Boolean = false,
+    val createdAt: String,
+)
+
+@Serializable
+data class ChannelsResponse(val channels: List<Channel>)
+
+@Serializable
+data class ChannelResponse(val channel: Channel)
+
+@Serializable
+data class MessagesResponse(val messages: List<Message>)
+
+@Serializable
+data class MessageResponse(val message: Message)
+
+@Serializable
+data class CreateChannelRequest(
+    val kind: String,
+    val memberIds: List<String>,
+    val name: String? = null,
+)
+
+@Serializable
+data class PostMessageRequest(val body: String, val mentionAgent: Boolean = false)
+
+@Serializable
+data class MarkReadRequest(val ts: String)
+
+// ---- sticky notes ----
+
+@Serializable
+data class StickyNote(
+    val id: String,
+    val scope: String,
+    val userId: String,
+    val text: String,
+    val color: String = "butter",
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class NotesResponse(val notes: List<StickyNote>)
+
+@Serializable
+data class NoteResponse(val note: StickyNote)
+
+@Serializable
+data class CreateNoteRequest(val scope: String, val text: String, val color: String? = null)
+
+@Serializable
+data class UpdateNoteRequest(val text: String? = null, val color: String? = null)

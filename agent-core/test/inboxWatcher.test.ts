@@ -107,7 +107,7 @@ describe("inbox watcher", () => {
 // dir, not / or cwd.
 describe("config.inboxBase", () => {
   it("defaults under the data directory", () => {
-    expect(config.inboxBase).toContain("data");
+    expect(config.inboxBase.startsWith(config.dataDir)).toBe(true);
     expect(config.inboxBase.endsWith("inbox")).toBe(true);
   });
 });

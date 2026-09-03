@@ -72,7 +72,7 @@ fun TasksScreen(
     var addSlot by remember { mutableStateOf<Pair<String, String?>?>(null) }
 
     ScreenScaffold(
-        title = "Tasks",
+        title = "Events",
         subtitle = "Everything the family agent is tracking for you.",
     ) {
         val modes = listOf(
@@ -151,7 +151,7 @@ private fun ListView(
             value = title,
             onValueChange = { title = it },
             modifier = Modifier.weight(1f),
-            placeholder = { Text("New task") },
+            placeholder = { Text("New event") },
             singleLine = true,
             shape = MaterialTheme.shapes.medium,
         )
@@ -190,7 +190,7 @@ private fun ListView(
 
     if (tasks.isEmpty()) {
         EmptyState(
-            text = "No tasks yet. Add one above or ask in Chat.",
+            text = "No events yet. Add one above or ask in Chat.",
             icon = {
                 Icon(
                     Icons.Rounded.TaskAlt,

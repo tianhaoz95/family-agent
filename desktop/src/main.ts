@@ -15,6 +15,13 @@ import {
   type Tool,
   type Health,
   type User,
+  AGENT_SENDER_ID,
+  type Channel,
+  type Message,
+  type FamilyMember,
+  type StickyNote,
+  type NoteScope,
+  type ChatReference,
 } from "./api.js";
 import { startRecording, type Recording } from "./audio.js";
 import { marked } from "marked";
@@ -35,9 +42,15 @@ const views = Array.from(document.querySelectorAll<HTMLElement>(".view"));
 
 function showView(name: string) {
   closeToolViewer();
+  closeSidePanel();
   for (const btn of navButtons) btn.classList.toggle("is-active", btn.dataset.view === name);
   for (const view of views) view.classList.toggle("is-active", view.id === `view-${name}`);
+  // Stop any view-scoped polling loops the previous view started.
+  if (name !== "messages") stopMessagePolling();
+  if (name !== "board") stopBoardPolling();
   if (name === "tasks") void refreshTasks();
+  if (name === "messages") void enterMessages();
+  if (name === "board") void enterBoard();
   if (name === "documents") {
     // Opening the tab: if anything is still extracting (e.g. a job left
     // running by a previous session), resume polling so it self-updates.
@@ -379,9 +392,10 @@ chatForm.addEventListener("submit", async (e) => {
   chatAbort = new AbortController();
   setChatPending(true);
   try {
-    const { reply } = await api.chat(message, images, chatAbort.signal);
+    const { reply, references } = await api.chat(message, images, chatAbort.signal);
     pending.remove();
-    appendBubble("assistant", reply);
+    const bubble = appendBubble("assistant", reply);
+    if (references?.length) appendReferences(bubble, references);
   } catch (err) {
     pending.remove();
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -487,7 +501,7 @@ function bucketByDay(tasks: Task[]) {
 function renderTasks(tasks: Task[]) {
   taskList.innerHTML = "";
   if (tasks.length === 0) {
-    taskList.innerHTML = emptyState("tasks", "No tasks yet. Add one above or ask in Chat.");
+    taskList.innerHTML = emptyState("tasks", "No events yet. Add one above or ask in Chat.");
     return;
   }
   for (const task of tasks) {
@@ -569,7 +583,7 @@ function openQuickAdd(cell: HTMLElement, day: string, time?: string, topPx?: num
   const input = document.createElement("input");
   input.className = "cal-add";
   input.type = "text";
-  input.placeholder = time ? `New task · ${time}` : "New task";
+  input.placeholder = time ? `New event · ${time}` : "New event";
   if (topPx !== undefined) {
     input.style.position = "absolute";
     input.style.top = `${topPx}px`;
@@ -823,7 +837,6 @@ taskForm.addEventListener("submit", async (e) => {
 });
 
 // ---------- documents ----------
-const documentUploadForm = document.getElementById("document-upload-form") as HTMLFormElement;
 const documentFileInput = document.getElementById("document-file-input") as HTMLInputElement;
 const documentUploadStatus = document.getElementById("document-upload-status")!;
 const documentForm = document.getElementById("document-form") as HTMLFormElement;
@@ -860,6 +873,14 @@ function renderDocuments(docs: Document[]) {
       chip.textContent = doc.extracted.category;
       head.appendChild(chip);
     }
+
+    const preview = document.createElement("button");
+    preview.className = "doc-preview";
+    preview.type = "button";
+    preview.textContent = "Preview";
+    preview.title = "Open a preview in the side panel";
+    preview.addEventListener("click", () => void openDocumentPanel(doc.id));
+    head.appendChild(preview);
 
     const del = document.createElement("button");
     del.className = "doc-delete";
@@ -968,23 +989,22 @@ documentForm.addEventListener("submit", async (e) => {
   void pollForExtraction();
 });
 
-documentUploadForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
+// Picking a file uploads it immediately — there's no separate Upload button.
+documentFileInput.addEventListener("change", async () => {
   const file = documentFileInput.files?.[0];
   if (!file) return;
-  const submitBtn = documentUploadForm.querySelector("button")!;
-  submitBtn.disabled = true;
+  documentFileInput.disabled = true;
   documentUploadStatus.textContent = `Uploading "${file.name}"…`;
   try {
     const { document: doc } = await api.uploadDocument(file);
     documentUploadStatus.textContent = `Uploaded "${doc.filename}" — extracting…`;
-    documentFileInput.value = "";
     await pollForExtraction();
     documentUploadStatus.textContent = "";
   } catch (err) {
     documentUploadStatus.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
   } finally {
-    submitBtn.disabled = false;
+    documentFileInput.value = "";
+    documentFileInput.disabled = false;
   }
 });
 
@@ -1457,7 +1477,7 @@ function renderUsers(users: User[]) {
       del.className = "user-action user-action-danger";
       del.textContent = "Remove";
       del.addEventListener("click", async () => {
-        if (!confirm(`Remove ${user.displayName}? Their tasks, documents, and history are deleted.`)) return;
+        if (!confirm(`Remove ${user.displayName}? Their events, documents, and history are deleted.`)) return;
         try {
           await api.deleteUser(user.id);
           userStatusEl.textContent = `Removed ${user.displayName}.`;
@@ -1558,6 +1578,7 @@ function enterApp(user: User) {
   navFamily.hidden = user.role !== "admin";
   void refreshStatus();
   setInterval(() => void refreshStatus(), 5000);
+  startChannelBadgePolling();
   showView("chat");
 }
 
@@ -1634,5 +1655,487 @@ window.addEventListener(SIGNED_OUT_EVENT, () => {
   clearToken();
   location.reload();
 });
+
+// ==================================================================
+// Messages (family chat) + Board (sticky notes)
+// ==================================================================
+
+// ---------- Messages ----------
+const messagesBadge = document.getElementById("messages-badge")!;
+const channelList = document.getElementById("channel-list")!;
+const channelNewBtn = document.getElementById("channel-new-btn") as HTMLButtonElement;
+const channelNewForm = document.getElementById("channel-new-form") as HTMLFormElement;
+const channelNewMembers = document.getElementById("channel-new-members")!;
+const channelNewName = document.getElementById("channel-new-name") as HTMLInputElement;
+const channelNewCancel = document.getElementById("channel-new-cancel") as HTMLButtonElement;
+const channelNewError = document.getElementById("channel-new-error")!;
+const conversationEl = document.getElementById("conversation") as HTMLElement;
+const conversationEmpty = document.getElementById("conversation-empty") as HTMLElement;
+const conversationTitle = document.getElementById("conversation-title")!;
+const conversationMembers = document.getElementById("conversation-members")!;
+const messageLog = document.getElementById("message-log")!;
+const messageForm = document.getElementById("message-form") as HTMLFormElement;
+const messageInput = document.getElementById("message-input") as HTMLTextAreaElement;
+
+let familyMembers: FamilyMember[] = [];
+let channels: Channel[] = [];
+let activeChannelId: string | null = null;
+let lastMessageTs: string | null = null;
+let messagePollTimer: number | null = null;
+let channelBadgeTimer: number | null = null;
+let renderedMessageIds = new Set<string>();
+
+function nameForSender(senderId: string): string {
+  if (senderId === AGENT_SENDER_ID) return "Assistant";
+  if (senderId === currentUser?.id) return "You";
+  return familyMembers.find((m) => m.id === senderId)?.displayName ?? "Someone";
+}
+
+function updateMessagesBadge() {
+  const total = channels.reduce((n, c) => n + (c.unreadCount ?? 0), 0);
+  messagesBadge.textContent = total > 99 ? "99+" : String(total);
+  messagesBadge.hidden = total === 0;
+}
+
+function renderChannelList() {
+  channelList.innerHTML = "";
+  if (channels.length === 0) {
+    channelList.innerHTML = `<li class="empty-state"><span>No conversations yet.</span></li>`;
+    return;
+  }
+  for (const c of channels) {
+    const li = document.createElement("li");
+    li.className = "channel-row" + (c.id === activeChannelId ? " is-active" : "");
+    const preview = c.lastMessage
+      ? (c.lastMessage.pending ? "…" : c.lastMessage.body).slice(0, 60)
+      : "No messages yet";
+    li.innerHTML = `
+      <span class="channel-row-title">${escapeHtml(c.title)}</span>
+      <span class="channel-row-preview">${escapeHtml(preview)}</span>
+      ${c.unreadCount ? `<span class="channel-row-badge">${c.unreadCount}</span>` : ""}
+    `;
+    li.addEventListener("click", () => void openChannel(c.id));
+    channelList.appendChild(li);
+  }
+}
+
+function escapeHtml(s: string): string {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+async function refreshChannels() {
+  try {
+    channels = (await api.listChannels()).channels;
+  } catch {
+    return;
+  }
+  updateMessagesBadge();
+  if (document.getElementById("view-messages")!.classList.contains("is-active")) renderChannelList();
+}
+
+function renderMessage(m: Message) {
+  if (renderedMessageIds.has(m.id)) {
+    // Update a pending agent bubble in place once it resolves.
+    const existing = messageLog.querySelector<HTMLElement>(`[data-msg-id="${m.id}"]`);
+    if (existing && !m.pending) {
+      existing.classList.remove("is-pending");
+      existing.querySelector(".msg-body")!.innerHTML = renderMarkdown(m.body);
+    }
+    return;
+  }
+  renderedMessageIds.add(m.id);
+  const own = m.senderId === currentUser?.id;
+  const agent = m.senderId === AGENT_SENDER_ID;
+  const el = document.createElement("div");
+  el.className = `msg ${own ? "msg-own" : agent ? "msg-agent" : "msg-other"}${m.pending ? " is-pending" : ""}`;
+  el.dataset.msgId = m.id;
+  const bodyHtml = m.pending
+    ? "<em>Assistant is typing…</em>"
+    : agent
+      ? renderMarkdown(m.body)
+      : escapeHtml(m.body);
+  el.innerHTML = `${own ? "" : `<span class="msg-sender">${escapeHtml(nameForSender(m.senderId))}</span>`}<div class="msg-body">${bodyHtml}</div>`;
+  messageLog.appendChild(el);
+  messageLog.scrollTop = messageLog.scrollHeight;
+}
+
+async function openChannel(id: string) {
+  activeChannelId = id;
+  lastMessageTs = null;
+  renderedMessageIds = new Set();
+  messageLog.innerHTML = "";
+  conversationEmpty.hidden = true;
+  conversationEl.hidden = false;
+  const channel = channels.find((c) => c.id === id);
+  conversationTitle.textContent = channel?.title ?? "Conversation";
+  conversationMembers.textContent = (channel?.members ?? []).map((m) => m.displayName).join(", ");
+  renderChannelList();
+  await pollActiveChannel();
+  messageInput.focus();
+}
+
+async function pollActiveChannel() {
+  if (!activeChannelId) return;
+  try {
+    const { messages } = await api.listMessages(activeChannelId, lastMessageTs ?? undefined);
+    for (const m of messages) {
+      renderMessage(m);
+      lastMessageTs = m.createdAt;
+    }
+    if (messages.length) {
+      await api.markChannelRead(activeChannelId, messages[messages.length - 1].createdAt).catch(() => {});
+    }
+    // Re-render any pending agent bubble that may have resolved.
+    const pendingEls = messageLog.querySelectorAll(".msg.is-pending");
+    if (pendingEls.length) {
+      const all = (await api.listMessages(activeChannelId)).messages;
+      for (const m of all) renderMessage(m);
+    }
+  } catch {
+    /* transient */
+  }
+}
+
+function stopMessagePolling() {
+  if (messagePollTimer !== null) {
+    clearInterval(messagePollTimer);
+    messagePollTimer = null;
+  }
+  activeChannelId = null;
+}
+
+async function enterMessages() {
+  channelNewForm.hidden = true;
+  conversationEl.hidden = true;
+  conversationEmpty.hidden = false;
+  if (familyMembers.length === 0) {
+    try {
+      familyMembers = (await api.listFamilyMembers()).members;
+    } catch {
+      /* ignore */
+    }
+  }
+  await refreshChannels();
+  renderChannelList();
+  if (messagePollTimer === null) {
+    messagePollTimer = window.setInterval(() => {
+      void pollActiveChannel();
+      void refreshChannels();
+    }, 2500);
+  }
+}
+
+function startChannelBadgePolling() {
+  void refreshChannels();
+  if (channelBadgeTimer === null) {
+    channelBadgeTimer = window.setInterval(() => void refreshChannels(), 8000);
+  }
+}
+
+channelNewBtn.addEventListener("click", () => {
+  channelNewError.textContent = "";
+  channelNewName.value = "";
+  channelNewMembers.innerHTML = "";
+  for (const m of familyMembers.filter((m) => m.id !== currentUser?.id)) {
+    const label = document.createElement("label");
+    label.className = "channel-new-member";
+    label.innerHTML = `<input type="checkbox" value="${m.id}" /> ${escapeHtml(m.displayName)}`;
+    channelNewMembers.appendChild(label);
+  }
+  channelNewForm.hidden = !channelNewForm.hidden;
+});
+channelNewCancel.addEventListener("click", () => {
+  channelNewForm.hidden = true;
+});
+channelNewForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  channelNewError.textContent = "";
+  const picked = Array.from(
+    channelNewMembers.querySelectorAll<HTMLInputElement>("input:checked")
+  ).map((i) => i.value);
+  if (picked.length === 0) {
+    channelNewError.textContent = "Pick at least one person.";
+    return;
+  }
+  const name = channelNewName.value.trim();
+  try {
+    const kind = picked.length === 1 && !name ? "dm" : "group";
+    if (kind === "group" && !name) {
+      channelNewError.textContent = "Give the group a name.";
+      return;
+    }
+    const { channel } = await api.createChannel({ kind, memberIds: picked, name: name || undefined });
+    channelNewForm.hidden = true;
+    await refreshChannels();
+    await openChannel(channel.id);
+  } catch (err) {
+    channelNewError.textContent = err instanceof Error ? err.message : String(err);
+  }
+});
+
+autoGrow(messageInput);
+messageForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = messageInput.value.trim();
+  if (!body || !activeChannelId) return;
+  messageInput.value = "";
+  messageInput.style.height = "auto";
+  const mentionAgent = /(^|[^\w@])@(agent|ai|assistant)\b/i.test(body);
+  try {
+    await api.postMessage(activeChannelId, body, mentionAgent);
+    await pollActiveChannel();
+    await refreshChannels();
+  } catch (err) {
+    appendMessageError(err instanceof Error ? err.message : String(err));
+  }
+});
+
+function appendMessageError(text: string) {
+  const el = document.createElement("div");
+  el.className = "msg msg-error";
+  el.textContent = text;
+  messageLog.appendChild(el);
+}
+
+function autoGrow(ta: HTMLTextAreaElement) {
+  ta.addEventListener("input", () => {
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+  });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      ta.form?.requestSubmit();
+    }
+  });
+}
+
+// ---------- Board (sticky notes) ----------
+const NOTE_COLORS = ["butter", "mint", "sky", "blush", "lilac"] as const;
+const noteGrid = document.getElementById("note-grid")!;
+const noteForm = document.getElementById("note-form") as HTMLFormElement;
+const noteText = document.getElementById("note-text") as HTMLTextAreaElement;
+const noteColorsEl = document.getElementById("note-colors")!;
+const noteStatus = document.getElementById("note-status")!;
+const boardToggle = Array.from(
+  document.querySelectorAll<HTMLButtonElement>('.seg-toggle [data-board]')
+);
+
+let boardScope: NoteScope = "shared";
+let notes: StickyNote[] = [];
+let newNoteColor: string = NOTE_COLORS[0];
+let boardPollTimer: number | null = null;
+
+for (const color of NOTE_COLORS) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = `note-swatch note-${color}` + (color === newNoteColor ? " is-active" : "");
+  b.dataset.color = color;
+  b.setAttribute("role", "radio");
+  b.setAttribute("aria-label", color);
+  b.addEventListener("click", () => {
+    newNoteColor = color;
+    for (const s of noteColorsEl.children) s.classList.toggle("is-active", (s as HTMLElement).dataset.color === color);
+  });
+  noteColorsEl.appendChild(b);
+}
+
+for (const btn of boardToggle) {
+  btn.addEventListener("click", () => {
+    boardScope = btn.dataset.board as NoteScope;
+    for (const b of boardToggle) b.classList.toggle("is-active", b === btn);
+    void refreshNotes();
+  });
+}
+
+function renderNotes() {
+  noteGrid.innerHTML = "";
+  if (notes.length === 0) {
+    noteGrid.innerHTML = `<li class="empty-state"><span>No notes on this board yet.</span></li>`;
+    return;
+  }
+  for (const n of notes) {
+    const li = document.createElement("li");
+    li.className = `note-card note-${n.color}`;
+    const body = document.createElement("div");
+    body.className = "note-card-text";
+    body.textContent = n.text;
+    body.title = "Click to edit";
+    body.addEventListener("click", () => startEditNote(li, n));
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "note-card-del";
+    del.setAttribute("aria-label", "Delete note");
+    del.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+    del.addEventListener("click", async () => {
+      await api.deleteNote(n.id).catch(() => {});
+      await refreshNotes();
+    });
+    li.append(body, del);
+    noteGrid.appendChild(li);
+  }
+}
+
+function startEditNote(li: HTMLElement, n: StickyNote) {
+  li.innerHTML = "";
+  const ta = document.createElement("textarea");
+  ta.className = "note-card-edit";
+  ta.value = n.text;
+  const save = async () => {
+    const text = ta.value.trim();
+    if (text && text !== n.text) await api.updateNote(n.id, { text }).catch(() => {});
+    await refreshNotes();
+  };
+  ta.addEventListener("blur", () => void save());
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      void save();
+    }
+    if (e.key === "Escape") void refreshNotes();
+  });
+  const colors = document.createElement("div");
+  colors.className = "note-colors";
+  for (const color of NOTE_COLORS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `note-swatch note-${color}` + (color === n.color ? " is-active" : "");
+    b.addEventListener("click", async () => {
+      await api.updateNote(n.id, { color }).catch(() => {});
+      await refreshNotes();
+    });
+    colors.appendChild(b);
+  }
+  li.append(ta, colors);
+  ta.focus();
+}
+
+async function refreshNotes() {
+  try {
+    notes = (await api.listNotes(boardScope)).notes;
+    renderNotes();
+  } catch {
+    /* ignore */
+  }
+}
+
+noteForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = noteText.value.trim();
+  if (!text) return;
+  noteStatus.textContent = "";
+  try {
+    await api.createNote(boardScope, text, newNoteColor);
+    noteText.value = "";
+    await refreshNotes();
+  } catch (err) {
+    noteStatus.textContent = err instanceof Error ? err.message : String(err);
+  }
+});
+
+function stopBoardPolling() {
+  if (boardPollTimer !== null) {
+    clearInterval(boardPollTimer);
+    boardPollTimer = null;
+  }
+}
+
+async function enterBoard() {
+  await refreshNotes();
+  if (boardPollTimer === null) {
+    boardPollTimer = window.setInterval(() => void refreshNotes(), 5000);
+  }
+}
+
+// ---------- side panel (document preview + chat references) ----------
+const sidePanel = document.getElementById("side-panel") as HTMLElement;
+const sidePanelTitle = document.getElementById("side-panel-title")!;
+const sidePanelBody = document.getElementById("side-panel-body")!;
+const sidePanelClose = document.getElementById("side-panel-close") as HTMLButtonElement;
+
+sidePanelClose.addEventListener("click", closeSidePanel);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !sidePanel.hidden) closeSidePanel();
+});
+
+function closeSidePanel() {
+  sidePanel.hidden = true;
+  sidePanel.classList.remove("is-open");
+  sidePanelBody.innerHTML = "";
+}
+
+function openSidePanel(title: string, bodyHtml: string) {
+  sidePanelTitle.textContent = title;
+  sidePanelBody.innerHTML = bodyHtml;
+  sidePanel.hidden = false;
+  // next frame so the transition runs
+  requestAnimationFrame(() => sidePanel.classList.add("is-open"));
+}
+
+async function openDocumentPanel(id: string) {
+  openSidePanel("Loading…", `<p class="side-panel-hint">Loading…</p>`);
+  try {
+    const { document: doc } = await api.getDocument(id);
+    const meta: string[] = [];
+    if (doc.extracted?.category) meta.push(`<span class="category-chip">${escapeHtml(doc.extracted.category)}</span>`);
+    if (doc.sourcePath) meta.push(`<span class="tag tag-local">watched folder</span>`);
+    const dates = doc.extracted?.importantDates?.length
+      ? `<p class="side-panel-hint">Important dates: ${doc.extracted.importantDates.map(escapeHtml).join(", ")}</p>`
+      : "";
+    openSidePanel(
+      doc.filename,
+      `${meta.length ? `<div class="side-panel-meta">${meta.join(" ")}</div>` : ""}
+       ${doc.extracted?.summary ? `<p class="side-panel-summary">${escapeHtml(doc.extracted.summary)}</p>` : ""}
+       ${dates}
+       <pre class="side-panel-text">${escapeHtml(doc.rawText)}</pre>`
+    );
+  } catch (err) {
+    openSidePanel("Not found", `<p class="side-panel-hint">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`);
+  }
+}
+
+async function openTaskPanel(id: string) {
+  openSidePanel("Loading…", `<p class="side-panel-hint">Loading…</p>`);
+  try {
+    const { task } = await api.getTask(id);
+    const when = task.dueDate
+      ? `<p class="side-panel-hint">Due ${escapeHtml(task.dueDate)}${task.dueTime ? ` at ${escapeHtml(task.dueTime)}` : ""}</p>`
+      : "";
+    openSidePanel(
+      task.title,
+      `<div class="side-panel-meta"><span class="category-chip">${task.status === "done" ? "done" : "open"}</span></div>
+       ${when}
+       ${task.notes ? `<p class="side-panel-summary">${escapeHtml(task.notes)}</p>` : ""}
+       <p class="side-panel-hint">Open the Events tab to reschedule or complete it.</p>`
+    );
+  } catch (err) {
+    openSidePanel("Not found", `<p class="side-panel-hint">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`);
+  }
+}
+
+/** Render the assistant's task/document references as clickable chips under its bubble. */
+function appendReferences(afterEl: HTMLElement, references: ChatReference[]) {
+  const wrap = document.createElement("div");
+  wrap.className = "chat-references";
+  const label = document.createElement("span");
+  label.className = "chat-references-label";
+  label.textContent = "References";
+  wrap.appendChild(label);
+  for (const ref of references) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = `ref-chip ref-chip-${ref.type}`;
+    chip.textContent = ref.label;
+    chip.addEventListener("click", () =>
+      ref.type === "document" ? void openDocumentPanel(ref.id) : void openTaskPanel(ref.id)
+    );
+    wrap.appendChild(chip);
+  }
+  afterEl.insertAdjacentElement("afterend", wrap);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
 
 void boot();

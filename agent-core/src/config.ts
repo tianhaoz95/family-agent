@@ -1,10 +1,20 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { readPersistedSettings } from "./settingsFile.js";
 import type { UserRecord } from "./db.js";
 
 // Local by default, cloud by explicit grant (see docs/DECISIONS.md).
 // Nothing in this file reaches off-box; ollamaBaseUrl always points at
 // localhost or another node on the family network, never a public host.
-const dataDir = process.env.FAMILY_AGENT_DATA_DIR ?? new URL("../data", import.meta.url).pathname;
+//
+// The store lives under the user's home directory, not inside the repo/install
+// tree, so it survives a reinstall or a `git clean` and isn't accidentally
+// committed. Override with FAMILY_AGENT_DATA_DIR. (A dev box that still has an
+// old repo-local `agent-core/data/` can point the env var at it, or just
+// re-bootstrap — the setup wizard runs again against the fresh directory.)
+const dataDir =
+  process.env.FAMILY_AGENT_DATA_DIR ??
+  join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "family-agent");
 
 // Precedence for the live-editable settings: explicit env var > persisted
 // setting (from the desktop Settings page, PUT /settings) > derived/default.

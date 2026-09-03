@@ -1,9 +1,12 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { ScopedStore } from "../db.js";
+import type { OnReference } from "./references.js";
 
-// Bound to one user's ScopedStore — see agents/index.ts.
-export function makeDocumentTools(store: ScopedStore) {
+// Bound to one user's ScopedStore — see agents/index.ts. `onReference` (when
+// given) is notified of each document this turn retrieved, so /chat can return
+// clickable references.
+export function makeDocumentTools(store: ScopedStore, onReference?: OnReference) {
   const saveExtraction = tool(
     async ({ documentId, summary, category, importantDates }) => {
       const extracted = {
@@ -49,6 +52,7 @@ export function makeDocumentTools(store: ScopedStore) {
           ? `No documents matched "${query}".`
           : "No documents match those filters.";
       }
+      for (const h of hits) onReference?.({ type: "document", id: h.id });
       return hits
         .map((h) => {
           const status = h.category
@@ -86,6 +90,7 @@ export function makeDocumentTools(store: ScopedStore) {
     async ({ documentId }) => {
       const doc = store.getDocument(documentId);
       if (!doc) return `No document found with id ${documentId}.`;
+      onReference?.({ type: "document", id: doc.id });
       return `Filename: ${doc.filename}\n\n${doc.rawText}`;
     },
     {

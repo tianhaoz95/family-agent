@@ -220,4 +220,45 @@ describe("api client", () => {
     expect(url).toContain("q=registration");
     expect(url).toContain("status=open");
   });
+
+  it("createChannel() posts kind + memberIds", async () => {
+    const fetchMock = mockFetchOnce(200, { channel: { id: "c1" } });
+    await api.createChannel({ kind: "dm", memberIds: ["u2"] });
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toMatchObject({ kind: "dm", memberIds: ["u2"] });
+  });
+
+  it("postMessage() sends the body and mentionAgent flag", async () => {
+    const fetchMock = mockFetchOnce(200, { message: { id: "m1" } });
+    await api.postMessage("c1", "@agent hi", true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/channels/c1/messages");
+    expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({ body: "@agent hi", mentionAgent: true });
+  });
+
+  it("listMessages() adds an after cursor when given", async () => {
+    const fetchMock = mockFetchOnce(200, { messages: [] });
+    await api.listMessages("c1", "2026-09-02T00:00:00.000Z");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("after=2026-09-02T00%3A00%3A00.000Z");
+  });
+
+  it("createNote() / listNotes() hit /notes with the scope", async () => {
+    const post = mockFetchOnce(200, { note: { id: "n1" } });
+    await api.createNote("shared", "buy milk", "mint");
+    expect(JSON.parse((post.mock.calls[0][1] as RequestInit).body as string)).toMatchObject({
+      scope: "shared",
+      text: "buy milk",
+      color: "mint",
+    });
+    vi.unstubAllGlobals();
+    const get = mockFetchOnce(200, { notes: [] });
+    await api.listNotes("private");
+    expect(String(get.mock.calls[0][0])).toContain("/notes?scope=private");
+  });
+
+  it("chat() surfaces references from the response", async () => {
+    mockFetchOnce(200, { reply: "here", references: [{ type: "document", id: "d1", label: "bill.txt" }] });
+    const res = await api.chat("what's the bill");
+    expect(res.references?.[0]).toMatchObject({ type: "document", id: "d1" });
+  });
 });

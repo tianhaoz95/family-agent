@@ -41,6 +41,12 @@ export function toFtsMatchQuery(raw: string): string {
 // the first real admin the moment one is created during setup.
 export const LEGACY_USER_ID = "_legacy_";
 
+// The `messages.sender_id` value for a message the AI planner posted into a
+// family channel (in response to an @agent mention). Not a real user — it has
+// no `users` row and is never a `channel_members` entry; the agent only ever
+// speaks when invoked. Clients render it as a distinct participant.
+export const AGENT_SENDER_ID = "_agent_";
+
 // A session lasts this long without being used before it's rejected. Long,
 // because this is a family LAN device, not a bank — but not forever, so a
 // lost/old phone eventually stops working.
@@ -136,6 +142,67 @@ export interface ToolRecord {
   createdAt: string;
 }
 
+// ---- family chat ----
+// The first cross-account data in the app. A `channel` is either a 1:1 "dm" or
+// a named "group" (Slack-style); `channel_members` is the access boundary —
+// every read method on `Store` takes the requesting user id and returns
+// nothing when they aren't a member. See docs/DECISIONS.md.
+export type ChannelKind = "dm" | "group";
+
+export interface ChannelMemberInfo {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
+export interface ChannelRecord {
+  id: string;
+  kind: ChannelKind;
+  /** Set for groups; null for DMs (the client derives a title from members). */
+  name: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** A channel plus its member list — returned by getChannelForUser / create*. */
+export interface ChannelDetail extends ChannelRecord {
+  members: ChannelMemberInfo[];
+}
+
+/** A row in the channel list: channel + a preview + this user's unread count. */
+export interface ChannelSummary extends ChannelRecord {
+  members: ChannelMemberInfo[];
+  /** Display title: the group name, or the other member(s) for a DM. */
+  title: string;
+  lastMessage: { senderId: string; body: string; createdAt: string; pending: boolean } | null;
+  unreadCount: number;
+}
+
+export interface MessageRecord {
+  id: string;
+  channelId: string;
+  /** A user id, or AGENT_SENDER_ID. */
+  senderId: string;
+  body: string;
+  /** True while the agent's reply is still being generated (body is ""). */
+  pending: boolean;
+  createdAt: string;
+}
+
+// ---- sticky notes ----
+export type NoteScope = "shared" | "private";
+
+export interface StickyNoteRecord {
+  id: string;
+  scope: NoteScope;
+  /** Author (shared board) or owner (private board). */
+  userId: string;
+  text: string;
+  color: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -199,6 +266,46 @@ CREATE TABLE IF NOT EXISTS tools (
   error TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS channels (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  name TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS channel_members (
+  channel_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  joined_at TEXT NOT NULL,
+  last_read_at TEXT,
+  PRIMARY KEY (channel_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  pending INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_channel_members_user ON channel_members(user_id);
+
+CREATE TABLE IF NOT EXISTS sticky_notes (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT 'butter',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sticky_scope ON sticky_notes(scope, user_id);
 `;
 
 // Columns added after a release. `CREATE TABLE IF NOT EXISTS` is a no-op
@@ -475,11 +582,293 @@ export class Store {
     if (!user) return undefined;
     // Everything the user owned goes with them — this is a hard delete, not a
     // soft "disable". A family removing an account wants the data gone.
-    for (const table of ["tasks", "documents", "activity", "tools", "sessions"] as const) {
+    for (const table of [
+      "tasks",
+      "documents",
+      "activity",
+      "tools",
+      "sessions",
+      "channel_members",
+      "sticky_notes",
+    ] as const) {
       this.db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).run(id);
+    }
+    // Their sent messages stay (clients render an unknown sender gracefully),
+    // but a DM now missing one side is dead, and so is any channel with nobody
+    // left in it — drop both (and their messages).
+    const dead = this.db
+      .prepare(
+        `SELECT c.id FROM channels c
+         WHERE (SELECT COUNT(*) FROM channel_members m WHERE m.channel_id = c.id) < CASE c.kind WHEN 'dm' THEN 2 ELSE 1 END`
+      )
+      .all() as any[];
+    for (const { id: cid } of dead) {
+      this.db.prepare("DELETE FROM messages WHERE channel_id = ?").run(cid);
+      this.db.prepare("DELETE FROM channel_members WHERE channel_id = ?").run(cid);
+      this.db.prepare("DELETE FROM channels WHERE id = ?").run(cid);
     }
     this.db.prepare("DELETE FROM users WHERE id = ?").run(id);
     return user;
+  }
+
+  /** Minimal public directory of every account — for the chat / mention pickers.
+   *  Unlike listUsers() this is not admin-gated; it carries no role or hash. */
+  listFamilyMembers(): ChannelMemberInfo[] {
+    const rows = this.db
+      .prepare("SELECT id, username, display_name FROM users ORDER BY display_name COLLATE NOCASE ASC")
+      .all() as any[];
+    return rows.map((r) => ({ id: r.id, username: r.username, displayName: r.display_name }));
+  }
+
+  // ---- family chat (cross-account) ----
+  // Membership is the access boundary: every read takes the requesting user id
+  // and yields nothing when they aren't in `channel_members`, so a missed
+  // check surfaces as "empty" rather than another family's messages.
+
+  isChannelMember(channelId: string, userId: string): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?")
+      .get(channelId, userId);
+  }
+
+  channelMemberIds(channelId: string): string[] {
+    return (
+      this.db.prepare("SELECT user_id FROM channel_members WHERE channel_id = ?").all(channelId) as any[]
+    ).map((r) => r.user_id);
+  }
+
+  private channelMemberInfo(channelId: string): ChannelMemberInfo[] {
+    const rows = this.db
+      .prepare(
+        `SELECT u.id, u.username, u.display_name FROM channel_members m
+         JOIN users u ON u.id = m.user_id
+         WHERE m.channel_id = ? ORDER BY u.display_name COLLATE NOCASE ASC`
+      )
+      .all(channelId) as any[];
+    return rows.map((r) => ({ id: r.id, username: r.username, displayName: r.display_name }));
+  }
+
+  private channelRow(channelId: string): ChannelRecord | undefined {
+    const r = this.db.prepare("SELECT * FROM channels WHERE id = ?").get(channelId) as any;
+    return r ? rowToChannel(r) : undefined;
+  }
+
+  /** A channel + its members, but only if `userId` is one of them. */
+  getChannelForUser(channelId: string, userId: string): ChannelDetail | undefined {
+    if (!this.isChannelMember(channelId, userId)) return undefined;
+    const channel = this.channelRow(channelId);
+    if (!channel) return undefined;
+    return { ...channel, members: this.channelMemberInfo(channelId) };
+  }
+
+  /** DM title = the other member's name; group title = its name (or a member join). */
+  private channelTitle(channel: ChannelRecord, members: ChannelMemberInfo[], forUserId: string): string {
+    if (channel.kind === "group") {
+      return channel.name || members.map((m) => m.displayName).join(", ");
+    }
+    const others = members.filter((m) => m.id !== forUserId);
+    return others.map((m) => m.displayName).join(", ") || "Note to self";
+  }
+
+  listChannelsForUser(userId: string): ChannelSummary[] {
+    const ids = (
+      this.db
+        .prepare("SELECT channel_id FROM channel_members WHERE user_id = ?")
+        .all(userId) as any[]
+    ).map((r) => r.channel_id);
+
+    const summaries = ids
+      .map((id) => {
+        const channel = this.channelRow(id);
+        if (!channel) return undefined;
+        const members = this.channelMemberInfo(id);
+        const last = this.db
+          .prepare(
+            "SELECT sender_id, body, pending, created_at FROM messages WHERE channel_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1"
+          )
+          .get(id) as any;
+        const readRow = this.db
+          .prepare("SELECT last_read_at FROM channel_members WHERE channel_id = ? AND user_id = ?")
+          .get(id, userId) as any;
+        const lastReadAt: string | null = readRow?.last_read_at ?? null;
+        const unread = Number(
+          (
+            this.db
+              .prepare(
+                `SELECT COUNT(*) AS n FROM messages
+                 WHERE channel_id = ? AND sender_id != ? AND pending = 0
+                 AND (? IS NULL OR created_at > ?)`
+              )
+              .get(id, userId, lastReadAt, lastReadAt) as any
+          ).n
+        );
+        return {
+          ...channel,
+          members,
+          title: this.channelTitle(channel, members, userId),
+          lastMessage: last
+            ? {
+                senderId: last.sender_id,
+                body: last.body,
+                createdAt: last.created_at,
+                pending: !!last.pending,
+              }
+            : null,
+          unreadCount: unread,
+        } as ChannelSummary;
+      })
+      .filter((c): c is ChannelSummary => !!c);
+
+    // Most recent activity first; a channel with no messages sorts by creation.
+    summaries.sort((a, b) => {
+      const at = a.lastMessage?.createdAt ?? a.createdAt;
+      const bt = b.lastMessage?.createdAt ?? b.createdAt;
+      return bt < at ? -1 : bt > at ? 1 : 0;
+    });
+    return summaries;
+  }
+
+  /** Idempotent: one canonical DM channel per unordered pair of user ids. */
+  findOrCreateDm(userIdA: string, userIdB: string): ChannelDetail {
+    if (userIdA === userIdB) throw new Error("A DM needs two different people.");
+    // A DM channel is exactly the two of them and nobody else.
+    const existing = this.db
+      .prepare(
+        `SELECT c.id FROM channels c
+         WHERE c.kind = 'dm'
+         AND (SELECT COUNT(*) FROM channel_members m WHERE m.channel_id = c.id) = 2
+         AND EXISTS (SELECT 1 FROM channel_members m WHERE m.channel_id = c.id AND m.user_id = ?)
+         AND EXISTS (SELECT 1 FROM channel_members m WHERE m.channel_id = c.id AND m.user_id = ?)
+         LIMIT 1`
+      )
+      .get(userIdA, userIdB) as any;
+    if (existing) return this.getChannelForUser(existing.id, userIdA)!;
+
+    const now = new Date().toISOString();
+    const id = shortId();
+    this.db
+      .prepare("INSERT INTO channels (id, kind, name, created_by, created_at) VALUES (?, 'dm', NULL, ?, ?)")
+      .run(id, userIdA, now);
+    for (const uid of [userIdA, userIdB]) {
+      this.db
+        .prepare("INSERT INTO channel_members (channel_id, user_id, joined_at) VALUES (?, ?, ?)")
+        .run(id, uid, now);
+    }
+    return this.getChannelForUser(id, userIdA)!;
+  }
+
+  createGroupChannel(createdBy: string, name: string, memberIds: string[]): ChannelDetail {
+    const now = new Date().toISOString();
+    const id = shortId();
+    this.db
+      .prepare("INSERT INTO channels (id, kind, name, created_by, created_at) VALUES (?, 'group', ?, ?, ?)")
+      .run(id, name.trim(), createdBy, now);
+    const all = new Set([createdBy, ...memberIds]);
+    for (const uid of all) {
+      if (!this.getUser(uid)) continue; // skip unknown ids rather than fail the whole create
+      this.db
+        .prepare("INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at) VALUES (?, ?, ?)")
+        .run(id, uid, now);
+    }
+    return this.getChannelForUser(id, createdBy)!;
+  }
+
+  /** Add members to a group. `requesterId` must already be a member. */
+  addChannelMembers(channelId: string, requesterId: string, memberIds: string[]): ChannelDetail | undefined {
+    const channel = this.channelRow(channelId);
+    if (!channel || channel.kind !== "group") return undefined;
+    if (!this.isChannelMember(channelId, requesterId)) return undefined;
+    const now = new Date().toISOString();
+    for (const uid of memberIds) {
+      if (!this.getUser(uid)) continue;
+      this.db
+        .prepare("INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at) VALUES (?, ?, ?)")
+        .run(channelId, uid, now);
+    }
+    return this.getChannelForUser(channelId, requesterId);
+  }
+
+  listMessages(
+    channelId: string,
+    userId: string,
+    opts: { afterTs?: string | null; limit?: number } = {}
+  ): MessageRecord[] {
+    if (!this.isChannelMember(channelId, userId)) return [];
+    const limit = Math.min(Math.max(opts.limit ?? 200, 1), 500);
+    const rows = (
+      opts.afterTs
+        ? this.db
+            .prepare(
+              "SELECT * FROM messages WHERE channel_id = ? AND created_at > ? ORDER BY created_at ASC, rowid ASC LIMIT ?"
+            )
+            .all(channelId, opts.afterTs, limit)
+        : this.db
+            .prepare(
+              "SELECT * FROM messages WHERE channel_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?"
+            )
+            .all(channelId, limit)
+    ) as any[];
+    const msgs = rows.map(rowToMessage);
+    // The unbounded (initial) query pulls newest-first for the LIMIT; hand it
+    // back oldest-first like the incremental case.
+    return opts.afterTs ? msgs : msgs.reverse();
+  }
+
+  postMessage(channelId: string, senderId: string, body: string): MessageRecord {
+    const rec: MessageRecord = {
+      id: shortId(),
+      channelId,
+      senderId,
+      body,
+      pending: false,
+      createdAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare(
+        "INSERT INTO messages (id, channel_id, sender_id, body, pending, created_at) VALUES (?, ?, ?, ?, 0, ?)"
+      )
+      .run(rec.id, rec.channelId, rec.senderId, rec.body, rec.createdAt);
+    return rec;
+  }
+
+  /** A placeholder the AI reply fills in later (clients show "typing…"). */
+  insertPendingAgentMessage(channelId: string): MessageRecord {
+    const rec: MessageRecord = {
+      id: shortId(),
+      channelId,
+      senderId: AGENT_SENDER_ID,
+      body: "",
+      pending: true,
+      createdAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare(
+        "INSERT INTO messages (id, channel_id, sender_id, body, pending, created_at) VALUES (?, ?, ?, '', 1, ?)"
+      )
+      .run(rec.id, rec.channelId, rec.senderId, rec.createdAt);
+    return rec;
+  }
+
+  resolvePendingAgentMessage(messageId: string, body: string): void {
+    this.db
+      .prepare("UPDATE messages SET body = ?, pending = 0 WHERE id = ?")
+      .run(body, messageId);
+  }
+
+  /** Any agent messages left "pending" by a killed process will never finish. */
+  failStalePendingMessages(): number {
+    const info = this.db
+      .prepare(
+        "UPDATE messages SET pending = 0, body = '(the assistant didn''t finish replying)' WHERE pending = 1"
+      )
+      .run();
+    return Number(info.changes ?? 0);
+  }
+
+  markChannelRead(channelId: string, userId: string, ts: string): void {
+    this.db
+      .prepare("UPDATE channel_members SET last_read_at = ? WHERE channel_id = ? AND user_id = ?")
+      .run(ts, channelId, userId);
   }
 
   /** Hand every row still owned by the legacy sentinel to a real user. */
@@ -1020,6 +1409,91 @@ export class ScopedStore {
       .run(this.userId);
     return Number(info.changes ?? 0);
   }
+
+  // ---- sticky notes ----
+  // The "private" board is scoped like everything else (WHERE user_id = ?); the
+  // "shared" board is the family board — any member reads and edits it, and the
+  // `user_id` column just records who authored each note.
+
+  listStickyNotes(scope: NoteScope): StickyNoteRecord[] {
+    const rows = (
+      scope === "private"
+        ? this.db
+            .prepare(
+              "SELECT * FROM sticky_notes WHERE scope = 'private' AND user_id = ? ORDER BY updated_at DESC"
+            )
+            .all(this.userId)
+        : this.db
+            .prepare("SELECT * FROM sticky_notes WHERE scope = 'shared' ORDER BY updated_at DESC")
+            .all()
+    ) as any[];
+    return rows.map(rowToStickyNote);
+  }
+
+  getStickyNote(id: string): StickyNoteRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM sticky_notes WHERE id = ?").get(id) as any;
+    if (!row) return undefined;
+    const note = rowToStickyNote(row);
+    // A private note is only visible to its owner; a shared note to anyone.
+    if (note.scope === "private" && note.userId !== this.userId) return undefined;
+    return note;
+  }
+
+  createStickyNote(input: { scope: NoteScope; text: string; color?: string }): StickyNoteRecord {
+    const now = new Date().toISOString();
+    const rec: StickyNoteRecord = {
+      id: shortId(),
+      scope: input.scope,
+      userId: this.userId,
+      text: input.text,
+      color: input.color?.trim() || "butter",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(
+        "INSERT INTO sticky_notes (id, scope, user_id, text, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run(rec.id, rec.scope, rec.userId, rec.text, rec.color, rec.createdAt, rec.updatedAt);
+    this.logActivity(
+      "user",
+      "note.created",
+      `Added a ${rec.scope} sticky note: "${rec.text.slice(0, 80)}"`
+    );
+    return rec;
+  }
+
+  updateStickyNote(id: string, patch: { text?: string; color?: string }): StickyNoteRecord | undefined {
+    const note = this.getStickyNote(id);
+    if (!note) return undefined;
+    // Shared notes: any member can edit. Private notes: getStickyNote already
+    // guaranteed ownership.
+    const sets: string[] = [];
+    const values: string[] = [];
+    if (patch.text !== undefined) {
+      sets.push("text = ?");
+      values.push(patch.text);
+    }
+    if (patch.color !== undefined) {
+      sets.push("color = ?");
+      values.push(patch.color.trim() || "butter");
+    }
+    if (sets.length === 0) return note;
+    const now = new Date().toISOString();
+    sets.push("updated_at = ?");
+    values.push(now);
+    this.db.prepare(`UPDATE sticky_notes SET ${sets.join(", ")} WHERE id = ?`).run(...values, id);
+    this.logActivity("user", "note.updated", `Edited a ${note.scope} sticky note`);
+    return this.getStickyNote(id);
+  }
+
+  deleteStickyNote(id: string): StickyNoteRecord | undefined {
+    const note = this.getStickyNote(id);
+    if (!note) return undefined;
+    this.db.prepare("DELETE FROM sticky_notes WHERE id = ?").run(id);
+    this.logActivity("user", "note.deleted", `Removed a ${note.scope} sticky note`);
+    return note;
+  }
 }
 
 function rowToUser(r: any): UserRecord {
@@ -1055,6 +1529,39 @@ function rowToDocument(r: any): DocumentRecord {
     createdAt: r.created_at,
     sourcePath: r.source_path ?? null,
     extractionStatus: (r.extraction_status as ExtractionStatus) ?? "pending",
+  };
+}
+
+function rowToChannel(r: any): ChannelRecord {
+  return {
+    id: r.id,
+    kind: (r.kind as ChannelKind) ?? "dm",
+    name: r.name ?? null,
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+  };
+}
+
+function rowToMessage(r: any): MessageRecord {
+  return {
+    id: r.id,
+    channelId: r.channel_id,
+    senderId: r.sender_id,
+    body: r.body,
+    pending: !!r.pending,
+    createdAt: r.created_at,
+  };
+}
+
+function rowToStickyNote(r: any): StickyNoteRecord {
+  return {
+    id: r.id,
+    scope: (r.scope as NoteScope) ?? "shared",
+    userId: r.user_id,
+    text: r.text,
+    color: r.color ?? "butter",
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
   };
 }
 

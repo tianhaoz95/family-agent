@@ -5,6 +5,8 @@ import { createLocalModel } from "../model.js";
 import type { ScopedStore } from "../db.js";
 import { makeTaskTools } from "./taskTools.js";
 import { makeDocumentTools } from "./documentTools.js";
+import { makeNoteTools } from "./noteTools.js";
+import type { OnReference } from "./references.js";
 
 export const PLANNER_PROMPT = `You are the coordinating agent for a local-first family
 organization assistant. You never see raw documents or personal detail yourself
@@ -22,10 +24,15 @@ task that task-agent and document-agent can't. Route requests like "build
 me a…", "make a tool/page/app to…", "I need something to help me…", "can
 you create a…" to it.
 
+There is also a "notes-agent" subagent: it reads and writes the family's
+sticky notes — a shared family board and each person's private board. Route
+anything about "the board", "the sticky notes", "the fridge", "our notes", or
+"note that down / add to my notes / jot this down" to it.
+
 To delegate, call the tool named "task" with two arguments: subagent_type set
-to "task-agent", "document-agent", or "builder-agent", and description set to
-what you need done. These are NOT themselves callable tools — calling "task"
-with the right subagent_type is the only way to reach them.
+to "task-agent", "document-agent", "builder-agent", or "notes-agent", and
+description set to what you need done. These are NOT themselves callable tools
+— calling "task" with the right subagent_type is the only way to reach them.
 
 Example — user asks "what documents do I have?": call task with
 subagent_type "document-agent" and description "List all ingested documents
@@ -59,6 +66,12 @@ car registration."
 Example — user asks "build me a tool to split our vacation budget": call
 task with subagent_type "builder-agent" and description "Build a tool to
 split a vacation budget between family members."
+
+Example — user asks "what's on the sticky board?" or "anything on the
+fridge?": call task with subagent_type "notes-agent" and description "List
+the sticky notes." And for "add a sticky note that the plumber comes Friday"
+or "note that down for me": call task with subagent_type "notes-agent" and
+description "Add a sticky note: plumber comes Friday."
 
 Keep replies short and concrete. If a request needs no tool at all (a plain
 question with nothing to look up, like "what can you help with?"), answer
@@ -101,6 +114,17 @@ The first time you read a document, call save_extraction with a category, a
 one-line summary, and any important dates you find (due dates, expirations,
 appointment dates). Confirm what you did in one sentence.`;
 
+const NOTES_AGENT_PROMPT = `You manage the family's sticky notes. There are two
+boards: a "shared" board the whole family sees, and a "private" board for the
+person you're helping right now.
+
+Tools: list_sticky_notes (scope "shared" | "private" | "all"), add_sticky_note
+(scope + text). To answer "what's on the board / the fridge / our notes", call
+list_sticky_notes and report the notes plainly. To pin something, call
+add_sticky_note once — default to the shared board unless the request is
+clearly personal ("my notes", "remind me"), then use private. Confirm what you
+did in one sentence. Never refuse — a sticky note is just a short line of text.`;
+
 const BUILDER_AGENT_PROMPT = `You build small custom web tools for the family.
 When you get a request, call start_build exactly once with a clear one-line
 description of the tool to make (rephrase the user's ask into "Build a tool
@@ -111,6 +135,8 @@ sentence that their tool is being built and will show up in the Tools tab.`;
 export interface FamilyAgentDeps {
   /** Fire-and-forget: kick off generating a tool from this description. */
   startToolBuild?: (description: string) => void;
+  /** Notified of each task / document a subagent retrieves this turn. */
+  onReference?: OnReference;
 }
 
 export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {}) {
@@ -151,7 +177,7 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
           "Handles creating, listing, searching, and completing family to-dos and reminders.",
         systemPrompt: TASK_AGENT_PROMPT,
         model,
-        tools: makeTaskTools(store),
+        tools: makeTaskTools(store, deps.onReference),
       },
       {
         name: "document-agent",
@@ -159,7 +185,7 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
           "Searches the family's documents by keyword, reads one by id, and extracts its category, summary, and important dates.",
         systemPrompt: DOCUMENT_AGENT_PROMPT,
         model,
-        tools: makeDocumentTools(store),
+        tools: makeDocumentTools(store, deps.onReference),
       },
       {
         name: "builder-agent",
@@ -168,6 +194,14 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
         systemPrompt: BUILDER_AGENT_PROMPT,
         model,
         tools: [startBuild],
+      },
+      {
+        name: "notes-agent",
+        description:
+          "Reads and writes the family's sticky notes — a shared family board and the current person's private board.",
+        systemPrompt: NOTES_AGENT_PROMPT,
+        model,
+        tools: makeNoteTools(store),
       },
     ],
   });
@@ -241,4 +275,35 @@ export async function askFamilyAgent(
     lastRefusal ||
     "(the local model didn't return a clean response — try rephrasing, or check /activity for what it attempted)"
   );
+}
+
+// ---- family chat: the @agent mention ----
+
+// True when a chat message is asking the assistant to chime in. Word-boundaried
+// so "email@agent.example" or a sentence ending "…the agent." doesn't trigger.
+const AGENT_MENTION = /(^|[^\w@])@(agent|ai|assistant)\b/i;
+export function mentionsAgent(body: string): boolean {
+  return AGENT_MENTION.test(body ?? "");
+}
+
+/**
+ * The planner chiming into a family channel. Same graph, same retry logic as a
+ * 1:1 chat turn — just wrapped with the recent conversation so the reply is in
+ * context. Runs with the mentioning user's agent (their scoped store), so it
+ * can answer about their tasks / documents / notes.
+ */
+export async function askFamilyAgentInChannel(
+  agent: FamilyAgent,
+  transcript: string,
+  latestMessage: string
+): Promise<string> {
+  const wrapped = `You are one participant in a family group chat. Here is the recent conversation:
+
+${transcript}
+
+The latest message mentioned you (@agent):
+${latestMessage}
+
+Reply as a single chat message — short, friendly, and directly useful. Do not prefix your reply with your name.`;
+  return askFamilyAgent(agent, wrapped);
 }

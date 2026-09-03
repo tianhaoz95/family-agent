@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import app.familyagent.android.ChatMessage
+import app.familyagent.android.data.ChatReference
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
@@ -55,6 +56,7 @@ fun ChatScreen(
     transcribing: Boolean,
     onSend: (String, List<String>) -> Unit,
     onTranscribe: (ByteArray, (String) -> Unit) -> Unit,
+    onReferenceClick: (ChatReference) -> Unit = {},
 ) {
     val context = LocalContext.current
     var input by remember { mutableStateOf("") }
@@ -144,7 +146,7 @@ fun ChatScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 contentPadding = PaddingValues(vertical = 4.dp),
             ) {
-                items(messages) { msg -> ChatBubble(msg) }
+                items(messages) { msg -> ChatBubble(msg, onReferenceClick) }
                 if (sending) {
                     item {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
@@ -282,9 +284,11 @@ private fun createChatPhotoUri(context: Context): Uri {
     return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun ChatBubble(msg: ChatMessage) {
+private fun ChatBubble(msg: ChatMessage, onReferenceClick: (ChatReference) -> Unit = {}) {
     val isUser = msg.role == "user"
+    Column(horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
@@ -337,5 +341,28 @@ private fun ChatBubble(msg: ChatMessage) {
                 }
             }
         }
+    }
+    if (!isUser && msg.references.isNotEmpty()) {
+        Spacer(Modifier.height(6.dp))
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.widthIn(max = 320.dp),
+        ) {
+            msg.references.forEach { ref ->
+                AssistChip(
+                    onClick = { onReferenceClick(ref) },
+                    label = {
+                        Text(
+                            ref.label,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    },
+                )
+            }
+        }
+    }
     }
 }

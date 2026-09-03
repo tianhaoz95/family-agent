@@ -4,13 +4,18 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.familyagent.android.data.ActivityEntry
+import app.familyagent.android.data.Channel
 import app.familyagent.android.data.Document
 import app.familyagent.android.data.FamilyAgentApi
+import app.familyagent.android.data.FamilyMember
+import app.familyagent.android.data.Message
 import app.familyagent.android.data.SettingsStore
+import app.familyagent.android.data.StickyNote
 import app.familyagent.android.data.Task
 import app.familyagent.android.data.Tool
 import app.familyagent.android.data.UnauthorizedException
 import app.familyagent.android.data.User
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,7 +42,20 @@ sealed interface AuthState {
     data class Authenticated(val user: User) : AuthState
 }
 
-data class ChatMessage(val role: String, val text: String, val images: List<String> = emptyList())
+data class ChatMessage(
+    val role: String,
+    val text: String,
+    val images: List<String> = emptyList(),
+    val references: List<app.familyagent.android.data.ChatReference> = emptyList(),
+)
+
+/** What the detail bottom-sheet is currently showing (a referenced item or a doc preview). */
+sealed interface DetailContent {
+    data object Loading : DetailContent
+    data class DocumentDetail(val doc: Document) : DetailContent
+    data class TaskDetail(val task: Task) : DetailContent
+    data class Failed(val message: String) : DetailContent
+}
 
 @Immutable
 data class AppUiState(
@@ -62,7 +80,20 @@ data class AppUiState(
     val taskView: String = "week",
     /** Anchor day for the calendar range (day/3day/week start from it; month uses its month). */
     val calAnchor: LocalDate = LocalDate.now(),
-)
+    // ---- family chat + board ----
+    val familyMembers: List<FamilyMember> = emptyList(),
+    val channels: List<Channel> = emptyList(),
+    val activeChannel: Channel? = null,
+    val channelMessages: List<Message> = emptyList(),
+    val channelSending: Boolean = false,
+    val notes: List<StickyNote> = emptyList(),
+    val noteScope: String = "shared",
+    /** Non-null while the detail bottom-sheet is open. */
+    val detail: DetailContent? = null,
+) {
+    /** Total unread across every conversation — drives the nav badge. */
+    val totalUnread: Int get() = channels.sumOf { it.unreadCount }
+}
 
 class AppViewModel(
     private val api: FamilyAgentApi,
@@ -90,6 +121,7 @@ class AppViewModel(
             if (user != null) {
                 _state.value = _state.value.copy(auth = AuthState.Authenticated(user))
                 refreshStatus()
+                refreshChannels()
             } else {
                 // token gone stale, or server unreachable — go back to login.
                 api.authToken = null
@@ -146,8 +178,11 @@ class AppViewModel(
                     documents = emptyList(),
                     activity = emptyList(),
                     tools = emptyList(),
+                    channels = emptyList(),
+                    familyMembers = emptyList(),
                 )
                 refreshStatus()
+                refreshChannels()
             }.onFailure {
                 _state.value = _state.value.copy(auth = current.copy(error = it.message ?: "Sign-in failed."))
             }
@@ -155,6 +190,8 @@ class AppViewModel(
     }
 
     fun signOut() {
+        channelListJob?.cancel()
+        conversationJob?.cancel()
         viewModelScope.launch {
             api.logout()
             api.authToken = null
@@ -233,13 +270,13 @@ class AppViewModel(
         viewModelScope.launch {
             val withUser = _state.value.chatMessages + ChatMessage("user", message, images)
             _state.value = _state.value.copy(chatMessages = withUser, chatSending = true)
-            val reply = apiCall { api.chat(prompt, images) }
+            val assistant = apiCall { api.chat(prompt, images) }
                 .fold(
-                    onSuccess = { it.reply },
-                    onFailure = { "Error: ${it.message}" },
+                    onSuccess = { ChatMessage("assistant", it.reply, references = it.references) },
+                    onFailure = { ChatMessage("assistant", "Error: ${it.message}") },
                 )
             _state.value = _state.value.copy(
-                chatMessages = withUser + ChatMessage("assistant", reply),
+                chatMessages = withUser + assistant,
                 chatSending = false,
             )
             refreshActivity()
@@ -402,5 +439,166 @@ class AppViewModel(
         viewModelScope.launch {
             apiCall { api.listActivity() }.onSuccess { _state.value = _state.value.copy(activity = it) }
         }
+    }
+
+    // ---- family chat ----
+
+    private var channelListJob: Job? = null
+    private var conversationJob: Job? = null
+
+    /** Poll the channel list (for previews + the unread badge) while signed in. */
+    private fun startChannelListPolling() {
+        if (channelListJob?.isActive == true) return
+        channelListJob = viewModelScope.launch {
+            while (true) {
+                apiCall { api.listChannels() }.onSuccess { list ->
+                    _state.value = _state.value.copy(channels = list)
+                }
+                delay(8000)
+            }
+        }
+    }
+
+    fun refreshChannels() {
+        viewModelScope.launch {
+            apiCall { api.listChannels() }.onSuccess { _state.value = _state.value.copy(channels = it) }
+        }
+        viewModelScope.launch {
+            if (_state.value.familyMembers.isEmpty()) {
+                apiCall { api.listFamilyMembers() }.onSuccess {
+                    _state.value = _state.value.copy(familyMembers = it)
+                }
+            }
+        }
+        startChannelListPolling()
+    }
+
+    fun openChannel(id: String) {
+        conversationJob?.cancel()
+        val known = _state.value.channels.firstOrNull { it.id == id }
+        _state.value = _state.value.copy(activeChannel = known, channelMessages = emptyList())
+        conversationJob = viewModelScope.launch {
+            var lastTs: String? = null
+            // Initial full load.
+            apiCall { api.getChannel(id) }.onSuccess {
+                _state.value = _state.value.copy(activeChannel = it)
+            }
+            while (true) {
+                val fresh = apiCall { api.listMessages(id, lastTs) }.getOrNull()
+                if (fresh != null && fresh.isNotEmpty()) {
+                    val merged = (_state.value.channelMessages + fresh)
+                        .associateBy { it.id }.values
+                        .sortedBy { it.createdAt }
+                    _state.value = _state.value.copy(channelMessages = merged)
+                    lastTs = merged.lastOrNull()?.createdAt
+                    merged.lastOrNull()?.let { api.markChannelRead(id, it.createdAt) }
+                }
+                // A pending assistant reply resolves in place — re-pull the tail.
+                if (_state.value.channelMessages.any { it.pending }) {
+                    apiCall { api.listMessages(id, null) }.getOrNull()?.let { all ->
+                        _state.value = _state.value.copy(channelMessages = all)
+                        lastTs = all.lastOrNull()?.createdAt
+                    }
+                }
+                delay(2500)
+            }
+        }
+    }
+
+    fun closeChannel() {
+        conversationJob?.cancel()
+        conversationJob = null
+        _state.value = _state.value.copy(activeChannel = null, channelMessages = emptyList())
+        refreshChannels()
+    }
+
+    fun startConversation(memberIds: List<String>, name: String?, onOpened: (String) -> Unit) {
+        if (memberIds.isEmpty()) return
+        val kind = if (memberIds.size == 1 && name.isNullOrBlank()) "dm" else "group"
+        viewModelScope.launch {
+            apiCall { api.createChannel(kind, memberIds, name?.takeIf { it.isNotBlank() }) }
+                .onSuccess { ch ->
+                    _state.value = _state.value.copy(channels = listOf(ch) + _state.value.channels.filter { it.id != ch.id })
+                    onOpened(ch.id)
+                }
+        }
+    }
+
+    fun sendChannelMessage(body: String) {
+        val channelId = _state.value.activeChannel?.id ?: return
+        if (body.isBlank()) return
+        val mention = Regex("(^|[^\\w@])@(agent|ai|assistant)\\b", RegexOption.IGNORE_CASE).containsMatchIn(body)
+        viewModelScope.launch {
+            _state.value = _state.value.copy(channelSending = true)
+            apiCall { api.postMessage(channelId, body.trim(), mention) }
+                .onSuccess { msg ->
+                    val merged = (_state.value.channelMessages + msg)
+                        .associateBy { it.id }.values.sortedBy { it.createdAt }
+                    _state.value = _state.value.copy(channelMessages = merged)
+                }
+            _state.value = _state.value.copy(channelSending = false)
+        }
+    }
+
+    // ---- sticky notes ----
+
+    fun refreshNotes(scope: String = _state.value.noteScope) {
+        viewModelScope.launch {
+            apiCall { api.listNotes(scope) }.onSuccess {
+                _state.value = _state.value.copy(notes = it, noteScope = scope)
+            }
+        }
+    }
+
+    fun setNoteScope(scope: String) {
+        _state.value = _state.value.copy(noteScope = scope)
+        refreshNotes(scope)
+    }
+
+    fun addNote(text: String, color: String) {
+        if (text.isBlank()) return
+        viewModelScope.launch {
+            apiCall { api.createNote(_state.value.noteScope, text.trim(), color) }.onSuccess { refreshNotes() }
+        }
+    }
+
+    fun editNote(id: String, text: String?, color: String?) {
+        viewModelScope.launch {
+            apiCall { api.updateNote(id, text, color) }.onSuccess { refreshNotes() }
+        }
+    }
+
+    fun deleteNote(id: String) {
+        viewModelScope.launch {
+            apiCall { api.deleteNote(id) }.onSuccess { refreshNotes() }
+        }
+    }
+
+    // ---- detail bottom-sheet (referenced items + document preview) ----
+
+    fun openDocumentDetail(id: String) {
+        _state.value = _state.value.copy(detail = DetailContent.Loading)
+        viewModelScope.launch {
+            apiCall { api.getDocument(id) }
+                .onSuccess { _state.value = _state.value.copy(detail = DetailContent.DocumentDetail(it)) }
+                .onFailure { _state.value = _state.value.copy(detail = DetailContent.Failed(it.message ?: "Not found")) }
+        }
+    }
+
+    fun openTaskDetail(id: String) {
+        _state.value = _state.value.copy(detail = DetailContent.Loading)
+        viewModelScope.launch {
+            apiCall { api.getTask(id) }
+                .onSuccess { _state.value = _state.value.copy(detail = DetailContent.TaskDetail(it)) }
+                .onFailure { _state.value = _state.value.copy(detail = DetailContent.Failed(it.message ?: "Not found")) }
+        }
+    }
+
+    fun openReferenceDetail(ref: app.familyagent.android.data.ChatReference) {
+        if (ref.type == "task") openTaskDetail(ref.id) else openDocumentDetail(ref.id)
+    }
+
+    fun closeDetail() {
+        _state.value = _state.value.copy(detail = null)
     }
 }

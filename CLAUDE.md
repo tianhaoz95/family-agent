@@ -17,7 +17,11 @@ one-time setup, then creates a local account per family member. Every account ha
 isolated tasks, documents, activity, chat, tools, and watched folder. Clients authenticate
 with username + password and carry a bearer token on every request; `agent-core` binds
 `0.0.0.0` and advertises itself on the LAN over mDNS (`_familyagent._tcp`) so the Android app
-can discover it. Content *sharing* between accounts is not built yet — see `docs/STATUS.md`.
+can discover it. Cross-account features (added later): **family chat** — 1:1 DMs
+and Slack-style group channels, with `@agent` pulling the planner into a
+conversation — and a **shared sticky-note board** alongside each person's private
+board. Everything else (tasks/"Events", documents, tools, activity) stays
+per-account. See `docs/STATUS.md` and `docs/DECISIONS.md` → "Cross-account chat".
 
 The **desktop** app follows `DESIGN.md` at the repo root (the "Notion — warm paper notebook"
 system: `#f6f5f4` canvas, single `#0075de` blue accent, hairline-border / no-shadow cards, Inter
@@ -51,6 +55,10 @@ Easiest path — launcher scripts that do their own readiness checks:
 ```bash
 ./scripts/start-desktop.sh   # checks Ollama/model, launches the Tauri app
 ./scripts/start-android.sh   # detects/boots an emulator, builds, installs, launches the app
+./scripts/show-accounts.sh   # prints local accounts (username/role) from the SQLite store —
+                              # for a forgotten admin username
+./scripts/reset-password.sh <username> [password]   # resets an account's password (locked-out admin).
+                                                     # See docs/STATUS.md "Recovering a locked-out admin".
                               # (set FAMILY_AGENT_EMULATOR_HEADLESS=1 for a headless boot)
 ```
 
@@ -170,8 +178,10 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   rebuilds the agent + extraction model clients in `server.ts` and, via the `onModelChange`
   callback, restarts the inbox watcher with a fresh client — a langchain `ChatOllama` binds its
   URL and model at construction, so hot-patching isn't possible.
-- `agents/index.ts` — the deepagents planner (`buildFamilyAgent`) plus its two subagents,
-  `task-agent` and `document-agent`. Notable non-obvious things in this file:
+- `agents/index.ts` — the deepagents planner (`buildFamilyAgent`) plus its subagents
+  `task-agent`, `document-agent`, `builder-agent`, `notes-agent`, and the
+  `askFamilyAgent` / `askFamilyAgentInChannel` / `mentionsAgent` helpers. Notable
+  non-obvious things in this file:
   - deepagents bakes in generic `ls`/`read_file`/`write_file` tools for its own scratch
     filesystem; these are explicitly permission-denied and stripped down to just `read_file` via
     `createFilesystemMiddleware`, because small local models reliably confuse "documents" (this
@@ -212,7 +222,10 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   `@fastify/multipart`-backed route), and the inbox watcher above. All three end up at
   `store.createDocument()` + `extractDocument()`.
 - `config.ts` — every config value has an env var override; nothing else in the codebase should
-  read `process.env` directly.
+  read `process.env` directly. `dataDir` defaults to `$XDG_DATA_HOME/family-agent`
+  (`~/.local/share/family-agent`), **not** the repo tree — override with
+  `FAMILY_AGENT_DATA_DIR`. The SQLite DB, per-user inbox folders, `settings.json`,
+  and cached OCR/ASR models all live under it.
 
 **desktop** (`desktop/`): `src/` is plain TS/HTML/CSS (no framework) built with Vite;
 `src-tauri/` is the Rust shell. `main.rs` spawns `agent-core`'s built `dist/server.js` as a child
@@ -241,9 +254,37 @@ picker (`GetContent`) or camera capture (`TakePicture` + a `FileProvider` — se
 into `FamilyAgentApi.uploadDocument()`, an OkHttp `MultipartBody` POST to the same
 `/documents/upload` route the desktop upload UI uses.
 
+## Cross-account: chat + shared board
+
+The first data that isn't per-account. Both added narrowly rather than by loosening
+`ScopedStore` (full reasoning in `docs/DECISIONS.md`):
+
+- **Chat** — `channels` / `channel_members` / `messages` tables on the base `Store`
+  (not `ScopedStore`). Every read method takes the requesting user id and returns
+  nothing when they aren't in `channel_members`. `findOrCreateDm` is idempotent per
+  unordered pair; groups have a name. Routes: `GET/POST /channels`, `GET
+  /channels/:id`, `GET/POST /channels/:id/messages`, `POST /channels/:id/members`,
+  `POST /channels/:id/read`, `GET /family/members` (any authed user, name + username
+  only — *not* the admin `/users`). `@agent`/`@ai` in a message (`mentionsAgent()`)
+  → `askFamilyAgentInChannel()` runs the mentioner's planner and
+  `resolvePendingAgentMessage()` fills in the `_agent_` placeholder row. Clients
+  poll. Desktop: `#view-messages` in `main.ts`. Android: `Destination.Messages` +
+  nested `conversation/{id}` route, `MessagesScreen.kt`, poll loop in `AppViewModel`.
+- **Sticky board** — `sticky_notes` on `ScopedStore`: `scope='private'` is
+  `AND user_id = ?`, `scope='shared'` is open to every member (author tracked in
+  `user_id`). Routes `GET/POST /notes`, `PATCH/DELETE /notes/:id`. Subagent
+  `notes-agent` (`agents/noteTools.ts`: `list_sticky_notes`, `add_sticky_note`).
+  Desktop `#view-board`; Android `Destination.Board` / `BoardScreen.kt`.
+- **Chat references** — the retrieval tools take an optional `onReference` hook
+  (`agents/references.ts`); `server.ts` collects per `/chat` turn and returns
+  `references: [{type,id,label}]`. Clients open the item in a side panel (desktop)
+  / bottom sheet (Android), also reused by the document Preview button. `GET
+  /tasks/:id` and `GET /documents/:id` back it.
+
 ## Scope notes
 
-Three subagents ship: `task-agent`, `document-agent`, and `builder-agent`. The last one
+Four subagents ship: `task-agent`, `document-agent`, `builder-agent`, and
+`notes-agent`. `builder-agent`
 generates small self-contained web tools (`agent-core/src/tools/*`, and a "Tools" screen in
 both apps) — see `docs/STATUS.md` for the architecture. Static tools are plain inline HTML
 served with a strict CSP from a dedicated port (default 4174); a tool that needs shared state

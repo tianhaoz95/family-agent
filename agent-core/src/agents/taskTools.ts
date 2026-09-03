@@ -1,14 +1,17 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { ScopedStore } from "../db.js";
+import type { OnReference } from "./references.js";
 
 // Bound to one user's ScopedStore — the planner builds a fresh agent per
 // authenticated user (see agents/index.ts), so these tools only ever touch
-// that user's tasks.
-export function makeTaskTools(store: ScopedStore) {
+// that user's tasks. `onReference` (when given) is notified of each task this
+// turn touched, so /chat can return clickable references.
+export function makeTaskTools(store: ScopedStore, onReference?: OnReference) {
   const createTask = tool(
     async ({ title, notes, dueDate, dueTime }) => {
       const rec = store.createTask({ title, notes, dueDate, dueTime });
+      onReference?.({ type: "task", id: rec.id });
       const when = rec.dueDate ? ` (due ${rec.dueDate}${rec.dueTime ? ` ${rec.dueTime}` : ""})` : "";
       return `Created task ${rec.id}: "${rec.title}"${when}.`;
     },
@@ -61,6 +64,7 @@ export function makeTaskTools(store: ScopedStore) {
         `Searched tasks for "${label}" — ${hits.length} match${hits.length === 1 ? "" : "es"}`
       );
       if (hits.length === 0) return query?.trim() ? `No tasks matched "${query}".` : "No tasks found.";
+      for (const h of hits) onReference?.({ type: "task", id: h.id });
       return hits
         .map((t) => {
           const when = t.dueDate ? ` (due ${t.dueDate}${t.dueTime ? ` ${t.dueTime}` : ""})` : "";
@@ -83,6 +87,7 @@ export function makeTaskTools(store: ScopedStore) {
     async ({ taskId }) => {
       const updated = store.updateTaskStatus(taskId, "done");
       if (!updated) return `No task found with id ${taskId}.`;
+      onReference?.({ type: "task", id: updated.id });
       return `Marked "${updated.title}" as done.`;
     },
     {

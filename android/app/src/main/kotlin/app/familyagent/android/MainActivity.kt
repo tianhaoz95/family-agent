@@ -22,6 +22,8 @@ import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Settings
@@ -48,10 +50,14 @@ import app.familyagent.android.data.FamilyAgentApi
 import app.familyagent.android.data.ServerDiscovery
 import app.familyagent.android.data.SettingsStore
 import app.familyagent.android.ui.ActivityScreen
+import app.familyagent.android.ui.BoardScreen
 import app.familyagent.android.ui.ChatScreen
+import app.familyagent.android.ui.DetailSheet
+import app.familyagent.android.ui.ConversationScreen
 import app.familyagent.android.ui.DiscoveryScreen
 import app.familyagent.android.ui.DocumentsScreen
 import app.familyagent.android.ui.LoginScreen
+import app.familyagent.android.ui.MessagesScreen
 import app.familyagent.android.ui.SettingsScreen
 import app.familyagent.android.ui.StatusDot
 import app.familyagent.android.ui.TasksScreen
@@ -63,7 +69,9 @@ import kotlinx.coroutines.launch
 
 private enum class Destination(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     Chat("chat", "Chat", Icons.AutoMirrored.Rounded.Chat),
-    Tasks("tasks", "Tasks", Icons.Rounded.CheckCircle),
+    Messages("messages", "Messages", Icons.Rounded.Forum),
+    Events("tasks", "Events", Icons.Rounded.CheckCircle),
+    Board("board", "Board", Icons.Rounded.GridView),
     Documents("documents", "Documents", Icons.Rounded.Description),
     Tools("tools", "Tools", Icons.Rounded.Build),
     Activity("activity", "Activity", Icons.Rounded.History),
@@ -71,6 +79,7 @@ private enum class Destination(val route: String, val label: String, val icon: a
 }
 
 private const val TOOL_VIEW_ROUTE = "toolview/{url}"
+private const val CONVERSATION_ROUTE = "conversation/{id}"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -140,7 +149,9 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
             restoreState = true
         }
         when (dest) {
-            Destination.Tasks -> viewModel.refreshTasks()
+            Destination.Events -> viewModel.refreshTasks()
+            Destination.Messages -> viewModel.refreshChannels()
+            Destination.Board -> viewModel.refreshNotes()
             Destination.Documents -> viewModel.refreshDocuments()
             Destination.Tools -> viewModel.refreshTools()
             Destination.Activity -> viewModel.refreshActivity()
@@ -156,6 +167,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
             AppDrawer(
                 current = currentDestination,
                 connection = state.connection,
+                unread = state.totalUnread,
                 onSelect = { dest ->
                     scope.launch { drawerState.close() }
                     val alreadyHere = currentDestination?.hierarchy?.any { it.route == dest.route } == true
@@ -185,9 +197,53 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         transcribing = state.chatTranscribing,
                         onSend = viewModel::sendChat,
                         onTranscribe = viewModel::transcribeVoice,
+                        onReferenceClick = viewModel::openReferenceDetail,
                     )
                 }
-                composable(Destination.Tasks.route) {
+                composable(Destination.Messages.route) {
+                    MessagesScreen(
+                        channels = state.channels,
+                        familyMembers = state.familyMembers,
+                        currentUserId = (state.auth as? AuthState.Authenticated)?.user?.id ?: "",
+                        onOpenChannel = { id -> navController.navigate("conversation/$id") },
+                        onStartConversation = { memberIds, name ->
+                            viewModel.startConversation(memberIds, name) { id ->
+                                navController.navigate("conversation/$id")
+                            }
+                        },
+                        onRefresh = viewModel::refreshChannels,
+                    )
+                }
+                composable(CONVERSATION_ROUTE) { entry ->
+                    val id = entry.arguments?.getString("id") ?: ""
+                    DisposableEffect(id) {
+                        viewModel.openChannel(id)
+                        onDispose { viewModel.closeChannel() }
+                    }
+                    ConversationScreen(
+                        channel = state.activeChannel,
+                        messages = state.channelMessages,
+                        sending = state.channelSending,
+                        currentUserId = (state.auth as? AuthState.Authenticated)?.user?.id ?: "",
+                        onSend = viewModel::sendChannelMessage,
+                        onBack = {
+                            viewModel.closeChannel()
+                            navController.popBackStack()
+                        },
+                    )
+                }
+                composable(Destination.Board.route) {
+                    BoardScreen(
+                        notes = state.notes,
+                        scope = state.noteScope,
+                        onScope = viewModel::setNoteScope,
+                        onAdd = viewModel::addNote,
+                        onEdit = viewModel::editNote,
+                        onDelete = viewModel::deleteNote,
+                        onRefresh = { viewModel.refreshNotes() },
+                    )
+                }
+                composable(Destination.Events.route) {
                     TasksScreen(
                         tasks = state.tasks,
                         taskView = state.taskView,
@@ -208,6 +264,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onUpload = viewModel::uploadDocument,
                         onDelete = viewModel::deleteDocument,
                         onRetry = viewModel::retryExtraction,
+                        onPreview = viewModel::openDocumentDetail,
                     )
                 }
                 composable(Destination.Tools.route) {
@@ -239,6 +296,10 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                 }
             }
         }
+    }
+
+    state.detail?.let { detail ->
+        DetailSheet(content = detail, onDismiss = viewModel::closeDetail)
     }
 }
 
@@ -307,6 +368,7 @@ private fun AppTopBar(onMenuClick: () -> Unit) {
 private fun AppDrawer(
     current: NavDestination?,
     connection: ConnectionStatus,
+    unread: Int,
     onSelect: (Destination) -> Unit,
 ) {
     ModalDrawerSheet(
@@ -341,6 +403,11 @@ private fun AppDrawer(
                             dest.label,
                             style = MaterialTheme.typography.titleSmall,
                         )
+                    },
+                    badge = {
+                        if (dest == Destination.Messages && unread > 0) {
+                            Badge { Text(if (unread > 99) "99+" else unread.toString()) }
+                        }
                     },
                     icon = { Icon(dest.icon, contentDescription = null, modifier = Modifier.size(22.dp)) },
                     selected = selected,

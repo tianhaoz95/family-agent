@@ -96,12 +96,77 @@ export interface TaskSearchHit {
   snippet: string;
 }
 
+/** A family member as shown in the chat / mention pickers (GET /family/members). */
+export interface FamilyMember {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
+export interface ChannelMember {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
+export interface ChannelLastMessage {
+  senderId: string;
+  body: string;
+  createdAt: string;
+  pending: boolean;
+}
+
+export interface Channel {
+  id: string;
+  kind: "dm" | "group";
+  name: string | null;
+  createdBy: string;
+  createdAt: string;
+  members: ChannelMember[];
+  /** Display title: group name, or the other member(s) for a DM. */
+  title: string;
+  lastMessage: ChannelLastMessage | null;
+  unreadCount: number;
+}
+
+export interface Message {
+  id: string;
+  channelId: string;
+  /** A user id, or "_agent_" for the assistant. */
+  senderId: string;
+  body: string;
+  pending: boolean;
+  createdAt: string;
+}
+
+/** senderId of an assistant message (mirrors AGENT_SENDER_ID server-side). */
+export const AGENT_SENDER_ID = "_agent_";
+
+export type NoteScope = "shared" | "private";
+
+export interface StickyNote {
+  id: string;
+  scope: NoteScope;
+  userId: string;
+  text: string;
+  color: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ActivityEntry {
   id: string;
   ts: string;
   actor: string;
   action: string;
   detail: string;
+}
+
+/** A task/document the assistant looked up while answering — rendered as a clickable chip. */
+export interface ChatReference {
+  type: "document" | "task";
+  id: string;
+  label: string;
 }
 
 export interface Tool {
@@ -244,7 +309,7 @@ export const api = {
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(patch) }),
   listOllamaModels: () => request<{ models: string[]; reachable: boolean }>("/ollama/models"),
   chat: (message: string, images: string[] = [], signal?: AbortSignal) =>
-    request<{ reply: string }>("/chat", {
+    request<{ reply: string; references?: ChatReference[] }>("/chat", {
       method: "POST",
       body: JSON.stringify(images.length ? { message, images } : { message }),
       signal,
@@ -252,6 +317,8 @@ export const api = {
   /** Transcribe a recorded voice clip (16 kHz mono WAV) for the chat composer. */
   transcribe: (wav: Blob) => upload<{ text: string }>("/transcribe", wav, "audio", "voice.wav"),
   listTasks: () => request<{ tasks: Task[] }>("/tasks"),
+  getTask: (id: string) => request<{ task: Task }>(`/tasks/${id}`),
+  getDocument: (id: string) => request<{ document: Document }>(`/documents/${id}`),
   /** Keyword search over task titles and notes, ranked, optionally filtered by status. */
   searchTasks: (query: string, opts: { status?: "open" | "done"; limit?: number } = {}) => {
     const p = new URLSearchParams({ q: query });
@@ -288,6 +355,32 @@ export const api = {
   retryExtraction: (id: string) =>
     request<{ document: Document }>(`/documents/${id}/retry-extraction`, { method: "POST" }),
   listActivity: () => request<{ activity: ActivityEntry[] }>("/activity"),
+
+  // ---- family chat ----
+  listFamilyMembers: () => request<{ members: FamilyMember[] }>("/family/members"),
+  listChannels: () => request<{ channels: Channel[] }>("/channels"),
+  createChannel: (body: { kind: "dm" | "group"; memberIds: string[]; name?: string }) =>
+    request<{ channel: Channel }>("/channels", { method: "POST", body: JSON.stringify(body) }),
+  getChannel: (id: string) => request<{ channel: Channel }>(`/channels/${id}`),
+  listMessages: (id: string, after?: string) => {
+    const q = after ? `?after=${encodeURIComponent(after)}` : "";
+    return request<{ messages: Message[] }>(`/channels/${id}/messages${q}`);
+  },
+  postMessage: (id: string, body: string, mentionAgent = false) =>
+    request<{ message: Message }>(`/channels/${id}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ body, mentionAgent }),
+    }),
+  markChannelRead: (id: string, ts: string) =>
+    request<{ ok: true }>(`/channels/${id}/read`, { method: "POST", body: JSON.stringify({ ts }) }),
+
+  // ---- sticky notes ----
+  listNotes: (scope: NoteScope) => request<{ notes: StickyNote[] }>(`/notes?scope=${scope}`),
+  createNote: (scope: NoteScope, text: string, color?: string) =>
+    request<{ note: StickyNote }>("/notes", { method: "POST", body: JSON.stringify({ scope, text, color }) }),
+  updateNote: (id: string, patch: { text?: string; color?: string }) =>
+    request<{ note: StickyNote }>(`/notes/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteNote: (id: string) => request<{ note: StickyNote }>(`/notes/${id}`, { method: "DELETE" }),
   listTools: () => request<{ tools: Tool[] }>("/tools"),
   buildTool: (prompt: string) =>
     request<{ building: true; prompt: string }>("/tools", { method: "POST", body: JSON.stringify({ prompt }) }),

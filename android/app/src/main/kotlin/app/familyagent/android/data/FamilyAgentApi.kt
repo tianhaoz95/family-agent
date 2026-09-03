@@ -120,6 +120,11 @@ class FamilyAgentApi(
 
     suspend fun listTasks(): List<Task> = json.decodeFromString<TasksResponse>(get("/tasks")).tasks
 
+    suspend fun getTask(id: String): Task = json.decodeFromString<TaskResponse>(get("/tasks/$id")).task
+
+    suspend fun getDocument(id: String): Document =
+        json.decodeFromString<DocumentResponse>(get("/documents/$id")).document
+
     suspend fun createTask(title: String, dueDate: String?, dueTime: String? = null): Task =
         json.decodeFromString<TaskResponse>(
             send("POST", "/tasks", json.encodeToString(CreateTaskRequest(title, dueDate, dueTime)))
@@ -175,6 +180,53 @@ class FamilyAgentApi(
         json.decodeFromString<DocumentResponse>(sendNoBody("POST", "/documents/$id/retry-extraction")).document
 
     suspend fun listActivity(): List<ActivityEntry> = json.decodeFromString<ActivityResponse>(get("/activity")).activity
+
+    // ---- family chat ----
+    suspend fun listFamilyMembers(): List<FamilyMember> =
+        json.decodeFromString<FamilyMembersResponse>(get("/family/members")).members
+
+    suspend fun listChannels(): List<Channel> =
+        json.decodeFromString<ChannelsResponse>(get("/channels")).channels
+
+    suspend fun createChannel(kind: String, memberIds: List<String>, name: String?): Channel =
+        json.decodeFromString<ChannelResponse>(
+            send("POST", "/channels", json.encodeToString(CreateChannelRequest(kind, memberIds, name)))
+        ).channel
+
+    suspend fun getChannel(id: String): Channel =
+        json.decodeFromString<ChannelResponse>(get("/channels/$id")).channel
+
+    suspend fun listMessages(id: String, after: String? = null): List<Message> {
+        val q = if (after != null) "?after=${after.encodeQuery()}" else ""
+        return json.decodeFromString<MessagesResponse>(get("/channels/$id/messages$q")).messages
+    }
+
+    suspend fun postMessage(id: String, body: String, mentionAgent: Boolean): Message =
+        json.decodeFromString<MessageResponse>(
+            send("POST", "/channels/$id/messages", json.encodeToString(PostMessageRequest(body, mentionAgent)))
+        ).message
+
+    suspend fun markChannelRead(id: String, ts: String) {
+        runCatching { send("POST", "/channels/$id/read", json.encodeToString(MarkReadRequest(ts))) }
+    }
+
+    // ---- sticky notes ----
+    suspend fun listNotes(scope: String): List<StickyNote> =
+        json.decodeFromString<NotesResponse>(get("/notes?scope=${scope.encodeQuery()}")).notes
+
+    suspend fun createNote(scope: String, text: String, color: String?): StickyNote =
+        json.decodeFromString<NoteResponse>(
+            send("POST", "/notes", json.encodeToString(CreateNoteRequest(scope, text, color)))
+        ).note
+
+    suspend fun updateNote(id: String, text: String?, color: String?): StickyNote =
+        json.decodeFromString<NoteResponse>(
+            send("PATCH", "/notes/$id", json.encodeToString(UpdateNoteRequest(text, color)))
+        ).note
+
+    suspend fun deleteNote(id: String) {
+        sendNoBody("DELETE", "/notes/$id")
+    }
 
     suspend fun listTools(): List<Tool> = json.decodeFromString<ToolsResponse>(get("/tools")).tools
 

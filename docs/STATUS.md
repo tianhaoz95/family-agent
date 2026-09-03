@@ -122,6 +122,33 @@ npm test    # from repo root: runs agent-core (128 fast tests + live-model integ
 cd android && ./gradlew testDebugUnitTest   # 17 tests, no device needed
 ```
 
+## Recovering a locked-out admin
+
+There is no password-reset flow — the app is fully local (no email/SMS) and
+`POST /auth/bootstrap` refuses to run once any account exists. Recovery is
+manual, against the SQLite store (default
+`~/.local/share/family-agent/family-agent.db`, or `FAMILY_AGENT_DATA_DIR`, or
+the legacy in-repo `agent-core/data/`):
+
+- **Forgot the username:** `./scripts/show-accounts.sh` prints every account's
+  username, display name, and role (admins first). Passwords are scrypt hashes
+  and are never printed.
+- **Forgot the password:** with a *second* admin, reset it from the desktop
+  **Family** screen. Otherwise, stop the app and run:
+  ```bash
+  ./scripts/reset-password.sh <username>              # sets + prints a random password
+  ./scripts/reset-password.sh <username> <password>   # or set a specific one (>= 6 chars)
+  ```
+  It writes a fresh hash via agent-core's own `hashPassword()` (no build/tsx
+  needed — Node strips the TS types) and signs out that account's other
+  sessions.
+- **Last resort** (single-household, merges everyone's data into one new
+  admin): `UPDATE tasks/documents/activity/tools SET user_id='_legacy_';
+  DELETE FROM users; DELETE FROM sessions;` then re-run first-time setup —
+  `bootstrap` reassigns the `_legacy_` rows to the new admin.
+
+A proper `agent-core` reset command is a worthwhile follow-up.
+
 ## Reproducing the toolchain
 
 `.toolchains/` (JDK 17, Android SDK, a bootstrap Gradle) is gitignored and
@@ -316,3 +343,44 @@ Later changes (not part of the original autonomous session):
   - **Not yet**: no search box in either client UI — that needs a design pass
     against the two independent design systems and live-app verification. The
     client API methods are in place; wiring a UI is the remaining step.
+- **"Tasks" is now "Events"** in both apps — a UI-label rename only. Routes,
+  the `tasks` table, `task-agent`, and its tools are unchanged (see
+  `docs/DECISIONS.md` → "Tasks renamed to Events").
+- **Family chat + shared sticky board — the first cross-account features.**
+  This is the "content sharing between accounts" that earlier entries listed
+  as not-built, done for two surfaces:
+  - **Chat**: 1:1 DMs and named Slack-style group channels. New tables
+    (`channels`, `channel_members`, `messages`) on the base `Store`, all reads
+    membership-checked by the requesting user id. Routes: `GET/POST /channels`,
+    `GET /channels/:id`, `GET/POST /channels/:id/messages`, `POST
+    /channels/:id/{members,read}`, plus `GET /family/members` (any user, name +
+    username only). `@agent` / `@ai` in a message runs the mentioning user's
+    planner and posts the reply in-channel as a `_agent_` participant; a
+    `pending` placeholder message is filled in when the model returns. Delivery
+    is short-interval polling (consistent with the rest of the app).
+  - **Sticky board**: one shared family board + a per-user private board.
+    `sticky_notes` on `ScopedStore` (private scoped by `user_id`, shared open
+    to every member). Routes `GET/POST /notes`, `PATCH/DELETE /notes/:id`. A
+    new `notes-agent` subagent (`list_sticky_notes`, `add_sticky_note`) lets
+    the planner read the board and pin notes on request. v1 is a card grid,
+    not a drag-position corkboard.
+  - Clients: desktop gets **Messages** + **Board** nav items and views;
+    Android gets `Destination.Messages` (+ a nested `conversation/{id}` route)
+    and `Destination.Board`, with an unread badge on the drawer item.
+  - **Not yet**: no per-message references in channels; no @-mention of a
+    specific person (only `@agent`); no push/notification when the app is
+    closed (poll only while open).
+- **Chat replies show clickable references.** When the assistant used a task
+  or document, `/chat` returns `references: [{type, id, label}]` (collected via
+  an `onReference` hook on the retrieval tools). Desktop renders them as chips
+  under the reply that open the item in a **right-hand side panel**; Android
+  renders `AssistChip`s that open a **bottom sheet**. The same panel/sheet
+  backs a new **Preview** button on each document. `GET /tasks/:id` and `GET
+  /documents/:id` were added for it.
+- **Small UX changes**: desktop document upload auto-starts on file pick (the
+  separate Upload button is gone); the desktop **Sign out** button moved from
+  the sidebar to Settings → Your account (Android already had it in Settings).
+- **Default data dir moved** from `agent-core/data/` to
+  `~/.local/share/family-agent` (`$XDG_DATA_HOME/family-agent`), still
+  `FAMILY_AGENT_DATA_DIR`-overridable. A dev box re-runs setup against the new
+  dir, or points the env var back. See `docs/DECISIONS.md`.

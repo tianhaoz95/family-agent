@@ -654,3 +654,88 @@ after it and each subagent has its own system prompt; those tails still
 prefill on first use, but they're small next to the base prompt and the
 model itself is already resident by then. Warming all four prompts would
 just thrash a single KV slot at startup for no real gain.
+
+## "Tasks" renamed to "Events" in the UI only
+
+The user asked for the "Tasks" feature to read "Events" everywhere in the two
+apps. The rename is **UI-label-only**: nav items, headings, placeholders and
+empty-state copy changed; the HTTP routes (`/tasks`, `/tasks/:id`,
+`/tasks/search`), the `tasks` table, the `task-agent` subagent, and its tools
+(`create_task`, `list_tasks`, …) are all unchanged. Small local models are
+sensitive to prompt wording — `task-agent`'s system prompt and the
+integration tests are tuned on the word "task", and re-tuning + re-running the
+slow live-model suite to swap a user-facing label wasn't worth the risk.
+`Destination.Events` in the Android nav keeps `route = "tasks"` for the same
+reason (saved navigation state, deep-link stability).
+
+## Cross-account chat and the shared sticky board: the first shared data
+
+Until now `ScopedStore` (`WHERE user_id = ?`) was an absolute isolation
+boundary and `docs/STATUS.md` listed "content sharing between accounts" as
+not built. Family chat (DMs + Slack-style group channels) and the shared
+sticky-note board are inherently cross-account, so they're the first
+exceptions — added narrowly rather than by loosening `ScopedStore`:
+
+- **Chat lives on the base `Store`, not `ScopedStore`.** `channels`,
+  `channel_members`, `messages`. Every read method takes the *requesting*
+  user id and returns nothing when they aren't in `channel_members`
+  (`getChannelForUser`, `listMessages`, …) — a missed check surfaces as
+  "empty", the same failure-mode principle `ScopedStore` documents. DMs are
+  idempotent: `findOrCreateDm` canonicalises on the unordered pair.
+- **The sticky board stays on `ScopedStore`.** A `private` note is scoped
+  like everything else (`AND user_id = ?`); a `shared` note is readable and
+  editable by any member, with `user_id` recording only the author. This
+  kept `noteTools` / the routes identical in shape to the task/document ones.
+- **`@agent` in a channel runs the mentioning user's planner**
+  (`agentFor(userId)` → their `ScopedStore`), so it can answer about that
+  person's tasks/documents/notes. Its reply is posted as a distinct
+  participant (`sender_id = '_agent_'`, no `users` row, never a member). A
+  placeholder `pending` message is inserted immediately and filled in when
+  the model returns; clients poll for it. `askFamilyAgentInChannel` wraps the
+  recent transcript around the message and reuses `askFamilyAgent`'s retry
+  logic — no new graph.
+
+## Polling, not SSE/WebSockets, for chat and the board
+
+Every live-updating surface in this app already polls — document extraction,
+tool builds, the connection-status pill. Chat and the shared board do the
+same: clients poll `GET /channels/:id/messages?after=<ts>` (~2.5s while a
+conversation is open) and `GET /channels` (~8s, for the unread badge). It's a
+family LAN with a handful of people; an SSE stream would add per-connection
+lifecycle, auth, and reconnection handling in three codebases to shave a
+couple of seconds off a message that's already there. Not worth it here.
+
+## Sticky board is a card grid, not a free-position corkboard
+
+"Sticky note board" suggests draggable notes on a canvas. A grid of
+coloured cards captures the feature; free x/y positioning kept in sync across
+a vanilla-JS `<ul>` and a Compose `LazyVerticalGrid` is a lot of surface for
+little value. `x`/`y` columns can be added later via `COLUMN_MIGRATIONS` if a
+corkboard turns out to matter.
+
+## Chat replies carry clickable references
+
+When the assistant answers using a task or document, the reply now lists
+those items as chips that open the item in a side panel (desktop) or a
+bottom sheet (Android). Rather than parse ids out of the model's prose, the
+retrieval tools (`search_documents`, `get_document`, `search_tasks`,
+`complete_task`, `create_task`) call an optional `onReference` hook with each
+id they touch. `server.ts` sets a fresh per-user collector array before each
+`/chat` turn, reads it back after, resolves ids to `{type, id, label}` via
+the request's `ScopedStore` (deduped, capped at 8), and returns them
+alongside `reply`. `list_*` tools deliberately don't hint — they'd attach the
+whole table. In-channel `@agent` replies don't carry references (a channel
+message is plain text; not worth the schema).
+
+## Default data directory moved under $HOME
+
+`config.dataDir` defaulted to `agent-core/data/` inside the repo. It now
+defaults to `$XDG_DATA_HOME/family-agent` (`~/.local/share/family-agent`),
+still overridable with `FAMILY_AGENT_DATA_DIR`. The store (SQLite DB, inbox
+folders, settings.json, cached models, generated tools) is real user data and
+shouldn't live in the install/checkout tree — a `git clean` or a reinstall
+would wipe it, and it risked being committed. A dev box with an old
+`agent-core/data/` just re-runs the setup wizard against the fresh directory
+(or points the env var back at the old path). The settings-file route tests
+now redirect `config.dataDir` to a temp dir so a test run can't touch a real
+local store.
