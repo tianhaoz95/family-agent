@@ -192,6 +192,7 @@ toolsMaybe("family agent → tools-agent (live model + Deno)", () => {
   let store: ScopedStore;
   let inject: ReturnType<typeof authInject>;
   let toolDir = "";
+  let toolId = "";
 
   const OPS = `export const operations = [
     {
@@ -227,6 +228,7 @@ toolsMaybe("family agent → tools-agent (live model + Deno)", () => {
       kind: "server",
     });
     store.setToolStatus(t.id, "ready");
+    toolId = t.id;
     toolDir = join(toolsDir(), t.id);
     mkdirSync(join(toolDir, "data"), { recursive: true });
     writeFileSync(join(toolDir, "server.ts"), HARNESS);
@@ -259,6 +261,14 @@ toolsMaybe("family agent → tools-agent (live model + Deno)", () => {
       });
       expect(save.statusCode).toBe(200);
 
+      // The write should have gone through the tool's own backend.
+      const rows = await inject({ method: "GET", url: `/tools/${toolId}/db/rows?table=items` });
+      expect(rows.statusCode).toBe(200);
+      expect(
+        rows.json().rows.some((r: Record<string, string>) => /passport/i.test(r.name) && /safe/i.test(r.location)),
+        `expected the agent to have saved the passport row, got ${JSON.stringify(rows.json().rows)}`,
+      ).toBe(true);
+
       const ask = await inject({
         method: "POST",
         url: "/chat",
@@ -266,9 +276,15 @@ toolsMaybe("family agent → tools-agent (live model + Deno)", () => {
       });
       expect(ask.statusCode).toBe(200);
       const reply = (ask.json().reply as string).toLowerCase();
-      expect(reply).toMatch(/bedroom safe|safe/);
+      expect(reply).toMatch(/safe/);
       expect(ask.json().references?.some((r: { type: string }) => r.type === "tool")).toBe(true);
     },
     600000,
   );
+
+  // The "improve an existing tool" chat path (planner → builder-agent →
+  // improve_tool → startToolIterate → iterateTool) was verified by hand against
+  // gemma4:26b and is exercised mechanically in test/toolBuilder.test.ts. A
+  // live end-to-end assertion here is deliberately omitted: it's a 3-hop
+  // delegation whose reliability is a model-quality question, not a code one.
 });

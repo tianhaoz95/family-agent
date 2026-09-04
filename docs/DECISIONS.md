@@ -1091,6 +1091,16 @@ shows, without opening it.
   inventory / log / catalog / "where is…" prompt now gets a backend (and thus
   an agent API), not just an explicitly "shared" one. Falls back to a static
   tool when Deno isn't installed rather than failing the build.
+- **A planning pass decides the API before codegen (`planTool` / `PLAN_SYSTEM`).**
+  The keyword heuristic misses cases — "a random recipe picker" has no storage
+  word but obviously wants `add_recipe` / `list_recipes` / `random_recipe`. So a
+  fresh build (and a static→server upgrade) first asks the model for
+  `{ needsBackend, operations: [{name, summary, access}] }`; that decides
+  server-vs-static and `generateOperations` then *implements exactly* the
+  planned list (names + read/write split fixed, model fills schemas + `run`).
+  The heuristic is the fallback when the plan call fails/doesn't parse.
+  `OPERATIONS_SYSTEM` also gained a full recipe-box worked example and an
+  explicit "a tool with no add op is a dead end" rule.
 - Not done: MCP **resources** (reads are all `tools/call` for now), Streamable
   HTTP transport + auth for external clients, Android surfacing of a tool's
   operations. `docs/STATUS.md` has the shipped scope.
@@ -1101,3 +1111,93 @@ shows, without opening it.
   (`/tools/:id/operations`); `test/agents.integration.test.ts` (a live
   `gemma4:26b` turn: "record X" then "where is X" → tool call → answer + tool
   reference — gated on the model being reachable and Deno present).
+
+## Improvable tools (iterate / revert / self-repair)
+
+Generated tools were one-shot: a wrong or incomplete tool could only be deleted
+and rebuilt from scratch, losing its `tool.db`. Now `iterateTool` improves one
+in place.
+
+- **The model gets its own prior output.** `operations.ts` + `index.html` + the
+  live SQLite schema (`PRAGMA`-derived) + the change asked for → regenerate the
+  affected file(s). The prompt (`ITERATE_RULES`) demands the smallest edit, the
+  complete file back (not a diff), and **additive-only** schema changes
+  (`ALTER TABLE ADD COLUMN` in try/catch, new `CREATE TABLE IF NOT EXISTS` —
+  never a drop/rename, never deleting rows). `data/tool.db` is never touched by
+  an improve.
+- **The working tool stays up until the new one passes.** A server improve
+  generates into `<toolDir>/.next/`, which `ToolSupervisor.smokeTest` boots on a
+  scratch port and exercises: `tools/list` must return the operations, and
+  every *read* operation is actually called (synth args from its schema) — a
+  bad table name / typo'd method only shows up when a `run()` executes, and the
+  harness now surfaces an `operations.ts` load error via `/__manifest` instead
+  of silently falling back. `deno check` (lenient config, since `deno run`
+  never type-checks and the generated code is deliberately untyped) is an
+  advisory signal feeding the repair prompt. Only on a green smoke test are the
+  files swapped over the live ones and the backend restarted.
+- **The smoke test runs against a copy of the real data.** For an improve,
+  `<toolDir>/data/tool.db` (+ WAL) is copied into `.next/data/` before each
+  attempt, so the read-op calls execute against the *actual old schema*. That's
+  what catches a **migration bug** — the classic one being an operation that
+  `SELECT`s a new column but only `ALTER`s it in on the write path, which
+  crashes on the existing database but not on an empty one. The prompt tells
+  the model to put a guarded `ALTER TABLE ADD COLUMN` (try/catch) at the top of
+  *every* `run()` that touches the table; if it forgets, the smoke test's
+  `no such column` triggers the repair pass, and an unfixable one keeps the old
+  version. Migrations are best-effort (no DDL engine — SQLite can't
+  transactional-DDL its way out of this and a family tool doesn't need one),
+  but *automatic*: the user never sees or writes a migration.
+- **Self-repair.** A failed check/boot triggers one repair pass — the broken
+  file + the error handed back to the model — before giving up. A fresh build
+  that still won't run falls back to no operations (frontend works, note says
+  the assistant can't use it). An *improve* that still won't run throws: the
+  live version is untouched, `revision_state` records why (shown as a warning;
+  the tool keeps working).
+- **One-level revert, data-aware.** Before an improve swaps files in, the
+  previous `operations.ts` / `index.html` / `server.ts` / `mcp.json`, a
+  `meta.json` (name, description), **and a copy of `tool.db`** go to
+  `<toolDir>/prev/`. `revertTool` always restores the code; it restores the
+  *data* copy only when it detects the improve actually **dropped** a table or
+  column (`readSchema` diff of the live db vs. the snapshot) — for an ordinary
+  additive change the current data is fine with the old code and anything added
+  since the improve is kept. `toolHasPreviousVersion` drives the desktop "Undo
+  last change" button. Full history was judged overkill for a family app.
+- **Schema on `tools`:** `revision_count`, `revision_state` (null / "revising" /
+  last-error string), `updated_at`. A "revising" state left by a crash is reset
+  to an error on startup — the tool's files were never touched so it still works.
+- **`iterateTool` on a `failed` tool** rebuilds from the original prompt + the
+  instruction (there's no working version to protect), going through the normal
+  `building → ready/failed` status flow rather than the revision flow.
+- **Static → server upgrade.** A display-only (static) tool becomes a server
+  tool with a backend + agent-callable operations when the improve asks to
+  *save / manage the user's own entries* (`improveWantsBackend` — broader than
+  the fresh-build `wantsBackend`). This is what makes "let me add my own
+  recipes to the recipe randomiser" work rather than needing a rebuild. If the
+  model then produces no operations (the change didn't actually need storage),
+  `iterateTool` downgrades it back to static — the model is the judge. Revert
+  un-upgrades cleanly (drops `operations.ts` / `server.ts` / `mcp.json`, keeps
+  the old `index.html`).
+- **The agent sees every tool, not just callable ones.** `familyToolCatalog`
+  now returns static / operation-less tools too, marked "display-only".
+  `tools-agent` is told: if such a tool is the obvious match for a request,
+  don't say it doesn't exist and don't build a duplicate — say it can be
+  improved, and the planner then routes the same request to `builder-agent`.
+  Fixes the "I couldn't find a Recipe Randomizer tool… want me to build one?"
+  dead-end.
+- **Routing:** `builder-agent` gained `list_tools` + `improve_tool` (resolve the
+  tool by name, hand off to `iterateTool`); the planner routes "add … to the …
+  tool", "the … tool is broken", "fix the …", and a tools-agent "display-only"
+  bounce to it. `tools-agent` logs a `tool.error` activity line whenever an
+  operation call fails, so a recurring bug is visible.
+- **Not done** (from the brainstorm): direct code editing in the UI (the user
+  ruled it out — non-technical family members), full version history, spec-first
+  tools, a richer initial build form.
+- Tests: `test/toolBuilder.test.ts` (a fake model drives build / improve /
+  revert / self-repair / broken-improve-keeps-working / failed-tool-rebuild /
+  **migration-bug-caught-and-repaired** / **unfixable-migration-keeps-data** /
+  **revert-restores-dropped-data**; Deno-gated) + `ToolSupervisor.smokeTest`/
+  `denoCheck`; `test/server.routes.test.ts` (`/tools/:id/iterate` validation +
+  409, `/tools/:id/revert` round-trip, `toolView` fields); live `gemma4:26b`
+  end-to-end verified by hand (build a borrow log / item tracker, improve to add
+  a field via chat, the model wrote guarded ALTERs in every op, data preserved,
+  revert).

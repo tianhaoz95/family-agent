@@ -13,6 +13,8 @@ export interface FamilyToolEntry {
   id: string;
   name: string;
   description: string;
+  kind: "static" | "server";
+  /** Empty for a display-only (static) tool, or a server tool with no operations. */
   operations: ToolOperation[];
 }
 
@@ -41,10 +43,13 @@ function paramList(schema: JsonSchema | undefined): string {
 
 function renderCatalog(catalog: FamilyToolEntry[]): string {
   if (catalog.length === 0) {
-    return "The family hasn't built any tools with operations the assistant can use.";
+    return "The family hasn't built any tools yet.";
   }
   return catalog
     .map((t) => {
+      if (t.operations.length === 0) {
+        return `- ${t.name}: ${t.description}\n    (display-only — nothing the assistant can run. If the user wants it to do something, ask to have it improved.)`;
+      }
       const ops = t.operations
         .map((o) => `    • ${o.name} [${o.access}] — ${o.description}\n      params: ${paramList(o.inputSchema)}`)
         .join("\n");
@@ -78,13 +83,21 @@ export function makeFamilyToolTools(deps: FamilyToolDeps) {
       const catalog = deps.getCatalog();
       const entry = resolveTool(catalog, toolName);
       if (!entry) {
-        return `No family tool matches "${toolName}". Call list_family_tools to see the exact names.`;
+        const names = catalog.map((t) => t.name).join(", ");
+        return names
+          ? `No family tool matches "${toolName}". The tools are: ${names}. Use one of those exact names.`
+          : `The family hasn't built any tools yet.`;
+      }
+      if (entry.operations.length === 0) {
+        return `The "${entry.name}" tool is display-only — it has nothing to run. It does NOT exist as a duplicate to build; to make it able to ${
+          operation ? `"${operation}"` : "do that"
+        }, tell the user it needs to be improved (builder-agent can add that capability to the existing tool).`;
       }
       const op = entry.operations.find((o) => o.name === operation);
       if (!op) {
         return `The "${entry.name}" tool has no operation "${operation}". It has: ${entry.operations
           .map((o) => o.name)
-          .join(", ")}.`;
+          .join(", ")}. If none of those fit, the existing tool can be improved to add one — don't build a new tool.`;
       }
 
       const check = validateInput(op.inputSchema, input ?? {});
@@ -98,13 +111,22 @@ export function makeFamilyToolTools(deps: FamilyToolDeps) {
       deps.onReference?.({ type: "tool", id: entry.id });
 
       if (!result.ok) {
-        return `The "${entry.name}" tool couldn't run ${operation}: ${result.error}`;
+        // Surface a failing operation in the activity log — repeated entries are
+        // the signal that the tool needs fixing (builder-agent's improve_tool).
+        deps.logActivity("tools-agent", "tool.error", `${entry.name} · ${operation} failed: ${result.error}`);
+        return `The "${entry.name}" tool couldn't run ${operation}: ${result.error}. It may need fixing — the user can ask to have it improved.`;
       }
       if (op.access === "write") {
+        // A plain-language activity line — "Loan Tracker: added drill, borrower Nate".
+        const fields = Object.entries(check.value)
+          .filter(([, v]) => v !== undefined && v !== null && v !== "")
+          .map(([k, v]) => `${k} ${typeof v === "string" ? v : JSON.stringify(v)}`)
+          .join(", ");
+        const verb = op.description || operation.replace(/_/g, " ");
         deps.logActivity(
           "tools-agent",
           "tool.invoked",
-          `Ran ${entry.name} · ${operation}(${JSON.stringify(check.value)})`,
+          `${entry.name}: ${verb}${fields ? ` — ${fields}` : ""}`,
         );
       }
       const body = typeof result.value === "string" ? result.value : JSON.stringify(result.value);

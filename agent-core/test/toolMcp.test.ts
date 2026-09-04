@@ -75,6 +75,7 @@ describe("makeFamilyToolTools", () => {
       id: "TRACKER01",
       name: "Item Tracker",
       description: "where the family's stuff lives",
+      kind: "server",
       operations: [
         {
           name: "find_item",
@@ -93,6 +94,13 @@ describe("makeFamilyToolTools", () => {
           },
         },
       ],
+    },
+    {
+      id: "RECIPES01",
+      name: "Recipe Randomizer",
+      description: "picks a random dinner",
+      kind: "static",
+      operations: [],
     },
   ];
 
@@ -134,7 +142,9 @@ describe("makeFamilyToolTools", () => {
     await callTool.invoke({ tool: "Item Tracker", operation: "find_item", input: { query: "x" } });
     expect(activity).toEqual([]);
     await callTool.invoke({ tool: "Item Tracker", operation: "save_item", input: { name: "tent", location: "shed" } });
-    expect(activity.join(" ")).toMatch(/tool\.invoked Ran Item Tracker · save_item/);
+    // A plain-language line, no snake_case or JSON — see makeFamilyToolTools.
+    expect(activity.join(" ")).toMatch(/tool\.invoked Item Tracker: .*name tent, location shed/);
+    expect(activity.join(" ")).not.toMatch(/save_item|\{/);
   });
 
   it("rejects a bad operation name and bad input before calling", async () => {
@@ -146,9 +156,35 @@ describe("makeFamilyToolTools", () => {
     expect(calls).toEqual([]);
   });
 
-  it("surfaces an unknown tool", async () => {
+  it("surfaces an unknown tool with the real tool names", async () => {
     const { callTool } = setup({ ok: true });
-    expect(await callTool.invoke({ tool: "Budget App", operation: "x", input: {} })).toMatch(/No family tool matches/);
+    const out = (await callTool.invoke({ tool: "Budget App", operation: "x", input: {} })) as string;
+    expect(out).toMatch(/No family tool matches/);
+    expect(out).toMatch(/Item Tracker/);
+    expect(out).toMatch(/Recipe Randomizer/);
+  });
+
+  it("list_family_tools shows a display-only tool, not omits it", async () => {
+    const { listTool } = setup({ ok: true });
+    const out = (await listTool.invoke({})) as string;
+    expect(out).toMatch(/Recipe Randomizer/);
+    expect(out).toMatch(/display-only/);
+  });
+
+  it("call_family_tool on a display-only tool points to improving it, not 'no tool'", async () => {
+    const { callTool, calls } = setup({ ok: true });
+    const out = (await callTool.invoke({ tool: "Recipe Randomizer", operation: "add_recipe", input: {} })) as string;
+    expect(out).toMatch(/display-only/i);
+    expect(out).toMatch(/improved|builder-agent/i);
+    expect(out).not.toMatch(/no family tool matches/i);
+    expect(calls).toEqual([]);
+  });
+
+  it("call_family_tool on a real tool missing the operation suggests improving it", async () => {
+    const { callTool } = setup({ ok: true });
+    const out = (await callTool.invoke({ tool: "Item Tracker", operation: "export_csv", input: {} })) as string;
+    expect(out).toMatch(/no operation "export_csv"/);
+    expect(out).toMatch(/improved|don't build a new tool/i);
   });
 });
 

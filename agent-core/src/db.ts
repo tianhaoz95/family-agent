@@ -220,6 +220,12 @@ export interface ToolRecord {
   /** Failure detail when status === "failed". */
   error: string | null;
   createdAt: string;
+  /** Last successful build or improve; null for a tool from before this column. */
+  updatedAt: string | null;
+  /** How many times the tool has been improved since its first build. */
+  revisionCount: number;
+  /** null = idle; "revising" = an improve is running; else = why the last improve failed. */
+  revisionState: string | null;
 }
 
 // ---- family chat ----
@@ -351,7 +357,12 @@ CREATE TABLE IF NOT EXISTS tools (
   kind TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'building',
   error TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  updated_at TEXT,
+  revision_count INTEGER NOT NULL DEFAULT 0,
+  -- null = idle; 'revising' = an improve is running; any other string = the
+  -- reason the last improve failed (shown as a warning, tool still works).
+  revision_state TEXT
 );
 
 CREATE TABLE IF NOT EXISTS channels (
@@ -439,6 +450,11 @@ const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   { table: "documents", column: "user_id", ddl: `ALTER TABLE documents ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}'` },
   { table: "activity", column: "user_id", ddl: `ALTER TABLE activity ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}'` },
   { table: "tools", column: "user_id", ddl: `ALTER TABLE tools ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}'` },
+  // Iterable tools: a tool can be improved after its first build. These track
+  // how many times, when last, and whether an improve is in flight / last failed.
+  { table: "tools", column: "updated_at", ddl: "ALTER TABLE tools ADD COLUMN updated_at TEXT" },
+  { table: "tools", column: "revision_count", ddl: "ALTER TABLE tools ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 0" },
+  { table: "tools", column: "revision_state", ddl: "ALTER TABLE tools ADD COLUMN revision_state TEXT" },
   // Multimodal family chat: a message can carry image attachments (JSON array
   // of data URIs), the same way the 1:1 chat composer does.
   { table: "messages", column: "images", ddl: "ALTER TABLE messages ADD COLUMN images TEXT" },
@@ -1140,7 +1156,15 @@ export class Store {
   // A build that was still "building" when the process died will never finish.
   failStaleBuildingTools(): number {
     const info = this.db
-      .prepare("UPDATE tools SET status = 'failed', error = 'interrupted' WHERE status = 'building'")
+      .prepare("UPDATE tools SET status = 'failed', error = 'The build was interrupted — try again.' WHERE status = 'building'")
+      .run();
+    // An improve that was mid-flight at shutdown: the tool's live files are
+    // untouched (staging is separate), so it still works — just surface that
+    // the change didn't land.
+    this.db
+      .prepare(
+        "UPDATE tools SET revision_state = 'The last change was interrupted — try again.' WHERE revision_state = 'revising'"
+      )
       .run();
     return Number(info.changes ?? 0);
   }
@@ -1387,7 +1411,7 @@ export class ScopedStore {
     this.logActivity(
       "document-agent",
       "document.ingested",
-      rec.sourcePath ? `Ingested "${rec.filename}" from watched folder` : `Ingested "${rec.filename}"`
+      rec.sourcePath ? `Added "${rec.filename}" from the watched folder` : `Added "${rec.filename}"`
     );
     return rec;
   }
@@ -1787,6 +1811,9 @@ export class ScopedStore {
       status: "building",
       error: null,
       createdAt: new Date().toISOString(),
+      updatedAt: null,
+      revisionCount: 0,
+      revisionState: null,
     };
     this.db
       .prepare(
@@ -1799,8 +1826,8 @@ export class ScopedStore {
 
   renameTool(id: string, name: string, description: string, kind: ToolKind): ToolRecord | undefined {
     this.db
-      .prepare("UPDATE tools SET name = ?, description = ?, kind = ? WHERE id = ? AND user_id = ?")
-      .run(name, description, kind, id, this.userId);
+      .prepare("UPDATE tools SET name = ?, description = ?, kind = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(name, description, kind, new Date().toISOString(), id, this.userId);
     return this.getTool(id);
   }
 
@@ -1815,6 +1842,47 @@ export class ScopedStore {
       this.logActivity("builder-agent", "tool.failed", `Could not build "${tool.name}": ${error ?? "unknown error"}`);
     }
     return tool;
+  }
+
+  /** Mark an improve as in flight (the tool keeps working meanwhile). */
+  beginToolRevision(id: string): ToolRecord | undefined {
+    this.db
+      .prepare("UPDATE tools SET revision_state = 'revising' WHERE id = ? AND user_id = ?")
+      .run(id, this.userId);
+    const tool = this.getTool(id);
+    if (tool) this.logActivity("builder-agent", "tool.revising", `Improving tool "${tool.name}"`);
+    return tool;
+  }
+
+  /** Finish an improve — success bumps the revision count and clears the flag;
+   *  failure records the reason (shown as a warning; the tool still works). */
+  finishToolRevision(
+    id: string,
+    outcome: { ok: true } | { ok: false; error: string }
+  ): ToolRecord | undefined {
+    if (outcome.ok) {
+      this.db
+        .prepare(
+          "UPDATE tools SET revision_state = NULL, revision_count = revision_count + 1, updated_at = ? WHERE id = ? AND user_id = ?"
+        )
+        .run(new Date().toISOString(), id, this.userId);
+      const tool = this.getTool(id);
+      if (tool) this.logActivity("builder-agent", "tool.revised", `Improved tool "${tool.name}"`);
+      return tool;
+    }
+    this.db
+      .prepare("UPDATE tools SET revision_state = ? WHERE id = ? AND user_id = ?")
+      .run(outcome.error.slice(0, 300), id, this.userId);
+    const tool = this.getTool(id);
+    if (tool) this.logActivity("builder-agent", "tool.revise_failed", `Could not improve "${tool.name}": ${outcome.error}`);
+    return tool;
+  }
+
+  /** Clear a stale/failed revision_state (e.g. before a retry, or on revert). */
+  clearToolRevisionState(id: string): void {
+    this.db
+      .prepare("UPDATE tools SET revision_state = NULL WHERE id = ? AND user_id = ?")
+      .run(id, this.userId);
   }
 
   getTool(id: string): ToolRecord | undefined {
@@ -1840,7 +1908,7 @@ export class ScopedStore {
   failStaleBuildingTools(): number {
     const info = this.db
       .prepare(
-        "UPDATE tools SET status = 'failed', error = 'interrupted' WHERE status = 'building' AND user_id = ?"
+        "UPDATE tools SET status = 'failed', error = 'The build was interrupted — try again.' WHERE status = 'building' AND user_id = ?"
       )
       .run(this.userId);
     return Number(info.changes ?? 0);
@@ -2071,5 +2139,8 @@ function rowToTool_(r: any): ToolRecord {
     status: (r.status as ToolStatus) ?? "failed",
     error: r.error ?? null,
     createdAt: r.created_at,
+    updatedAt: r.updated_at ?? null,
+    revisionCount: Number(r.revision_count ?? 0),
+    revisionState: r.revision_state ?? null,
   };
 }

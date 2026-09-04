@@ -338,11 +338,13 @@ The first data that isn't per-account. Both added narrowly rather than by loosen
 Five subagents ship: `task-agent`, `document-agent`, `builder-agent`,
 `notes-agent`, and `tools-agent`. `builder-agent`
 generates small self-contained web tools (`agent-core/src/tools/*`, and a "Tools" screen in
-both apps) — see `docs/STATUS.md` for the architecture. Static tools are plain inline HTML
-served with a strict CSP from a dedicated port (default 4174); a tool that needs a backend
-gets a Deno process in a deny-by-default sandbox (`ToolSupervisor`), with the model only ever
-writing `operations.ts` (`[{ name, description, access, inputSchema, run }]` — older tools
-have a `handler.ts` instead, still supported). That backend's harness
+both apps) — see `docs/STATUS.md` for the architecture. A build starts with a **plan pass**
+(`planTool` / `PLAN_SYSTEM`): the model decides `{ needsBackend, operations }` for the ask
+(keyword `wantsBackend` is the fallback). Static tools are plain inline HTML served with a
+strict CSP from a dedicated port (default 4174); a tool that needs a backend gets a Deno
+process in a deny-by-default sandbox (`ToolSupervisor`), with the model only ever writing
+`operations.ts` — implementing the planned operation list (`[{ name, description, access,
+inputSchema, run }]`; older tools have a `handler.ts` instead, still supported). That backend's harness
 (`agent-core/src/tools/harness.ts`, our code) opens one private SQLite database per tool at
 `<dataDir>/tools/<id>/data/tool.db` via `node:sqlite` — isolated because `--allow-write` is
 scoped to that tool's `data/` dir and ATTACH is disabled; `run(input, ctx)` gets the raw `db`
@@ -351,6 +353,14 @@ table. From the one `operations` array the harness serves an **MCP server** (`PO
 JSON-RPC 2.0) that `tools-agent` calls via `agent-core/src/tools/toolMcp.ts`, plain REST
 (`/api/<name>`) for the tool's own frontend, and `GET /__manifest`. `FAMILY_AGENT_TOOLS=0`
 disables the whole feature.
+
+Tools are **improved in place**, not rebuilt: `iterateTool` (builder.ts) feeds the model its
+own prior `operations.ts`/`index.html` + the change; a server improve is generated into
+`<toolDir>/.next/`, `ToolSupervisor.smokeTest`'d (boot + `tools/list` + every read op called)
+with one self-repair pass, and only swapped over the live files on success — the previous
+version goes to `<toolDir>/prev/` for a one-step `revertTool`. `data/tool.db` is never touched
+by an improve; schema changes must be additive. `tools` table carries `revision_count` /
+`revision_state` / `updated_at`. See `docs/DECISIONS.md` → "Improvable tools".
 
 Still not implemented from the brainstormed architecture: the compute mesh, Tailscale
 transport, and the bundled managed-model runtime. Full reasoning for every scope cut is in

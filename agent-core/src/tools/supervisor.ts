@@ -1,8 +1,73 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config, toolsDir } from "../config.js";
+
+// Lenient tsconfig for `deno check` on a generated tool. server.ts is our own
+// typed code; operations.ts / handler.ts are model-written and deliberately
+// untyped (and `deno run` never type-checks anyway). This just wants real
+// breakage — bad syntax, missing local imports, wrong API shape — not
+// implicit-any noise.
+const TOOLCHECK_CONFIG = JSON.stringify({
+  compilerOptions: {
+    strict: false,
+    noImplicitAny: false,
+    strictNullChecks: false,
+    checkJs: false,
+    lib: ["deno.window"],
+  },
+});
+
+// A tool result whose error text looks like a code defect (vs. a legit
+// "not found" / validation message).
+const CODE_BUG = /is not a function|no such (table|column)|syntax error|is not defined|cannot read (property|properties)|undefined is not|referenceerror|typeerror/i;
+
+/** Minimal args for a read-operation smoke call, from its JSON Schema. */
+function synthArgs(schema: any): Record<string, unknown> {
+  const props = (schema && schema.properties) || {};
+  const out: Record<string, unknown> = {};
+  for (const [k, s] of Object.entries<any>(props)) {
+    const t = s && s.type;
+    out[k] = s && Array.isArray(s.enum) && s.enum.length ? s.enum[0]
+      : t === "number" || t === "integer" ? 1
+      : t === "boolean" ? false
+      : t === "array" ? []
+      : t === "object" ? {}
+      : "x";
+  }
+  return out;
+}
+
+let toolcheckConfigPath: string | null = null;
+function ensureToolcheckConfig(): string {
+  if (toolcheckConfigPath && existsSync(toolcheckConfigPath)) return toolcheckConfigPath;
+  const p = join(tmpdir(), "family-agent-toolcheck.json");
+  try {
+    writeFileSync(p, TOOLCHECK_CONFIG);
+    toolcheckConfigPath = p;
+  } catch {
+    // fall back to a config-less check
+  }
+  return toolcheckConfigPath ?? "";
+}
+
+// The Deno sandbox flags. Shared by a real backend, a staged one under test,
+// and the type-check, so all three run under identical restrictions.
+function sandboxRunArgs(dir: string, port: number): string[] {
+  return [
+    "run",
+    "--no-prompt",
+    "--deny-import",
+    `--allow-net=127.0.0.1:${port}`,
+    `--allow-read=${dir}`,
+    `--allow-write=${join(dir, "data")}`,
+    "--v8-flags=--max-old-space-size=128",
+    join(dir, "server.ts"),
+    String(port),
+  ];
+}
 
 // Resolve the deno binary once: env override > repo-local toolchain > PATH.
 export function resolveDenoPath(): string | null {
@@ -68,27 +133,16 @@ export class ToolSupervisor {
     return !!r && r.proc.exitCode === null && !r.proc.killed;
   }
 
-  async start(id: string): Promise<number> {
-    const dir = join(toolsDir(), id);
-    if (!existsSync(join(dir, "server.ts"))) throw new Error("tool has no server.ts");
+  /** Spawn a backend for `dir` on `port` and resolve once it prints TOOL_READY. */
+  private spawnBackend(
+    dir: string,
+    port: number
+  ): { proc: ChildProcessWithoutNullStreams; ready: Promise<number> } {
     const deno = resolveDenoPath() ?? "deno";
-    const port = await freePort();
-
-    const proc = spawn(
-      deno,
-      [
-        "run",
-        "--no-prompt",
-        "--deny-import",
-        `--allow-net=127.0.0.1:${port}`,
-        `--allow-read=${dir}`,
-        `--allow-write=${join(dir, "data")}`,
-        "--v8-flags=--max-old-space-size=128",
-        join(dir, "server.ts"),
-        String(port),
-      ],
-      { cwd: dir, stdio: ["pipe", "pipe", "pipe"] },
-    ) as ChildProcessWithoutNullStreams;
+    const proc = spawn(deno, sandboxRunArgs(dir, port), {
+      cwd: dir,
+      stdio: ["pipe", "pipe", "pipe"],
+    }) as ChildProcessWithoutNullStreams;
 
     const ready = new Promise<number>((resolve, reject) => {
       const to = setTimeout(() => reject(new Error("tool backend did not start within 15s")), 15_000);
@@ -114,6 +168,14 @@ export class ToolSupervisor {
         reject(e);
       });
     });
+    return { proc, ready };
+  }
+
+  async start(id: string): Promise<number> {
+    const dir = join(toolsDir(), id);
+    if (!existsSync(join(dir, "server.ts"))) throw new Error("tool has no server.ts");
+    const port = await freePort();
+    const { proc, ready } = this.spawnBackend(dir, port);
 
     try {
       const realPort = await ready;
@@ -126,6 +188,109 @@ export class ToolSupervisor {
       proc.kill("SIGKILL");
       throw e;
     }
+  }
+
+  /**
+   * Boot an arbitrary (staged) tool directory, confirm it comes up and answers
+   * `tools/list`, then kill it. Used to verify a generated / improved backend
+   * before it replaces the live one — a bad build never takes a working tool
+   * offline. Never registered in `running`.
+   */
+  async smokeTest(dir: string): Promise<{ ok: boolean; error?: string; operations?: string[] }> {
+    if (!existsSync(join(dir, "server.ts"))) return { ok: false, error: "no server.ts" };
+    let port: number;
+    try {
+      port = await freePort();
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    const { proc, ready } = this.spawnBackend(dir, port);
+    try {
+      const realPort = await ready;
+      // The manifest carries any operations.ts load error — a broken file boots
+      // fine (frontend still works) but reports here rather than silently.
+      const manifest = (await (
+        await fetch(`http://127.0.0.1:${realPort}/__manifest`, { signal: AbortSignal.timeout(8_000) })
+      ).json()) as { operations?: { name: string }[]; error?: string | null; hadOperationsFile?: boolean };
+      if (manifest.error) {
+        return { ok: false, error: `operations.ts failed to load: ${manifest.error}` };
+      }
+      const names = (manifest.operations ?? []).map((t) => t.name);
+      if (manifest.hadOperationsFile && names.length === 0) {
+        return { ok: false, error: "operations.ts loaded but defines no operations" };
+      }
+      // tools/list must also work (it's what the agent calls).
+      const list = (await (
+        await fetch(`http://127.0.0.1:${realPort}/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+          signal: AbortSignal.timeout(8_000),
+        })
+      ).json()) as {
+        result?: { tools?: { name: string; inputSchema?: any; annotations?: { readOnlyHint?: boolean } }[] };
+        error?: unknown;
+      };
+      if (list.error) return { ok: false, error: `tools/list failed: ${JSON.stringify(list.error)}` };
+
+      // Actually call each read operation with synthesized args — a bad table
+      // name / typo'd method only shows up when a run() executes. Writes are
+      // left alone (can't safely test a side effect).
+      for (const t of list.result?.tools ?? []) {
+        if (t.annotations?.readOnlyHint === false) continue;
+        const args = synthArgs(t.inputSchema);
+        const call = (await (
+          await fetch(`http://127.0.0.1:${realPort}/mcp`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: t.name, arguments: args } }),
+            signal: AbortSignal.timeout(8_000),
+          })
+        ).json()) as { result?: { isError?: boolean; content?: { text?: string }[] } };
+        const msg = call.result?.content?.[0]?.text ?? "";
+        if (call.result?.isError && CODE_BUG.test(msg)) {
+          return { ok: false, error: `${t.name}: ${msg}` };
+        }
+      }
+      return { ok: true, operations: names };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      proc.stdin.end();
+      proc.kill("SIGKILL");
+    }
+  }
+
+  /**
+   * `deno check` the staged code under the same lenient config the runtime
+   * uses (the generated `operations.ts` is deliberately untyped). Returns the
+   * compiler's diagnostics on failure so a repair pass can act on them. Advisory
+   * only — `deno run` doesn't type-check, so `smokeTest` is the real gate.
+   */
+  async denoCheck(dir: string): Promise<{ ok: boolean; output: string }> {
+    const deno = resolveDenoPath() ?? "deno";
+    const configPath = ensureToolcheckConfig();
+    const args = ["check", "--no-remote", "--quiet"];
+    if (configPath) args.push("--config", configPath);
+    args.push(join(dir, "server.ts"));
+    return new Promise((resolve) => {
+      const proc = spawn(deno, args, { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      proc.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      proc.stderr.on("data", (d: Buffer) => (out += d.toString()));
+      const to = setTimeout(() => {
+        proc.kill("SIGKILL");
+        resolve({ ok: true, output: "" }); // don't block a build on a slow check
+      }, 20_000);
+      proc.on("exit", (code) => {
+        clearTimeout(to);
+        resolve({ ok: code === 0, output: out.slice(0, 1500) });
+      });
+      proc.on("error", () => {
+        clearTimeout(to);
+        resolve({ ok: true, output: "" });
+      });
+    });
   }
 
   stop(id: string): void {

@@ -42,7 +42,7 @@ import { listOllamaModels, ollamaListHasModel } from "./ollamaOcr.js";
 import { toolsDir } from "./config.js";
 import { ToolSupervisor } from "./tools/supervisor.js";
 import { startToolsServer } from "./tools/server.js";
-import { buildTool } from "./tools/builder.js";
+import { buildTool, iterateTool, revertTool, toolHasPreviousVersion } from "./tools/builder.js";
 import * as dbInspect from "./tools/dbInspect.js";
 import { readManifestCache, refreshManifest, callOperation } from "./tools/toolMcp.js";
 import type { FamilyToolEntry } from "./agents/toolTools.js";
@@ -164,17 +164,41 @@ export function buildServer(
       .catch((e) => console.error("tool build crashed:", e));
   };
 
-  // This user's ready server tools that expose an MCP operation list — read
-  // fresh from the on-disk cache each time so a rebuilt/added/removed tool is
-  // reflected without reconstructing the planner graph.
+  const startToolIterate = (userId: string, toolId: string, instruction: string) => {
+    if (!config.toolsEnabled) return;
+    void iterateTool(extractionModel, store.scoped(userId), supervisor, toolId, instruction)
+      .then(() => agents.delete(userId))
+      .catch((e) => console.error("tool improve crashed:", e));
+  };
+
+  // Name + status of this user's tools, for builder-agent to resolve "the X tool".
+  const toolsBrief = (userId: string) =>
+    store.scoped(userId).listTools().map((t) => ({
+      id: t.id,
+      name: t.name,
+      kind: t.kind,
+      status: t.status,
+      revisionState: t.revisionState,
+    }));
+
+  // Every ready tool this user has, with its callable operations (empty for a
+  // static / display-only tool). tools-agent needs to *see* those too so it can
+  // tell the user a tool exists but can't do X yet — rather than "no such tool"
+  // and offering to build a duplicate. Read fresh each call so an added /
+  // rebuilt / removed tool shows up without reconstructing the planner graph.
   const familyToolCatalog = (userId: string): FamilyToolEntry[] => {
     if (!config.toolsEnabled) return [];
     const out: FamilyToolEntry[] = [];
     for (const t of store.scoped(userId).listTools()) {
-      if (t.kind !== "server" || t.status !== "ready") continue;
-      const manifest = readManifestCache(t.id);
-      if (!manifest || manifest.operations.length === 0) continue;
-      out.push({ id: t.id, name: t.name, description: t.description, operations: manifest.operations });
+      if (t.status !== "ready") continue;
+      const manifest = t.kind === "server" ? readManifestCache(t.id) : null;
+      out.push({
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        kind: t.kind,
+        operations: manifest?.operations ?? [],
+      });
     }
     return out;
   };
@@ -191,6 +215,8 @@ export function buildServer(
     if (!a) {
       a = buildFamilyAgent(store.scoped(userId), {
         startToolBuild: (p) => startToolBuild(userId, p),
+        startToolIterate: (toolId, instruction) => startToolIterate(userId, toolId, instruction),
+        listTools: () => toolsBrief(userId),
         onReference: (ref) => chatRefs.get(userId)?.push(ref),
         getEmbedder: () => embedder,
         familyTools: config.toolsEnabled
@@ -910,6 +936,11 @@ export function buildServer(
       status: t.status,
       error: t.error,
       createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      revisionCount: t.revisionCount,
+      // null = idle · "revising" = an improve is running · else = why the last improve failed
+      revisionState: t.revisionState,
+      canRevert: toolHasPreviousVersion(t.id),
       path: t.status === "ready" ? `/${t.id}/` : null,
     };
 
@@ -949,6 +980,30 @@ export function buildServer(
     // manifest and busts the planner cache when it finishes.
     startToolBuild(req.authUser.id, prompt);
     return reply.code(202).send({ building: true, prompt });
+  });
+
+  const IterateToolBody = z.object({ instruction: z.string().min(3).max(600) });
+  app.post("/tools/:id/iterate", async (req, reply) => {
+    if (!config.toolsEnabled) return reply.code(403).send({ error: "Tool building is disabled." });
+    const { id } = req.params as { id: string };
+    const tool = req.userStore.getTool(id);
+    if (!tool) return reply.code(404).send({ error: "tool not found" });
+    if (tool.revisionState === "revising") return reply.code(409).send({ error: "This tool is already being improved." });
+    const parsed = IterateToolBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    startToolIterate(req.authUser.id, id, parsed.data.instruction);
+    return reply.code(202).send({ improving: true, instruction: parsed.data.instruction });
+  });
+
+  app.post("/tools/:id/revert", async (req, reply) => {
+    if (!config.toolsEnabled) return reply.code(403).send({ error: "Tool building is disabled." });
+    const { id } = req.params as { id: string };
+    const tool = req.userStore.getTool(id);
+    if (!tool) return reply.code(404).send({ error: "tool not found" });
+    const result = await revertTool(req.userStore, supervisor, id);
+    if (!result.ok) return reply.code(400).send({ error: result.note });
+    agents.delete(req.authUser.id);
+    return { tool: toolView(req.userStore.getTool(id)), note: result.note };
   });
 
   app.delete("/tools/:id", async (req, reply) => {

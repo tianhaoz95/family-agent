@@ -28,6 +28,15 @@ import {
   type ChatReference,
 } from "./api.js";
 import { startRecording, type Recording } from "./audio.js";
+import {
+  friendlyDate,
+  friendlyTime,
+  friendlyDateTime,
+  dueBucket,
+  relativeTime,
+  dayHeading,
+  humanActor,
+} from "./format.js";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { renderPdf, type PdfRender } from "./pdfPreview.js";
@@ -66,7 +75,7 @@ function showView(name: string) {
   }
   if (name === "tools") {
     void refreshTools().then((tools) => {
-      if (tools.some((t) => t.status === "building")) void pollTools();
+      if (tools.some((t) => t.status === "building" || t.revisionState === "revising")) void pollTools();
     });
   }
   if (name === "activity") void refreshActivity();
@@ -542,13 +551,28 @@ function renderTasks(tasks: Task[]) {
     taskList.innerHTML = emptyState("tasks", "No events yet. Add one above or ask in Chat.");
     return;
   }
-  for (const task of tasks) {
+  // Open events first (soonest due, then undated), done events sink to the bottom.
+  const rank = (t: Task) =>
+    t.status === "done" ? Number.MAX_SAFE_INTEGER : t.dueDate ? Date.parse(`${t.dueDate.slice(0, 10)}T00:00:00`) : Number.MAX_SAFE_INTEGER - 1;
+  const sorted = [...tasks].sort((a, b) => rank(a) - rank(b));
+
+  let sawDone = false;
+  for (const task of sorted) {
+    const done = task.status === "done";
+    if (done && !sawDone && sorted.some((t) => t.status !== "done")) {
+      sawDone = true;
+      const sep = document.createElement("li");
+      sep.className = "task-group-label";
+      sep.textContent = "Done";
+      taskList.appendChild(sep);
+    }
+    const bucket = done ? "none" : dueBucket(task.dueDate);
     const li = document.createElement("li");
-    li.className = `task-row${task.status === "done" ? " is-done" : ""}`;
+    li.className = `task-row${done ? " is-done" : ""}${bucket === "overdue" ? " is-overdue" : ""}`;
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = task.status === "done";
-    checkbox.disabled = task.status === "done";
+    checkbox.checked = done;
+    checkbox.disabled = done;
     checkbox.addEventListener("change", async () => {
       await api.completeTask(task.id);
       void refreshTasks();
@@ -561,8 +585,8 @@ function renderTasks(tasks: Task[]) {
     li.appendChild(title);
     if (task.dueDate) {
       const due = document.createElement("span");
-      due.className = "task-due";
-      due.textContent = task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate;
+      due.className = `task-due${bucket === "overdue" || bucket === "today" ? " is-urgent" : ""}`;
+      due.textContent = friendlyDateTime(task.dueDate, task.dueTime);
       li.appendChild(due);
     }
     taskList.appendChild(li);
@@ -576,7 +600,7 @@ function makeTaskChip(task: Task): HTMLElement {
   const chip = document.createElement("button");
   chip.type = "button";
   chip.className = `cal-task${task.status === "done" ? " is-done" : ""}`;
-  chip.textContent = task.dueTime ? `${task.dueTime} ${task.title}` : task.title;
+  chip.textContent = task.dueTime ? `${friendlyTime(task.dueTime)} ${task.title}` : task.title;
   chip.title = task.title;
   chip.draggable = true;
   chip.addEventListener("dragstart", (e) => {
@@ -773,7 +797,7 @@ function renderTimeGrid(tasks: Task[]) {
       block.className = `cal-event${t.status === "done" ? " is-done" : ""}`;
       block.style.top = `${((hm.h * 60 + hm.m) / 60) * HOUR_H}px`;
       block.style.height = `${HOUR_H - 4}px`;
-      block.textContent = `${t.dueTime} ${t.title}`;
+      block.textContent = `${friendlyTime(t.dueTime)} ${t.title}`;
       block.title = t.title;
       block.draggable = true;
       block.addEventListener("dragstart", (e) => {
@@ -1283,19 +1307,30 @@ function renderActivity(entries: ActivityEntry[]) {
     activityList.innerHTML = emptyState("activity", "Nothing has happened yet.");
     return;
   }
+  let lastDay = "";
   for (const entry of entries) {
+    const day = dayHeading(entry.ts);
+    if (day !== lastDay) {
+      lastDay = day;
+      const h = document.createElement("li");
+      h.className = "activity-day";
+      h.textContent = day;
+      activityList.appendChild(h);
+    }
     const li = document.createElement("li");
     li.className = "activity-row";
-    const ts = document.createElement("span");
-    ts.className = "activity-ts";
-    ts.textContent = new Date(entry.ts).toLocaleTimeString();
     const actor = document.createElement("span");
     actor.className = "activity-actor";
-    actor.textContent = entry.actor;
+    actor.textContent = humanActor(entry.actor);
     const detail = document.createElement("span");
     detail.className = "activity-detail";
     detail.textContent = entry.detail;
-    li.append(ts, actor, detail);
+    const ts = document.createElement("time");
+    ts.className = "activity-ts";
+    ts.dateTime = entry.ts;
+    ts.textContent = relativeTime(entry.ts);
+    ts.title = new Date(entry.ts).toLocaleString();
+    li.append(actor, detail, ts);
     activityList.appendChild(li);
   }
 }
@@ -1336,6 +1371,20 @@ function openTool(tool: Tool) {
   toolViewer.hidden = false;
 }
 
+// Turn a tool operation into a plain imperative phrase a family member can read,
+// e.g. { name: "add_loan", description: "Record that someone borrowed an item" }
+// → "record that someone borrowed an item". No snake_case, no jargon.
+const OP_VERBS =
+  /^(record|log|list|show|display|add|create|save|store|mark|remove|delete|update|edit|change|rename|find|look up|search|get|see|view|browse|track|check|set|clear|count|split|calculate|total|note|pick|choose|send)\b/i;
+function humanizeOperation(o: ToolOperation): string {
+  const d = (o.description ?? "").trim().replace(/\.$/, "");
+  if (d && OP_VERBS.test(d)) return d.charAt(0).toLowerCase() + d.slice(1);
+  if (d) return `see ${d.charAt(0).toLowerCase()}${d.slice(1)}`;
+  const name = (o.name ?? "").replace(/_/g, " ").trim();
+  if (!name) return "";
+  return o.access === "read" ? `see ${name}` : name;
+}
+
 function renderTools(tools: Tool[]) {
   toolList.innerHTML = "";
   if (tools.length === 0) {
@@ -1352,12 +1401,6 @@ function renderTools(tools: Tool[]) {
     name.className = "tool-name";
     name.textContent = tool.name;
     head.appendChild(name);
-    if (tool.kind === "server") {
-      const chip = document.createElement("span");
-      chip.className = "category-chip";
-      chip.textContent = "shared";
-      head.appendChild(chip);
-    }
     const del = document.createElement("button");
     del.className = "doc-delete";
     del.type = "button";
@@ -1382,18 +1425,22 @@ function renderTools(tools: Tool[]) {
     desc.textContent = tool.description;
     li.appendChild(desc);
 
+    const revising = tool.revisionState === "revising";
+
     const footer = document.createElement("div");
     footer.className = "tool-row-foot";
     if (tool.status === "building") {
       const b = document.createElement("span");
       b.className = "document-pending";
-      b.textContent = "Building…";
+      b.textContent = tool.revisionCount > 0 ? "Rebuilding…" : "Building…";
       footer.appendChild(b);
     } else if (tool.status === "failed") {
       const f = document.createElement("span");
       f.className = "document-failed";
-      f.textContent = tool.error ? `Failed: ${tool.error}` : "Build failed.";
+      f.textContent = "This didn't come together. Try describing it again, or tweak the wording below.";
       footer.appendChild(f);
+      // A failed tool can still be salvaged with an instruction.
+      footer.appendChild(makeImproveButton(tool, "Fix it"));
     } else {
       const openBtn = document.createElement("button");
       openBtn.className = "btn-primary";
@@ -1412,29 +1459,121 @@ function renderTools(tools: Tool[]) {
           : "View this tool's saved data (read-only)";
       inspectBtn.addEventListener("click", () => void openDbInspector(tool));
       footer.appendChild(inspectBtn);
+
+      if (revising) {
+        const b = document.createElement("span");
+        b.className = "document-pending";
+        b.textContent = "Improving…";
+        footer.appendChild(b);
+      } else {
+        footer.appendChild(makeImproveButton(tool, "Improve"));
+        if (tool.canRevert) {
+          const rev = document.createElement("button");
+          rev.className = "doc-preview";
+          rev.type = "button";
+          rev.textContent = "Undo last change";
+          rev.addEventListener("click", async () => {
+            rev.disabled = true;
+            try {
+              const { note } = await api.revertTool(tool.id);
+              toolStatusEl.textContent = note;
+              void refreshTools();
+            } catch (err) {
+              rev.disabled = false;
+              toolStatusEl.textContent = `Could not undo: ${err instanceof Error ? err.message : String(err)}`;
+            }
+          });
+          footer.appendChild(rev);
+        }
+      }
     }
     li.appendChild(footer);
 
+    // A failed improve: the tool still works, but say the change didn't land.
+    if (tool.revisionState && !revising) {
+      const warn = document.createElement("p");
+      warn.className = "tool-revision-warn";
+      warn.textContent = `Last change didn't work: ${tool.revisionState}`;
+      li.appendChild(warn);
+    } else if (tool.revisionCount > 0 && !revising) {
+      const meta = document.createElement("p");
+      meta.className = "tool-revision-meta";
+      const n = tool.revisionCount;
+      meta.textContent = tool.updatedAt
+        ? `Updated ${relativeTime(tool.updatedAt).toLowerCase()}`
+        : `Improved ${n} time${n === 1 ? "" : "s"}`;
+      li.appendChild(meta);
+    }
+
     // For a server tool, show what the chat assistant can do with it.
     if (tool.kind === "server" && tool.status === "ready") {
-      const ops = document.createElement("p");
+      const ops = document.createElement("div");
       ops.className = "tool-ops-line";
       li.appendChild(ops);
       void api
         .toolOperations(tool.id)
         .then(({ operations }) => {
-          if (!operations.length) return;
-          ops.innerHTML =
-            `<span class="tool-ops-label">Assistant can</span> ` +
-            operations
-              .map((o: ToolOperation) => `<code class="tool-op tool-op-${o.access}" title="${escapeHtml(o.description)}">${escapeHtml(o.name)}</code>`)
-              .join(" ");
+          const phrases = operations.map(humanizeOperation).filter(Boolean);
+          if (!phrases.length) return;
+          const label = document.createElement("span");
+          label.className = "tool-ops-label";
+          label.textContent = "In Chat you can";
+          const list = document.createElement("ul");
+          list.className = "tool-ops-items";
+          for (const p of phrases) {
+            const item = document.createElement("li");
+            item.textContent = p;
+            list.appendChild(item);
+          }
+          ops.replaceChildren(label, list);
         })
         .catch(() => {});
     }
 
     toolList.appendChild(li);
   }
+}
+
+// "Improve" / "Fix it": expands to an inline text box that posts to /iterate.
+function makeImproveButton(tool: Tool, label: string): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.className = "doc-preview";
+  btn.type = "button";
+  btn.textContent = label;
+  btn.addEventListener("click", () => {
+    if (toolList.querySelector(`[data-improve-for="${tool.id}"]`)) return;
+    const form = document.createElement("form");
+    form.className = "tool-improve-form";
+    form.dataset.improveFor = tool.id;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder =
+      label === "Fix it" ? "What should be different? e.g. 'the total is wrong'" : "What should change? e.g. 'add a due date to each loan'";
+    input.required = true;
+    const send = document.createElement("button");
+    send.type = "submit";
+    send.textContent = "Send";
+    form.append(input, send);
+    btn.closest(".tool-row")?.appendChild(form);
+    input.focus();
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const instruction = input.value.trim();
+      if (instruction.length < 3) return;
+      send.disabled = true;
+      try {
+        await api.iterateTool(tool.id, instruction);
+        toolStatusEl.textContent = `Improving "${tool.name}" — it'll update in a minute.`;
+        void refreshTools();
+        void refreshActivity();
+        void pollTools();
+      } catch (err) {
+        send.disabled = false;
+        toolStatusEl.textContent = `Couldn't start: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    });
+  });
+  return btn;
 }
 
 async function refreshTools(): Promise<Tool[]> {
@@ -1449,9 +1588,10 @@ function pollTools(): Promise<void> {
     toolsPoll = (async () => {
       const deadline = Date.now() + 8 * 60_000;
       let delay = 2000;
+      const busy = (t: Tool) => t.status === "building" || t.revisionState === "revising";
       while (Date.now() < deadline) {
         const tools = await refreshTools().catch(() => null);
-        if (tools && !tools.some((t) => t.status === "building")) return;
+        if (tools && !tools.some(busy)) return;
         await new Promise((r) => setTimeout(r, delay));
         delay = Math.min(delay + 1000, 6000);
         void refreshActivity();
@@ -1539,6 +1679,18 @@ function dbInfo(msg: string) {
   dbInspectorStatus.textContent = msg;
   dbInspectorStatus.classList.remove("is-error");
 }
+// A calm centered placeholder for the "nothing stored yet" cases, instead of
+// a status line stranded above a large blank panel.
+function dbEmpty(title: string, hint: string) {
+  dbInfo("");
+  dbInspectorPager.hidden = true;
+  dbInspectorTablesEl.hidden = true;
+  dbInspectorGrid.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "db-inspector-empty";
+  wrap.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg><p class="db-inspector-empty-title">${escapeHtml(title)}</p><p class="db-inspector-empty-hint">${escapeHtml(hint)}</p>`;
+  dbInspectorGrid.appendChild(wrap);
+}
 
 function fmtBytes(n: number | null): string {
   if (n == null) return "";
@@ -1554,6 +1706,7 @@ async function openDbInspector(tool: Tool) {
   dbState.table = "";
   dbInspectorTitle.textContent = `${tool.name} — ${tool.kind === "server" ? "database" : "saved data"}`;
   dbInspectorMeta.textContent = "";
+  dbInspectorTablesEl.hidden = false;
   dbInspectorTablesEl.innerHTML = "";
   dbInspectorGrid.innerHTML = "";
   dbInspectorPager.hidden = true;
@@ -1576,8 +1729,9 @@ async function openDbInspector(tool: Tool) {
       // A current agent-core always returns a stateEntries array here; its
       // absence means the running backend predates this feature.
       if (!Array.isArray(overview?.stateEntries)) {
-        dbInspectorTablesEl.innerHTML = `<p class="db-inspector-tables-empty">—</p>`;
-        dbError("This needs a newer agent-core. Restart the app (./scripts/start-desktop.sh) to rebuild it.");
+        dbInspectorTablesEl.innerHTML = "";
+        dbInspectorGrid.innerHTML = "";
+        dbError("Please restart the app to finish updating, then try again.");
         return;
       }
       renderStaticState(stateEntries);
@@ -1585,12 +1739,13 @@ async function openDbInspector(tool: Tool) {
     }
 
     if (!overview?.exists) {
-      dbInfo("This tool has no database yet — it gets one the first time its backend runs.");
+      dbInspectorTablesEl.innerHTML = "";
+      dbEmpty("Nothing saved yet", "This tool starts storing information the first time it's used in Chat or opened.");
       return;
     }
     if (tables.length === 0) {
-      dbInspectorTablesEl.innerHTML = `<p class="db-inspector-tables-empty">No tables.</p>`;
-      dbInfo("The database is empty.");
+      dbInspectorTablesEl.innerHTML = "";
+      dbEmpty("Nothing saved yet", "Once the tool records something, it'll show up here.");
       return;
     }
     for (const t of tables) {
@@ -1619,8 +1774,8 @@ async function openDbInspector(tool: Tool) {
 // through GET/PUT /__state. Show those instead of tables.
 function renderStaticState(entries: { key: string; bytes: number }[]) {
   if (!entries || entries.length === 0) {
-    dbInspectorTablesEl.innerHTML = `<p class="db-inspector-tables-empty">No saved data.</p>`;
-    dbInfo("This tool hasn't saved any data yet.");
+    dbInspectorTablesEl.innerHTML = "";
+    dbEmpty("Nothing saved yet", "This tool hasn't stored anything so far.");
     return;
   }
   for (const e of entries) {
@@ -2689,7 +2844,9 @@ function renderBoard() {
 
 function makeNoteEl(n: StickyNote): HTMLElement {
   const card = document.createElement("div");
-  card.className = `note-card note-${n.color}`;
+  // A colour the agent invented (or an older value) falls back to butter.
+  const noteColor = (NOTE_COLORS as readonly string[]).includes(n.color) ? n.color : "butter";
+  card.className = `note-card note-${noteColor}`;
   card.dataset.id = n.id;
   const { x, y } = clampToBoard(n.x, n.y);
   card.style.left = `${x}px`;
@@ -2724,7 +2881,7 @@ function makeNoteEl(n: StickyNote): HTMLElement {
   for (const color of NOTE_COLORS) {
     const sw = document.createElement("button");
     sw.type = "button";
-    sw.className = `note-swatch note-${color}` + (color === n.color ? " is-active" : "");
+    sw.className = `note-swatch note-${color}` + (color === noteColor ? " is-active" : "");
     sw.setAttribute("aria-label", color);
     sw.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -2930,7 +3087,9 @@ function docMetaHtml(doc: Document): string {
   if (doc.extracted?.category) meta.push(`<span class="category-chip">${escapeHtml(doc.extracted.category)}</span>`);
   if (doc.sourcePath) meta.push(`<span class="tag tag-local">watched folder</span>`);
   const dates = doc.extracted?.importantDates?.length
-    ? `<p class="side-panel-hint">Important dates: ${doc.extracted.importantDates.map(escapeHtml).join(", ")}</p>`
+    ? `<p class="side-panel-hint">Key dates: ${doc.extracted.importantDates
+        .map((d) => escapeHtml(friendlyDate(d, { weekday: true })))
+        .join(" · ")}</p>`
     : "";
   return `${meta.length ? `<div class="side-panel-meta">${meta.join(" ")}</div>` : ""}
      ${doc.extracted?.summary ? `<p class="side-panel-summary">${escapeHtml(doc.extracted.summary)}</p>` : ""}
@@ -3004,11 +3163,11 @@ async function openTaskPanel(id: string) {
     const { task } = await api.getTask(id);
     if (gen !== panelGen) return;
     const when = task.dueDate
-      ? `<p class="side-panel-hint">Due ${escapeHtml(task.dueDate)}${task.dueTime ? ` at ${escapeHtml(task.dueTime)}` : ""}</p>`
+      ? `<p class="side-panel-hint">Due ${escapeHtml(friendlyDateTime(task.dueDate, task.dueTime))}</p>`
       : "";
     openSidePanel(
       task.title,
-      `<div class="side-panel-meta"><span class="category-chip">${task.status === "done" ? "done" : "open"}</span></div>
+      `<div class="side-panel-meta"><span class="category-chip">${task.status === "done" ? "Done" : "To do"}</span></div>
        ${when}
        ${task.notes ? `<p class="side-panel-summary">${escapeHtml(task.notes)}</p>` : ""}
        <p class="side-panel-hint">Open the Events tab to reschedule or complete it.</p>`
@@ -3025,19 +3184,14 @@ async function openToolPanel(id: string) {
   try {
     const [{ tool }, { operations }] = await Promise.all([api.getTool(id), api.toolOperations(id)]);
     if (gen !== panelGen) return;
-    const ops = operations.length
-      ? `<ul class="tool-op-list">${operations
-          .map(
-            (o) =>
-              `<li><code>${escapeHtml(o.name)}</code> <span class="tool-op-access tool-op-access-${o.access}">${o.access}</span><br><span class="side-panel-hint">${escapeHtml(o.description)}</span></li>`
-          )
-          .join("")}</ul>`
-      : `<p class="side-panel-hint">This tool doesn't expose anything the assistant can call.</p>`;
+    const phrases = operations.map(humanizeOperation).filter(Boolean);
+    const ops = phrases.length
+      ? `<ul class="tool-op-list">${phrases.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ul>`
+      : "";
     openSidePanel(
       tool.name,
       `<p class="side-panel-summary">${escapeHtml(tool.description)}</p>
-       <p class="side-panel-hint">The assistant used this tool to answer. It can:</p>
-       ${ops}
+       ${phrases.length ? `<p class="side-panel-hint">In Chat you can:</p>${ops}` : ""}
        <button type="button" class="btn-primary" id="tool-panel-open">Open tool</button>`
     );
     document.getElementById("tool-panel-open")?.addEventListener("click", () => {

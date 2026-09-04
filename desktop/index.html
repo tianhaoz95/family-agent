@@ -287,8 +287,8 @@
           <div class="view-header">
             <h1>Documents</h1>
             <p class="view-sub">
-              Upload a PDF, photo, or scan below, or drop a <code>.txt</code>/<code>.md</code>
-              file into <code id="inbox-path">the watched folder</code>.
+              Upload a PDF, photo, or scan below — or drop a file into
+              <code id="inbox-path">your watched folder</code>.
             </p>
           </div>
 
@@ -307,7 +307,7 @@
 
           <label id="document-upload-form" class="upload-zone">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
-            <span class="upload-zone-text">Choose a PDF, photo, or scan to add to the family archive — it uploads as soon as you pick it. Accepts <code>.pdf</code>, <code>.txt</code>, <code>.md</code>, <code>.jpg</code>, <code>.png</code>, <code>.webp</code>.</span>
+            <span class="upload-zone-text">Add a PDF, photo, scan, or text file to the family archive. It uploads as soon as you pick it.</span>
             <!-- No `accept` filter: the Linux webview's file picker silently hides
                  valid files (e.g. .pdf) when accept mixes extensions and MIME
                  wildcards. agent-core validates the type on upload and returns a
@@ -320,9 +320,9 @@
           <details class="paste-details">
             <summary>Or paste text directly</summary>
             <form id="document-form" class="inline-form inline-form-stacked">
-              <input id="document-filename" type="text" placeholder="Filename, e.g. electric-bill.txt" required />
+              <input id="document-filename" type="text" placeholder="Give it a name, e.g. Electric bill" required />
               <textarea id="document-text" placeholder="Paste the document text here" rows="4" required></textarea>
-              <button type="submit">Ingest</button>
+              <button type="submit">Add document</button>
             </form>
           </details>
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, rmSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, rmSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -862,7 +862,15 @@ describe("HTTP API", () => {
     admin.scoped.setToolStatus(t.id, "ready");
 
     const list = await inject({ method: "GET", url: "/tools" });
-    expect(list.json().tools[0]).toMatchObject({ id: t.id, name: "Chore chart", status: "ready", path: `/${t.id}/` });
+    expect(list.json().tools[0]).toMatchObject({
+      id: t.id,
+      name: "Chore chart",
+      status: "ready",
+      path: `/${t.id}/`,
+      revisionCount: 0,
+      revisionState: null,
+      canRevert: false,
+    });
 
     const one = await inject({ method: "GET", url: `/tools/${t.id}` });
     expect(one.statusCode).toBe(200);
@@ -884,6 +892,47 @@ describe("HTTP API", () => {
     } finally {
       (config as { toolsEnabled: boolean }).toolsEnabled = originalEnabled;
     }
+  });
+
+  it("POST /tools/:id/iterate validates input, 404s for a missing tool, 409s while revising", async () => {
+    expect(
+      (await inject({ method: "POST", url: "/tools/NOPE/iterate", payload: { instruction: "add a date field" } })).statusCode
+    ).toBe(404);
+
+    const short = admin.scoped.createTool({ name: "A", description: "d", prompt: "p", kind: "static" });
+    admin.scoped.setToolStatus(short.id, "ready");
+    expect(
+      (await inject({ method: "POST", url: `/tools/${short.id}/iterate`, payload: { instruction: "x" } })).statusCode
+    ).toBe(400);
+
+    const busy = admin.scoped.createTool({ name: "B", description: "d", prompt: "p", kind: "static" });
+    admin.scoped.setToolStatus(busy.id, "ready");
+    admin.scoped.beginToolRevision(busy.id);
+    expect(
+      (await inject({ method: "POST", url: `/tools/${busy.id}/iterate`, payload: { instruction: "a real change" } })).statusCode
+    ).toBe(409);
+  });
+
+  it("POST /tools/:id/revert restores the previous version and clears prev/", async () => {
+    const t = admin.scoped.createTool({ name: "Packing list", description: "v2", prompt: "packing list", kind: "static" });
+    admin.scoped.setToolStatus(t.id, "ready");
+    const dir = join(config.dataDir, "tools", t.id);
+    mkdirSync(join(dir, "prev"), { recursive: true });
+    writeFileSync(join(dir, "index.html"), "<!doctype html><title>v2</title>current");
+    writeFileSync(join(dir, "prev", "index.html"), "<!doctype html><title>v1</title>previous");
+    writeFileSync(join(dir, "prev", "meta.json"), JSON.stringify({ name: "Packing list", description: "v1", kind: "static" }));
+
+    expect((await inject({ method: "GET", url: `/tools/${t.id}` })).json().tool.canRevert).toBe(true);
+
+    const res = await inject({ method: "POST", url: `/tools/${t.id}/revert` });
+    expect(res.statusCode).toBe(200);
+    expect(readFileSync(join(dir, "index.html"), "utf8")).toContain("previous");
+    expect(existsSync(join(dir, "prev"))).toBe(false);
+    expect(res.json().tool.canRevert).toBe(false);
+    expect(admin.scoped.getTool(t.id)!.description).toBe("v1");
+
+    // nothing to revert now
+    expect((await inject({ method: "POST", url: `/tools/${t.id}/revert` })).statusCode).toBe(400);
   });
 
   it("GET /tools/:id/operations returns the cached MCP operation list", async () => {

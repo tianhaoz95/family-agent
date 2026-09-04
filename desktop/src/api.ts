@@ -2,7 +2,10 @@
 // child process (see src-tauri/src/main.rs). Multi-user now: every request
 // carries a bearer token from the logged-in family member, and a 401 drops
 // the UI back to the login screen.
-const BASE_URL = "http://127.0.0.1:4173";
+// Production/Tauri: agent-core is always the local sidecar on :4173.
+// Override with VITE_API_BASE for `vite dev` / `vite preview` against a
+// separate backend (e.g. a seeded dev instance on another port).
+const BASE_URL = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:4173";
 
 // ---- session token ----
 // localStorage is per-origin and survives restarts. Guarded because the test
@@ -192,6 +195,13 @@ export interface Tool {
   status: "building" | "ready" | "failed";
   error: string | null;
   createdAt: string;
+  updatedAt: string | null;
+  /** How many times the tool has been improved. */
+  revisionCount: number;
+  /** null = idle · "revising" = an improve is running · else = why the last improve failed. */
+  revisionState: string | null;
+  /** True when there's a snapshot to roll back to (one level). */
+  canRevert: boolean;
   /** Path under the tools server, e.g. "/AB12CD34/". null until ready. */
   path: string | null;
 }
@@ -490,6 +500,12 @@ export const api = {
   listTools: () => request<{ tools: Tool[] }>("/tools"),
   buildTool: (prompt: string) =>
     request<{ building: true; prompt: string }>("/tools", { method: "POST", body: JSON.stringify({ prompt }) }),
+  iterateTool: (id: string, instruction: string) =>
+    request<{ improving: true; instruction: string }>(`/tools/${id}/iterate`, {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    }),
+  revertTool: (id: string) => request<{ tool: Tool; note: string }>(`/tools/${id}/revert`, { method: "POST" }),
   deleteTool: (id: string) => request<{ deleted: true }>(`/tools/${id}`, { method: "DELETE" }),
   getTool: (id: string) => request<{ tool: Tool }>(`/tools/${id}`),
   toolDb: (id: string) => request<ToolDbOverview>(`/tools/${id}/db`),

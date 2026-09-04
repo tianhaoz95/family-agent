@@ -308,9 +308,14 @@ Later changes (not part of the original autonomous session):
     expose the `data/<key>.json` `__state` blobs as pretty JSON. All routes
     scoped to the caller's own tools. Android not wired yet. See
     `docs/DECISIONS.md` → "Tool database inspector".
-  - **Server tools are an API the chat assistant can call.** The model writes
-    `operations.ts` (`[{ name, description, access, inputSchema, run }]`); the
-    harness turns that one array into a real MCP server (`POST /mcp` —
+  - **Server tools are an API the chat assistant can call.** A build starts with
+    a plan pass — the model decides `{ needsBackend, operations }` for the ask,
+    so "a random recipe picker" becomes a server tool with `add_recipe` /
+    `list_recipes` / `random_recipe` / `remove_recipe` rather than a dead-end
+    display page (a "tip calculator" stays static). Then the model writes
+    `operations.ts` (`[{ name, description, access, inputSchema, run }]`)
+    implementing that list; the harness turns the one array into a real MCP
+    server (`POST /mcp` —
     JSON-RPC 2.0 `initialize` / `tools/list` / `tools/call`), plain REST for the
     tool's own frontend (`GET|POST /api/<name>`), and `GET /__manifest`.
     agent-core is the MCP client (`tools/toolMcp.ts`), caches each tool's
@@ -324,6 +329,26 @@ Later changes (not part of the original autonomous session):
     endpoint is also reachable via the tools server at `:4174/<id>/mcp` (no auth
     yet — external clients are future scope). See `docs/DECISIONS.md` → "Tools
     as an agent API (MCP)".
+  - **Tools are improvable, not one-shot.** `iterateTool` regenerates a tool
+    from its own prior code + the change asked for (via chat — builder-agent's
+    `improve_tool` — or the desktop "Improve" box). A server improve is
+    smoke-tested on a scratch port **against a copy of the tool's real data**
+    (boots + `tools/list` + every read op called) before it replaces the running
+    one, with one self-repair pass on failure; a broken improve leaves the
+    working version and its `tool.db` untouched and records why. **Database
+    migrations are automatic, best-effort**: the model is told to write guarded
+    `ALTER TABLE ADD COLUMN` at the top of every op, and the real-data smoke test
+    catches it when it forgets. The previous version + a `tool.db` copy are kept
+    in `<toolDir>/prev/` for a one-step "Undo last change" (`POST
+    /tools/:id/revert`), which also restores the data if the improve dropped a
+    column. A `failed` tool is salvaged by improving it. An improve that asks to
+    *save the user's own entries* **upgrades a display-only static tool into a
+    server tool** with real storage + agent operations (downgrades back if the
+    model produces none). The chat assistant now *sees* display-only tools too,
+    so "add a recipe to my recipe randomiser" routes to improving the existing
+    tool instead of "no such tool — build a new one?". New `tools` columns:
+    `revision_count`, `revision_state`, `updated_at`. See `docs/DECISIONS.md` →
+    "Improvable tools".
   - Kill switch: `FAMILY_AGENT_TOOLS=0`.
   - Reliability caveat: a smaller model produces a working simple HTML tool most
     of the time but not always; a bad build is marked `failed` with the error, a
@@ -487,3 +512,24 @@ Later changes (not part of the original autonomous session):
   `~/.local/share/family-agent` (`$XDG_DATA_HOME/family-agent`), still
   `FAMILY_AGENT_DATA_DIR`-overridable. A dev box re-runs setup against the new
   dir, or points the env var back. See `docs/DECISIONS.md`.
+- **Desktop UI polish pass (round 2).** No behaviour changes — closes the gap
+  between what the desktop showed and its non-technical audience. New
+  `desktop/src/format.ts` centralises human formatting: ISO dates → "Fri, Sep 8
+  · 3:30 PM", 24h times → "3:30 PM", timestamps → "5 min ago" / "Yesterday",
+  internal actor ids → words ("task-agent" → "Events"). Applied to the Events
+  list (now sorted soonest-first with a **Done** divider and an overdue tint),
+  the calendar chips, the Activity log (regrouped into a dense day-headed
+  timeline), and the reference/side panels. Tool cards no longer leak
+  developer terms: `add_loan` / `list_open_loans` render as "record that
+  someone borrowed an item" / "list items that are still out", the raw build
+  error is replaced with plain guidance, and the misleading "shared" pill is
+  gone. Secondary actions (Preview, Rename, Improve, Inspect data…) and the
+  per-field Settings **Save** buttons are quiet by default and only take the
+  blue accent on hover, so a card / page isn't a wall of blue. Chat-channel
+  message bubbles hug their content instead of stretching full-width; the
+  Messages view fills the width instead of sitting in the narrow centred
+  column. The DB inspector's "nothing stored yet" state is a centred message,
+  not a stranded status line over a blank panel. Hard-coded hex colours in
+  `style.css` were folded into `:root` tokens (`--accent-soft-hover`,
+  `--danger-soft-hover`). Activity-log strings in `agent-core` were softened
+  too ("Ingested X" → "Added X", dropped "(revision N)").

@@ -272,7 +272,8 @@ describe("Store — migration from a single-user database", () => {
     s1.close();
     const s2 = new Store(path);
     expect(s2.failStaleBuildingTools()).toBe(1);
-    expect(s2.scoped(u.id).listTools()[0]).toMatchObject({ status: "failed", error: "interrupted" });
+    expect(s2.scoped(u.id).listTools()[0]).toMatchObject({ status: "failed" });
+    expect(s2.scoped(u.id).listTools()[0].error).toMatch(/interrupted/);
     s2.close();
     unlinkSync(path);
   });

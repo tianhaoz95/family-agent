@@ -102,11 +102,25 @@ const ctx = { store, db };
 // New tools export an "operations" array from operations.ts; tools built before
 // that existed export a single "handler" from handler.ts. Support both.
 let operations: any[] = [];
+let operationsError: string | null = null;
+let hadOperationsFile = false;
 try {
-  const mod = await import("./operations.ts");
-  if (Array.isArray(mod.operations)) operations = mod.operations;
+  Deno.statSync("./operations.ts");
+  hadOperationsFile = true;
 } catch {
-  /* no operations.ts — a pre-operations tool, or a static one */
+  /* no operations.ts */
+}
+if (hadOperationsFile) {
+  try {
+    const mod = await import("./operations.ts");
+    if (Array.isArray(mod.operations)) operations = mod.operations;
+    else operationsError = "operations.ts does not export an 'operations' array";
+  } catch (e) {
+    // A broken operations.ts must be visible, not silently ignored — the
+    // builder smoke-tests a new backend and needs to see this to repair it.
+    operationsError = e instanceof Error ? e.message : String(e);
+    console.error("OPERATIONS_LOAD_ERROR: " + operationsError);
+  }
 }
 
 let legacyHandler: ((req: Request, ctx: unknown) => unknown) | null = null;
@@ -244,7 +258,8 @@ Deno.serve(
       }
     }
 
-    // The operation list as plain JSON — desktop Tools tab / debugging.
+    // The operation list as plain JSON — desktop Tools tab / debugging. Also
+    // carries any operations.ts load error so the builder's smoke test can see it.
     if (url.pathname === "/__manifest") {
       return Response.json({
         operations: operations.map((o) => ({
@@ -253,6 +268,8 @@ Deno.serve(
           access: o.access === "read" ? "read" : "write",
           inputSchema: o.inputSchema || { type: "object", properties: {} },
         })),
+        error: operationsError,
+        hadOperationsFile,
       });
     }
 

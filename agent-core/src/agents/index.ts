@@ -24,7 +24,9 @@ tool (a checklist, planner, tracker, calculator, comparison table, form,
 countdown — anything interactive) when the user needs something to *do* a
 task that task-agent and document-agent can't. Route requests like "build
 me a…", "make a tool/page/app to…", "I need something to help me…", "can
-you create a…" to it.
+you create a…" to it. It also **improves an existing tool** — route "add … to
+the … tool", "change the … tool so it …", "the … tool is broken / wrong",
+"fix the …" to builder-agent too.
 
 There is also a "notes-agent" subagent: it reads and writes the family's
 sticky notes — a shared family board and each person's private board. Route
@@ -37,8 +39,10 @@ log, a chore-points tally, a bookshelf catalog…), and those tools can be
 queried and updated from chat. When someone wants to look something up in one
 of them or record something into one — "where did we put the…", "who
 borrowed the…", "add… to the inventory", "log that…", "how many points does
-… have" — delegate to tools-agent. (Building a NEW tool is still builder-agent;
-tools-agent only uses tools that already exist.)
+… have" — delegate to tools-agent. If tools-agent reports the matching tool is
+"display-only" or lacks the needed operation, THEN delegate the same request to
+builder-agent to improve that existing tool — do not tell the user there's no
+tool and do not build a duplicate.
 
 To delegate, call the tool named "task" with two arguments: subagent_type set
 to "task-agent", "document-agent", "builder-agent", "notes-agent", or
@@ -78,6 +82,10 @@ car registration."
 Example — user asks "build me a tool to split our vacation budget": call
 task with subagent_type "builder-agent" and description "Build a tool to
 split a vacation budget between family members."
+
+Example — user asks "add a due date to the loan tracker" or "the chore chart
+is missing a person": call task with subagent_type "builder-agent" and
+description "Improve the loan tracker: add a due date to each loan."
 
 Example — user asks "what's on the sticky board?" or "anything on the
 fridge?": call task with subagent_type "notes-agent" and description "List
@@ -156,19 +164,41 @@ name (both exactly as listed), and an input object with the parameters.
 If a lookup ("where is…", "who has…", "how many…") — use a read operation and
 report what it returns, plainly. If a change ("we moved…", "add…", "log
 that…", "mark…") — use a write operation, then confirm what you recorded in
-one sentence. If no tool fits the request, say so plainly — do not invent a
-tool or an operation. Never refuse a request that a tool clearly covers.`;
+one sentence.
 
-const BUILDER_AGENT_PROMPT = `You build small custom web tools for the family.
-When you get a request, call start_build exactly once with a clear one-line
-description of the tool to make (rephrase the user's ask into "Build a tool
-to …"). You do not write any code yourself — start_build hands it to the
-generator, which takes a minute. After calling it, tell the user in one
-sentence that their tool is being built and will show up in the Tools tab.`;
+list_family_tools may show a tool marked "display-only" — it exists but has no
+operations. If that tool is the obvious match for the request (the family has a
+"Recipe Box" and the user wants to add a recipe), DO NOT say the tool doesn't
+exist and DO NOT suggest building a new one. Say the existing tool can't do
+that yet and that it can be improved to add the feature (the user can ask
+builder-agent). Same if a matching tool exists but lacks the right operation.
+
+Only say "there's no tool for that" when the catalog has nothing related at
+all. Never invent a tool or an operation.`;
+
+const BUILDER_AGENT_PROMPT = `You build the family's custom web tools, and improve
+the ones they already have. You never write code yourself — you hand the request
+to a generator (this takes a minute).
+
+- A NEW tool ("build me…", "I need something to…", "make a tool that…"): call
+  start_build once with a clear one-line description ("Build a tool to …").
+- A CHANGE to an EXISTING tool ("add a due-date to the loan tracker", "the X
+  tool is broken", "make the meal planner also do breakfast"): call list_tools
+  to find its exact name, then call improve_tool once with that name and a
+  plain description of the change. The tool keeps working while the change is
+  generated; if the change can't be made the old version stays.
+
+Call exactly one of start_build / improve_tool, then tell the user in one
+sentence what's happening ("Improving the loan tracker — it'll update in a
+minute"). Don't call both.`;
 
 export interface FamilyAgentDeps {
   /** Fire-and-forget: kick off generating a tool from this description. */
   startToolBuild?: (description: string) => void;
+  /** Fire-and-forget: kick off improving an existing tool. */
+  startToolIterate?: (toolId: string, instruction: string) => void;
+  /** This user's tools — id/name/kind/status — for builder-agent to resolve "the X tool". */
+  listTools?: () => { id: string; name: string; kind: string; status: string; revisionState: string | null }[];
   /** Notified of each task / document / tool a subagent retrieves this turn. */
   onReference?: OnReference;
   /** Current embedding client (or null) — enables semantic document search. */
@@ -192,8 +222,55 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
     },
     {
       name: "start_build",
-      description: "Kick off generating a small web tool. Takes a one-line description of what to build.",
+      description: "Kick off generating a NEW small web tool. Takes a one-line description of what to build.",
       schema: z.object({ description: z.string().min(3).describe("What to build, e.g. 'Build a tool to plan weekly meals'") }),
+    }
+  );
+
+  const listToolsForBuilder = tool(
+    async () => {
+      const tools = deps.listTools?.() ?? [];
+      if (tools.length === 0) return "The family has no tools yet.";
+      return tools
+        .map((t) => {
+          const flags = [t.status !== "ready" ? t.status : "", t.revisionState === "revising" ? "being improved" : ""]
+            .filter(Boolean)
+            .join(", ");
+          return `- ${t.name} (${t.kind}${flags ? `, ${flags}` : ""})`;
+        })
+        .join("\n");
+    },
+    {
+      name: "list_tools",
+      description: "List the family's existing tools by name, so you can pick the right one to improve.",
+      schema: z.object({}),
+    }
+  );
+
+  const improveTool = tool(
+    async ({ tool: toolName, change }) => {
+      const tools = deps.listTools?.() ?? [];
+      const q = toolName.trim().toLowerCase();
+      const exact = tools.find((t) => t.name.toLowerCase() === q);
+      const partial = tools.filter((t) => t.name.toLowerCase().includes(q));
+      const match = exact ?? (partial.length === 1 ? partial[0] : undefined);
+      if (!match) {
+        return tools.length
+          ? `No single tool matches "${toolName}". The tools are: ${tools.map((t) => t.name).join(", ")}. Use the exact name.`
+          : `There are no tools to improve yet.`;
+      }
+      if (match.revisionState === "revising") return `"${match.name}" is already being improved — wait for that to finish.`;
+      deps.startToolIterate?.(match.id, change);
+      return `Started improving "${match.name}": ${change}. It keeps working while the change is generated.`;
+    },
+    {
+      name: "improve_tool",
+      description:
+        "Change an EXISTING tool — add a field or operation, fix a bug, adjust behaviour. Give the tool's exact name (from list_tools) and a plain description of the change.",
+      schema: z.object({
+        tool: z.string().describe("The exact tool name, e.g. 'Loan Tracker'"),
+        change: z.string().min(3).describe("What to change, e.g. 'add a due date to each loan'"),
+      }),
     }
   );
 
@@ -233,10 +310,10 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
       {
         name: "builder-agent",
         description:
-          "Generates a small custom web tool (checklist, planner, tracker, calculator, form) to help do a task the other agents can't.",
+          "Generates a NEW small custom web tool (checklist, planner, tracker, calculator, form), or improves an EXISTING one (add a field, fix a bug, change behaviour).",
         systemPrompt: BUILDER_AGENT_PROMPT,
         model,
-        tools: [startBuild],
+        tools: [startBuild, listToolsForBuilder, improveTool],
       },
       {
         name: "notes-agent",
