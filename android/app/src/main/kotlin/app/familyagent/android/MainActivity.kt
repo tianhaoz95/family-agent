@@ -52,6 +52,7 @@ import app.familyagent.android.data.SettingsStore
 import app.familyagent.android.ui.ActivityScreen
 import app.familyagent.android.ui.BoardScreen
 import app.familyagent.android.ui.ChatScreen
+import app.familyagent.android.ui.ChatSessionsScreen
 import app.familyagent.android.ui.DetailSheet
 import app.familyagent.android.ui.ConversationScreen
 import app.familyagent.android.ui.DiscoveryScreen
@@ -80,6 +81,7 @@ private enum class Destination(val route: String, val label: String, val icon: a
 
 private const val TOOL_VIEW_ROUTE = "toolview/{url}"
 private const val CONVERSATION_ROUTE = "conversation/{id}"
+private const val CHAT_SESSIONS_ROUTE = "chatsessions"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -198,6 +200,21 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onSend = viewModel::sendChat,
                         onTranscribe = viewModel::transcribeVoice,
                         onReferenceClick = viewModel::openReferenceDetail,
+                        onNewChat = viewModel::startNewChatSession,
+                        onOpenHistory = { navController.navigate(CHAT_SESSIONS_ROUTE) },
+                        tools = state.tools,
+                        onRefreshTools = viewModel::refreshTools,
+                    )
+                }
+                composable(CHAT_SESSIONS_ROUTE) {
+                    ChatSessionsScreen(
+                        sessions = state.chatSessions,
+                        onRefresh = viewModel::refreshChatSessions,
+                        onOpen = { id ->
+                            viewModel.openChatSession(id)
+                            navController.popBackStack()
+                        },
+                        onDelete = viewModel::deleteChatSession,
                     )
                 }
                 composable(Destination.Messages.route) {

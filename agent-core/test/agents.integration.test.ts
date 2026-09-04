@@ -176,6 +176,98 @@ maybe("family agent (live model: " + config.model + ")", () => {
     },
     300000
   );
+
+  it(
+    "remembers an earlier turn of the same chat session",
+    async () => {
+      // The core claim of persisted chat sessions: resuming one actually
+      // carries conversational memory, not just a saved transcript. Turn one
+      // states a fact with no other source for it in tasks/documents; turn
+      // two — sent with the same sessionId — asks for it back. If the reply
+      // doesn't reflect it, server.ts isn't feeding session history into
+      // askFamilyAgent (see agents/index.ts).
+      const first = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "Remember this: my favorite color is teal. Just acknowledge it, nothing else." },
+      });
+      expect(first.statusCode).toBe(200);
+      const sessionId = first.json().sessionId as string;
+      expect(sessionId).toBeTruthy();
+
+      const second = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "What did I just say my favorite color is?", sessionId },
+      });
+      expect(second.statusCode).toBe(200);
+      expect((second.json().reply as string).toLowerCase()).toContain("teal");
+
+      // Both turns of both messages ended up in the persisted session.
+      const messages = (await inject({ method: "GET", url: `/chat/sessions/${sessionId}/messages` })).json()
+        .messages;
+      expect(messages).toHaveLength(4);
+      expect(messages.map((m: { role: string }) => m.role)).toEqual([
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+      ]);
+    },
+    480000
+  );
+
+  it(
+    "'/task' forces the task-agent path",
+    async () => {
+      const res = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "/task buy stamps" },
+      });
+      expect(res.statusCode).toBe(200);
+      const stampTask = store.listTasks().find((t) => t.title.toLowerCase().includes("stamp"));
+      expect(stampTask, `expected a stamp task, got ${JSON.stringify(store.listTasks())}`).toBeDefined();
+    },
+    240000
+  );
+
+  it(
+    "'/find' forces the document-agent path",
+    async () => {
+      await inject({
+        method: "POST",
+        url: "/documents/ingest",
+        payload: { filename: "water-bill.txt", text: "City Water Utility. Amount due: $54.20. Due date: 2026-11-15." },
+      });
+      const res = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "/find the water bill" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().reply.toLowerCase()).toMatch(/water-bill|water/);
+    },
+    240000
+  );
+
+  it(
+    "'/note' forces the notes-agent path",
+    async () => {
+      const res = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "/note the plumber comes Friday" },
+      });
+      expect(res.statusCode).toBe(200);
+      const notes = [...store.listStickyNotes("shared"), ...store.listStickyNotes("private")];
+      expect(
+        notes.some((n) => /plumber/i.test(n.text)),
+        `expected a plumber sticky note, got ${JSON.stringify(notes)}`
+      ).toBe(true);
+    },
+    240000
+  );
 });
 
 if (!ready) {
@@ -280,6 +372,66 @@ toolsMaybe("family agent → tools-agent (live model + Deno)", () => {
       expect(ask.json().references?.some((r: { type: string }) => r.type === "tool")).toBe(true);
     },
     600000,
+  );
+
+  it(
+    "a leading '/' forces the tools API even for a phrasing the planner wouldn't obviously route there",
+    async () => {
+      // No "using our item tracker" framing this time — just "log that…"
+      // (one of tools-agent's own write triggers, per TOOLS_AGENT_PROMPT),
+      // with no mention of a tool by name. Left to the planner, whether this
+      // reaches tools-agent at all is the unreliable part; the leading "/"
+      // is what's supposed to make it deterministic.
+      const save = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "/log that the good screwdriver is in the garage drawer" },
+      });
+      expect(save.statusCode).toBe(200);
+
+      const rows = await inject({ method: "GET", url: `/tools/${toolId}/db/rows?table=items` });
+      expect(
+        rows.json().rows.some((r: Record<string, string>) => /screwdriver/i.test(r.name) && /garage/i.test(r.location)),
+        `expected the forced tools path to have saved the screwdriver row, got ${JSON.stringify(rows.json().rows)}`,
+      ).toBe(true);
+
+      const ask = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "/where is the good screwdriver?" },
+      });
+      expect(ask.statusCode).toBe(200);
+      expect((ask.json().reply as string).toLowerCase()).toMatch(/garage/);
+      expect(ask.json().references?.some((r: { type: string }) => r.type === "tool")).toBe(true);
+    },
+    600000,
+  );
+
+  it(
+    "'/build' forces the builder-agent path — a new tool starts building",
+    async () => {
+      // Scope note: this only proves "/" forced-routing reaches builder-
+      // agent's start_build tool directly — a structural guarantee, not a
+      // model-quality question — so it stops at "a new tool row appeared,
+      // building" rather than waiting for generation to finish or work;
+      // that's toolBuilder.test.ts's job (see the comment below).
+      const before = new Set(store.listTools().map((t) => t.id));
+      const res = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "/build a tool to track chore points for each family member" },
+      });
+      expect(res.statusCode).toBe(200);
+
+      let created: string | undefined;
+      for (let i = 0; i < 30; i++) {
+        created = store.listTools().find((t) => !before.has(t.id))?.id;
+        if (created) break;
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      expect(created, `expected a new tool to start building, got ${JSON.stringify(store.listTools())}`).toBeDefined();
+    },
+    300000,
   );
 
   // The "improve an existing tool" chat path (planner → builder-agent →

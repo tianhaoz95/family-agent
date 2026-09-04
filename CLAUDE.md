@@ -213,7 +213,11 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
     hypothetical. It also takes an optional `images: string[]` (data URIs) — the chat UI in
     both apps can attach photos/screenshots, and it builds a multimodal `HumanMessage`
     content array for the (multimodal) planner model. Subagents only ever get a text
-    `description`, so an image never propagates past the planner turn.
+    `description`, so an image never propagates past the planner turn. It also takes an
+    optional `history: {role, content}[]` — prior turns of the same persisted chat session,
+    prepended ahead of the current message in the `messages` array passed to `agent.invoke`
+    (text only; images aren't replayed, to avoid multiplying an already-slow CPU turn). See
+    "chat history sessions" below.
   - System prompts contain worked examples, not just abstract instructions — abstract phrasing
     alone was proven insufficient to get reliable tool delegation out of small models.
 - `agents/extraction.ts` — document field extraction **deliberately bypasses the planner**. It
@@ -332,6 +336,87 @@ The first data that isn't per-account. Both added narrowly rather than by loosen
   pdf.js (`desktop/src/pdfPreview.ts` — the Linux webview has no built-in PDF
   viewer, so an `<iframe>` won't do), Android with the platform `PdfRenderer`
   (`android/.../ui/PdfPreview.kt`); both fetch `GET /documents/:id/original`.
+
+## Chat history sessions (private assistant chat)
+
+The 1:1 assistant chat (`POST /chat` — not family chat above) persists as named,
+resumable sessions, per-user like tasks/documents (`chat_sessions` / `chat_messages`
+on `ScopedStore`, **not** the cross-account `channels`/`messages` shape — a private
+chat has no membership concept). A session is created **lazily**: `POST /chat` with
+no `sessionId` creates one titled from the first message (plain truncation to ~60
+chars, no model call — see `docs/DECISIONS.md`-style reasoning in the git history if
+you're wondering why not an AI-generated title) and hands its id back in the
+response; the client holds onto it for the rest of that conversation. Resuming a
+session actually restores conversational memory, not just a saved transcript: the
+route loads the session's prior messages (capped at the last ~20) and passes them as
+`history` to `askFamilyAgent()` (`agents/index.ts`), which prepends them to the
+`messages` array — text only, no replayed images, to keep an already-slow CPU turn
+from growing. Routes: `GET /chat/sessions`, `GET /chat/sessions/:id/messages`,
+`PATCH /chat/sessions/:id` (rename), `DELETE /chat/sessions/:id`. Both clients turn
+the Chat view into a list+detail layout reusing the Messages view's pattern: desktop
+`#view-chat`'s `.session-pane` (`main.ts`, styled off `.channel-pane`/`.channel-row`);
+Android a "History" button on `ChatScreen` navigating to `ChatSessionsScreen.kt`
+(`chatsessions` route, not a drawer `Destination`), reopening a row loads that
+session's messages back into the same `ChatScreen` via `AppViewModel.openChatSession`.
+
+## "/" forces a chat turn to one specialist agent
+
+The planner's own decision to delegate to a subagent (see `PLANNER_PROMPT`'s
+worked examples above) is unreliable on a small model — the same class of
+misrouting documented elsewhere in this file. A leading `/` on a 1:1 chat
+message skips that decision entirely and routes straight to one specialist,
+guaranteed structurally rather than by a stronger prompt:
+`parseForcedAgentCommand()` (`agents/index.ts`, next to `mentionsAgent()`)
+reads the word right after `/` — `build`→builder, `task`→task, `find`/`search`
+(alias)→document, `note`→notes — and returns `{ kind, text }`; anything else
+(a tool name, or nothing) still means `kind: "tools"`, the original behavior,
+so a plain `/ItemTracker …` message is unaffected by the other four keywords
+existing. Each `kind` has its own standalone builder —
+`buildFamilyToolsAgent`/`buildFamilyTaskAgent`/`buildFamilyDocumentAgent`/
+`buildFamilyBuilderAgent`/`buildFamilyNotesAgent` — a `createDeepAgent`
+instance with *only* that one subagent's own tools bound (no `subagents`
+array, same permissions/middleware as the planner), so it structurally cannot
+route anywhere else. `buildFamilyBuilderAgent` shares `makeBuilderTools()`
+with the planner's own builder-agent subagent rather than duplicating those
+three tool definitions.
+
+`server.ts` keeps one `makeAgentCache()`-built cache per kind (six total,
+including the planner) instead of hand-rolled `Map`s; `dropAgents(userId)`/
+`dropAllAgents()` touch all six in lockstep at every call site that changes
+what an agent can do (a tool build/improve/delete, or a model-client
+rebuild). `POST /chat` looks up `parseForcedAgentCommand(message)`; a `kind:
+"tools"` command additionally checks `config.toolsEnabled` (no model call,
+a plain "Tools aren't turned on for this server." reply, if off — the other
+four kinds work regardless of that flag). The stored chat message always
+keeps the leading `/` (an honest transcript); only the model-facing text is
+stripped. An empty `text` (just `/build` with nothing after) gets a
+per-kind fallback prompt (e.g. "List my tasks.") rather than an empty
+message.
+
+Both clients turn `/` into a Slack-style autocomplete merging two sources:
+a small fixed list of the four command keywords (kept in sync by hand with
+`FORCED_AGENT_KEYWORDS` — desktop's `SLASH_COMMANDS` in `main.ts`, Android's
+`SLASH_COMMANDS` in `ChatScreen.kt`) and the already-fetched tool list
+filtered to `kind === "server" && status === "ready"` (a `kind === "static"`
+tool has no operations to call via this path at all — see
+`familyToolCatalog` in `server.ts` — so it's excluded; no new endpoint
+needed). Picking a row inserts `/name ` into the composer for the user to
+finish typing. Desktop: `#chat-slash-menu` in `main.ts`, keyboard nav
+(arrows/Enter/Escape) layered onto the composer's `keydown` handler; a
+"?" button next to "+ New" opens the existing reference-preview side panel
+(`openSidePanel()`) with the same list, explained. Android: `ChatScreen.kt`
+renders matches as a card above the composer (the `input` state is a
+`TextFieldValue`, not a plain `String`, specifically so a programmatic
+insert — this, and the voice-transcript fill — can place the cursor at the
+end via `endOf()`; a plain-`String` `TextField` resets the cursor to the
+start on that kind of recomposition, a real bug caught by testing the picker
+against a live emulator, not by inspection); a help icon opens a
+`ModalBottomSheet` (`SlashHelpSheet`, same pattern as `DetailSheet.kt`) with
+the same content. Both clients also flag a `/`-prefixed user bubble with a
+small wrench icon so it's obvious at a glance which turns skipped the
+planner — read directly off the message text (`startsWith("/")`), so it
+renders correctly when replaying stored session history too, not just for a
+message just sent.
 
 ## Scope notes
 

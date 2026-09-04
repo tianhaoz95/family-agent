@@ -560,6 +560,65 @@ textarea {
   }
 }
 
+/* "/" tool autocomplete — a small dropdown above the composer, filtered as
+   you type. Row shape mirrors .channel-row (name + a muted preview line). */
+.slash-menu {
+  flex: none;
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+.slash-menu-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+.slash-menu-row:hover,
+.slash-menu-row.is-active {
+  background: var(--accent-soft);
+}
+.slash-menu-row-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-strong);
+}
+.slash-menu-row.is-active .slash-menu-row-name {
+  color: var(--accent);
+}
+.slash-menu-row-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.slash-menu-empty {
+  padding: 7px 10px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+/* A small wrench prepended to a user bubble that forced the tools path — so
+   it's obvious at a glance which turns skipped the planner. */
+.bubble-tool-badge {
+  display: inline-flex;
+  vertical-align: -2px;
+  margin-right: 5px;
+  opacity: 0.75;
+}
+.bubble-tool-badge svg {
+  width: 13px;
+  height: 13px;
+}
+
 .chat-attachments {
   flex: none;
   display: flex;
@@ -678,18 +737,6 @@ textarea {
 }
 .chat-form textarea::placeholder {
   color: var(--text-faint);
-}
-
-/* "New chat" — ghost button in the chat header, icon + label. */
-.chat-new-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  align-self: center;
-}
-.chat-new-btn svg {
-  width: 15px;
-  height: 15px;
 }
 
 /* "Stop" — replaces Send while a reply is streaming in. Danger-tinted so it
@@ -2485,7 +2532,8 @@ input[type="file"]::file-selector-button:hover {
 
 /* Messaging wants width — fill the content area, left-aligned, not the
    narrow centered column the other views use. */
-#view-messages {
+#view-messages,
+#view-chat {
   max-width: 1280px;
   margin-left: 0;
 }
@@ -2525,6 +2573,29 @@ input[type="file"]::file-selector-button:hover {
 .channel-pane-head .btn-ghost {
   padding: 6px 10px;
   font-size: 0.8rem;
+}
+.channel-pane-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.channel-pane-head-actions .btn-icon-only {
+  padding: 6px;
+}
+.channel-pane-head-actions .btn-icon-only svg {
+  width: 15px;
+  height: 15px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .channel-new-form {
   display: flex;
@@ -2609,6 +2680,35 @@ input[type="file"]::file-selector-button:hover {
   align-items: center;
   justify-content: center;
 }
+/* Chat history sessions reuse the channel-pane/channel-row look — same list
+   shape, minus the unread badge, plus a delete icon revealed on hover. */
+.session-row-delete {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  align-self: center;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-md);
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.session-row-delete svg {
+  width: 13px;
+  height: 13px;
+}
+.session-row:hover .session-row-delete {
+  display: inline-flex;
+}
+.session-row-delete:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
 .conversation-pane {
   flex: 1;
   min-width: 0;

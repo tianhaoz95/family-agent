@@ -212,9 +212,12 @@ export interface FamilyAgentDeps {
   familyTools?: Pick<FamilyToolDeps, "getCatalog" | "callOperation">;
 }
 
-export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {}) {
-  const model = createLocalModel();
-
+/**
+ * builder-agent's three tools — factored out so both buildFamilyAgent's
+ * builder-agent subagent and the standalone buildFamilyBuilderAgent (a "/"
+ * forced turn) share one definition instead of two copies drifting apart.
+ */
+function makeBuilderTools(deps: Pick<FamilyAgentDeps, "startToolBuild" | "startToolIterate" | "listTools">) {
   const startBuild = tool(
     async ({ description }) => {
       deps.startToolBuild?.(description);
@@ -273,6 +276,13 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
       }),
     }
   );
+
+  return [startBuild, listToolsForBuilder, improveTool];
+}
+
+export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {}) {
+  const model = createLocalModel();
+  const [startBuild, listToolsForBuilder, improveTool] = makeBuilderTools(deps);
 
   return createDeepAgent({
     name: "family-planner",
@@ -346,6 +356,91 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
 
 export type FamilyAgent = ReturnType<typeof buildFamilyAgent>;
 
+/**
+ * A ReAct loop scoped to ONLY list_family_tools/call_family_tool — no
+ * subagents, no task/document/notes tools. Used for a "/" chat turn: the
+ * planner's own delegation decision (see PLANNER_PROMPT's tools-agent
+ * examples) is unreliable on a small model, so a turn the user has
+ * explicitly flagged skips that decision entirely rather than hoping a
+ * stronger prompt fixes it. Same permissions/middleware as buildFamilyAgent
+ * (deny the generic fs tools for the same reason — see there).
+ */
+export function buildFamilyToolsAgent(
+  store: ScopedStore,
+  deps: Pick<FamilyAgentDeps, "onReference"> & { familyTools: NonNullable<FamilyAgentDeps["familyTools"]> }
+) {
+  const model = createLocalModel();
+  return createDeepAgent({
+    name: "family-tools-direct",
+    model,
+    systemPrompt: TOOLS_AGENT_PROMPT,
+    permissions: [{ operations: ["read", "write"], paths: ["/**"], mode: "deny" }],
+    middleware: [createFilesystemMiddleware({ tools: ["read_file"] })],
+    tools: makeFamilyToolTools({
+      getCatalog: deps.familyTools.getCatalog,
+      callOperation: deps.familyTools.callOperation,
+      onReference: deps.onReference,
+      logActivity: (actor, action, detail) => store.logActivity(actor, action, detail),
+    }),
+  });
+}
+
+/** Same shape as buildFamilyToolsAgent, for a "/task" forced turn. */
+export function buildFamilyTaskAgent(store: ScopedStore, deps: Pick<FamilyAgentDeps, "onReference"> = {}) {
+  return createDeepAgent({
+    name: "family-task-direct",
+    model: createLocalModel(),
+    systemPrompt: TASK_AGENT_PROMPT,
+    permissions: [{ operations: ["read", "write"], paths: ["/**"], mode: "deny" }],
+    middleware: [createFilesystemMiddleware({ tools: ["read_file"] })],
+    tools: makeTaskTools(store, deps.onReference),
+  });
+}
+
+/** Same shape as buildFamilyToolsAgent, for a "/find" or "/search" forced turn. */
+export function buildFamilyDocumentAgent(
+  store: ScopedStore,
+  deps: Pick<FamilyAgentDeps, "onReference" | "getEmbedder"> = {}
+) {
+  return createDeepAgent({
+    name: "family-document-direct",
+    model: createLocalModel(),
+    systemPrompt: DOCUMENT_AGENT_PROMPT,
+    permissions: [{ operations: ["read", "write"], paths: ["/**"], mode: "deny" }],
+    middleware: [createFilesystemMiddleware({ tools: ["read_file"] })],
+    tools: makeDocumentTools(store, deps.onReference, deps.getEmbedder),
+  });
+}
+
+/** Same shape as buildFamilyToolsAgent, for a "/build" forced turn. Shares
+ *  makeBuilderTools with buildFamilyAgent's builder-agent subagent. */
+export function buildFamilyBuilderAgent(
+  store: ScopedStore,
+  deps: Pick<FamilyAgentDeps, "startToolBuild" | "startToolIterate" | "listTools"> = {}
+) {
+  const [startBuild, listToolsForBuilder, improveTool] = makeBuilderTools(deps);
+  return createDeepAgent({
+    name: "family-builder-direct",
+    model: createLocalModel(),
+    systemPrompt: BUILDER_AGENT_PROMPT,
+    permissions: [{ operations: ["read", "write"], paths: ["/**"], mode: "deny" }],
+    middleware: [createFilesystemMiddleware({ tools: ["read_file"] })],
+    tools: [startBuild, listToolsForBuilder, improveTool],
+  });
+}
+
+/** Same shape as buildFamilyToolsAgent, for a "/note" forced turn. */
+export function buildFamilyNotesAgent(store: ScopedStore) {
+  return createDeepAgent({
+    name: "family-notes-direct",
+    model: createLocalModel(),
+    systemPrompt: NOTES_AGENT_PROMPT,
+    permissions: [{ operations: ["read", "write"], paths: ["/**"], mode: "deny" }],
+    middleware: [createFilesystemMiddleware({ tools: ["read_file"] })],
+    tools: makeNoteTools(store),
+  });
+}
+
 // A malformed final message that never resolved into clean prose — the
 // model tried to emit a tool call but the generation broke down into raw
 // syntax fragments instead of going through an actual tool_calls field.
@@ -376,10 +471,19 @@ const LOOKS_LIKE_REFUSAL = new RegExp(
 // most of those. Kept even after switching to gemma4:e2b, since the
 // failure mode is about small-model reliability in general, not specific
 // to the model that first surfaced it.
+/** The minimal shape askFamilyAgent actually calls — deliberately looser than
+ *  FamilyAgent so it also accepts buildFamilyToolsAgent's differently-typed
+ *  createDeepAgent instance without fighting its generics. */
+export interface InvokableAgent {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  invoke: (input: { messages: any[] }) => Promise<{ messages: { content: unknown }[] }>;
+}
+
 export async function askFamilyAgent(
-  agent: FamilyAgent,
+  agent: InvokableAgent,
   message: string,
-  images: string[] = []
+  images: string[] = [],
+  history: { role: "user" | "assistant"; content: string }[] = []
 ): Promise<string> {
   // Multimodal turn: gemma4:e2b (the default) takes text + images. The
   // planner sees them directly and can answer about a photo/screenshot, or
@@ -391,11 +495,14 @@ export async function askFamilyAgent(
         ...images.map((url) => ({ type: "image_url", image_url: { url } })),
       ]
     : message;
+  // `history` is prior turns of the same chat session (text only — replaying
+  // every past turn's images back through an already-slow CPU model would
+  // multiply the wait for no real benefit). Empty for a brand-new session, so
+  // this is a strict extension of the old single-message shape.
+  const messages = [...history, { role: "user", content }];
   let lastRefusal = "";
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const result = await agent.invoke({
-      messages: [{ role: "user", content }],
-    });
+    const result = await agent.invoke({ messages });
     const last = result.messages.at(-1);
     const text = last ? (typeof last.content === "string" ? last.content : JSON.stringify(last.content)) : "";
     if (!text.trim() || LOOKS_MALFORMED.test(text)) continue;
@@ -412,6 +519,49 @@ export async function askFamilyAgent(
     lastRefusal ||
     "(the local model didn't return a clean response — try rephrasing, or check /activity for what it attempted)"
   );
+}
+
+// ---- 1:1 chat: the "/" forced-agent prefix ----
+// A user who explicitly types "/" (by hand, or via the client's command/tool
+// autocomplete) wants this turn routed straight to one specialist agent, not
+// left to the planner's own (unreliable, on a small model) delegation call.
+
+export type ForcedAgentKind = "tools" | "task" | "document" | "builder" | "notes";
+
+// A keyword right after "/" picks the agent; "search" is a hand-typeable
+// alias for "find" (not offered as a separate autocomplete suggestion, to
+// keep that list short — see main.ts / ChatScreen.kt).
+const FORCED_AGENT_KEYWORDS: Record<string, ForcedAgentKind> = {
+  build: "builder",
+  task: "task",
+  find: "document",
+  search: "document",
+  note: "notes",
+};
+
+export interface ForcedAgentCommand {
+  kind: ForcedAgentKind;
+  /** Model-facing text — "/" and (if present) the recognized keyword stripped. */
+  text: string;
+}
+
+/**
+ * null when the message doesn't start with "/". A recognized keyword picks
+ * that agent; anything else (a tool name, or nothing at all) still means
+ * "tools" — the original, already-shipped behavior, so a plain
+ * "/ItemTracker …" or "/log that …" message is unaffected by the other four
+ * keywords existing. (A family tool literally named "build"/"task"/"find"/
+ * "search"/"note" would be shadowed by the keyword — accepted edge case.)
+ */
+export function parseForcedAgentCommand(message: string): ForcedAgentCommand | null {
+  const trimmed = message.trimStart();
+  if (!trimmed.startsWith("/")) return null;
+  const rest = trimmed.slice(1).trimStart();
+  const spaceIdx = rest.search(/\s/);
+  const firstWord = (spaceIdx === -1 ? rest : rest.slice(0, spaceIdx)).toLowerCase();
+  const kind = FORCED_AGENT_KEYWORDS[firstWord];
+  if (kind) return { kind, text: spaceIdx === -1 ? "" : rest.slice(spaceIdx + 1).trimStart() };
+  return { kind: "tools", text: rest };
 }
 
 // ---- family chat: the @agent mention ----

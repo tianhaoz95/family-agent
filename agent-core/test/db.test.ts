@@ -150,6 +150,74 @@ describe("Store (scoped to one user)", () => {
   });
 });
 
+describe("ScopedStore — chat sessions", () => {
+  let raw: Store;
+  let store: ScopedStore;
+
+  beforeEach(() => {
+    raw = new Store(":memory:");
+    const user = raw.createUser({ username: "owner", displayName: "Owner", password: "sekret123", role: "admin" });
+    store = raw.scoped(user.id);
+  });
+
+  it("creates a session titled from the first message, truncated", () => {
+    const short = store.createChatSession("what's for dinner tonight?");
+    expect(short.title).toBe("what's for dinner tonight?");
+
+    const long = store.createChatSession("a".repeat(90));
+    expect(long.title).toBe(`${"a".repeat(60)}…`);
+  });
+
+  it("adds messages, orders them, and touches the session's updated_at", () => {
+    const session = store.createChatSession("hi");
+    store.addChatMessage(session.id, "user", "hi");
+    store.addChatMessage(session.id, "assistant", "hello!", [], [{ type: "task", id: "t1", label: "Buy milk" }]);
+
+    const messages = store.listChatMessages(session.id);
+    expect(messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(messages[1].refs).toEqual([{ type: "task", id: "t1", label: "Buy milk" }]);
+
+    const refreshed = store.getChatSession(session.id)!;
+    expect(refreshed.updatedAt >= session.createdAt).toBe(true);
+  });
+
+  it("lists sessions newest-first with a preview and message count", () => {
+    const first = store.createChatSession("first session");
+    store.addChatMessage(first.id, "user", "first session");
+    store.addChatMessage(first.id, "assistant", "reply one");
+    const second = store.createChatSession("second session");
+    store.addChatMessage(second.id, "user", "second session");
+
+    const summaries = store.listChatSessions();
+    expect(summaries.map((s) => s.id)).toEqual([second.id, first.id]);
+    expect(summaries.find((s) => s.id === first.id)?.messageCount).toBe(2);
+    expect(summaries.find((s) => s.id === first.id)?.lastMessage).toBe("reply one");
+  });
+
+  it("renames and deletes a session, cascading its messages", () => {
+    const session = store.createChatSession("original title");
+    store.addChatMessage(session.id, "user", "original title");
+    expect(store.renameChatSession(session.id, "Dinner plans")?.title).toBe("Dinner plans");
+
+    expect(store.deleteChatSession(session.id)).toBe(true);
+    expect(store.getChatSession(session.id)).toBeUndefined();
+    expect(store.listChatMessages(session.id)).toEqual([]);
+    expect(store.deleteChatSession(session.id)).toBe(false);
+  });
+
+  it("isolates sessions per user", () => {
+    const other = raw.createUser({ username: "other", displayName: "Other", password: "sekret123" });
+    const otherStore = raw.scoped(other.id);
+    const session = store.createChatSession("mine");
+
+    expect(otherStore.getChatSession(session.id)).toBeUndefined();
+    expect(otherStore.listChatMessages(session.id)).toEqual([]);
+    expect(otherStore.renameChatSession(session.id, "nope")).toBeUndefined();
+    expect(otherStore.deleteChatSession(session.id)).toBe(false);
+    expect(store.getChatSession(session.id)).toBeDefined();
+  });
+});
+
 describe("Store — users, sessions, isolation", () => {
   let raw: Store;
 
@@ -193,11 +261,14 @@ describe("Store — users, sessions, isolation", () => {
     const a = raw.createUser({ username: "a", displayName: "A", password: "aaaaaa" });
     raw.scoped(a.id).createTask({ title: "gone soon" });
     raw.scoped(a.id).createDocument({ filename: "x.txt", rawText: "x" });
+    const session = raw.scoped(a.id).createChatSession("gone soon too");
+    raw.scoped(a.id).addChatMessage(session.id, "user", "gone soon too");
     raw.deleteUser(a.id);
     expect(raw.getUser(a.id)).toBeUndefined();
     // A fresh scoped view over the same id sees nothing.
     expect(raw.scoped(a.id).listTasks()).toHaveLength(0);
     expect(raw.scoped(a.id).listDocuments()).toHaveLength(0);
+    expect(raw.scoped(a.id).listChatSessions()).toHaveLength(0);
   });
 
   it("guards the last admin count", () => {

@@ -138,13 +138,49 @@ data class ChatRequest(
     // Data URIs (data:image/jpeg;base64,…). Json is configured with
     // encodeDefaults=false, so an empty list is simply omitted from the body.
     val images: List<String> = emptyList(),
+    // The persisted chat session to continue; null starts (server-side, lazily) a new one.
+    val sessionId: String? = null,
 )
 
 @Serializable
 data class ChatReference(val type: String, val id: String, val label: String)
 
 @Serializable
-data class ChatResponse(val reply: String, val references: List<ChatReference> = emptyList())
+data class ChatResponse(val reply: String, val references: List<ChatReference> = emptyList(), val sessionId: String)
+
+// ---- chat history sessions (private 1:1 assistant chat) ----
+
+@Serializable
+data class ChatSession(
+    val id: String,
+    val title: String,
+    val createdAt: String,
+    val updatedAt: String,
+    val lastMessage: String? = null,
+    val messageCount: Int = 0,
+)
+
+@Serializable
+data class ChatSessionMessage(
+    val id: String,
+    val role: String,
+    val body: String,
+    val images: List<String> = emptyList(),
+    val refs: List<ChatReference> = emptyList(),
+    val createdAt: String,
+)
+
+@Serializable
+data class ChatSessionsResponse(val sessions: List<ChatSession>)
+
+@Serializable
+data class ChatSessionMessagesResponse(val messages: List<ChatSessionMessage>)
+
+@Serializable
+data class ChatSessionResponse(val session: ChatSession)
+
+@Serializable
+data class RenameChatSessionRequest(val title: String)
 
 @Serializable
 data class TranscribeResponse(val text: String)

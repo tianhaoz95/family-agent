@@ -65,6 +65,10 @@ data class AppUiState(
     val connection: ConnectionStatus = ConnectionStatus.Connecting,
     val chatMessages: List<ChatMessage> = emptyList(),
     val chatSending: Boolean = false,
+    /** The persisted session behind [chatMessages]; null until the first turn of a
+     *  fresh conversation gets a reply and the server hands one back. */
+    val activeChatSessionId: String? = null,
+    val chatSessions: List<app.familyagent.android.data.ChatSession> = emptyList(),
     /** Server offers speech-to-text (from /health) — gates the chat mic button. */
     val voiceEnabled: Boolean = false,
     /** A recorded voice clip is being transcribed right now. */
@@ -184,6 +188,8 @@ class AppViewModel(
                     auth = AuthState.Authenticated(resp.user),
                     connection = ConnectionStatus.Connecting,
                     chatMessages = emptyList(),
+                    activeChatSessionId = null,
+                    chatSessions = emptyList(),
                     tasks = emptyList(),
                     documents = emptyList(),
                     activity = emptyList(),
@@ -281,9 +287,13 @@ class AppViewModel(
         viewModelScope.launch {
             val withUser = _state.value.chatMessages + ChatMessage("user", message, images)
             _state.value = _state.value.copy(chatMessages = withUser, chatSending = true)
-            val assistant = apiCall { api.chat(prompt, images) }
+            val sessionId = _state.value.activeChatSessionId
+            val assistant = apiCall { api.chat(prompt, images, sessionId) }
                 .fold(
-                    onSuccess = { ChatMessage("assistant", it.reply, references = it.references) },
+                    onSuccess = {
+                        _state.value = _state.value.copy(activeChatSessionId = it.sessionId)
+                        ChatMessage("assistant", it.reply, references = it.references)
+                    },
                     onFailure = { ChatMessage("assistant", "Error: ${it.message}") },
                 )
             _state.value = _state.value.copy(
@@ -291,6 +301,46 @@ class AppViewModel(
                 chatSending = false,
             )
             refreshActivity()
+            refreshChatSessions()
+        }
+    }
+
+    // ---- chat history sessions (private 1:1 assistant chat) ----
+    // Single-writer (this device), so unlike family chat there's no polling —
+    // just refresh-on-demand.
+
+    fun refreshChatSessions() {
+        viewModelScope.launch {
+            apiCall { api.listChatSessions() }.onSuccess { _state.value = _state.value.copy(chatSessions = it) }
+        }
+    }
+
+    /** Start a brand-new conversation. Nothing is created server-side until the
+     *  first message actually sends (see POST /chat's lazy session creation). */
+    fun startNewChatSession() {
+        _state.value = _state.value.copy(chatMessages = emptyList(), activeChatSessionId = null)
+    }
+
+    fun openChatSession(id: String) {
+        if (id == _state.value.activeChatSessionId) return
+        viewModelScope.launch {
+            apiCall { api.getChatSessionMessages(id) }.onSuccess { messages ->
+                _state.value = _state.value.copy(
+                    activeChatSessionId = id,
+                    chatMessages = messages.map {
+                        ChatMessage(role = it.role, text = it.body, images = it.images, references = it.refs)
+                    },
+                )
+            }
+        }
+    }
+
+    fun deleteChatSession(id: String) {
+        viewModelScope.launch {
+            apiCall { api.deleteChatSession(id) }.onSuccess {
+                _state.value = _state.value.copy(chatSessions = _state.value.chatSessions.filter { it.id != id })
+                if (id == _state.value.activeChatSessionId) startNewChatSession()
+            }
         }
     }
 

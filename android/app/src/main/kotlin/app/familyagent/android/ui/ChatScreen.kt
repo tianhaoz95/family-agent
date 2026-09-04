@@ -14,12 +14,18 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.PhotoLibrary
@@ -32,11 +38,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import app.familyagent.android.ChatMessage
 import app.familyagent.android.data.ChatReference
+import app.familyagent.android.data.Tool
+import app.familyagent.android.ui.theme.AppAccents
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
@@ -48,6 +60,24 @@ import java.util.Locale
 
 private const val MAX_IMAGES = 4
 
+/** A TextFieldValue with the cursor placed at the end — plain-string
+ *  assignment to a TextField's value resets the cursor to the start on
+ *  recomposition, which is wrong for programmatic inserts (voice transcript,
+ *  the "/" tool picker). */
+private fun endOf(text: String) = TextFieldValue(text, TextRange(text.length))
+
+/** "/" autocomplete: a fixed set of forced-agent commands (see
+ *  parseForcedAgentCommand, agent-core/src/agents/index.ts — keep these four
+ *  in sync with FORCED_AGENT_KEYWORDS there) plus the family's own tool
+ *  names. "search" is a hand-typeable alias for "find", not listed
+ *  separately, to keep this short. */
+private val SLASH_COMMANDS = listOf(
+    "build" to "Build a new tool, or improve an existing one",
+    "task" to "Add, list, or complete a to-do",
+    "find" to "Search the family's documents (alias: /search)",
+    "note" to "Read or add a sticky note",
+)
+
 @Composable
 fun ChatScreen(
     messages: List<ChatMessage>,
@@ -57,9 +87,19 @@ fun ChatScreen(
     onSend: (String, List<String>) -> Unit,
     onTranscribe: (ByteArray, (String) -> Unit) -> Unit,
     onReferenceClick: (ChatReference) -> Unit = {},
+    onNewChat: () -> Unit = {},
+    onOpenHistory: () -> Unit = {},
+    tools: List<Tool> = emptyList(),
+    onRefreshTools: () -> Unit = {},
 ) {
+    // Chat is the app's start destination, so it never goes through
+    // MainActivity's navigateTo — fetch the tool list ourselves (same
+    // self-refresh pattern MessagesScreen/ChatSessionsScreen use) so the "/"
+    // autocomplete works without a prior visit to the Tools tab.
+    LaunchedEffect(Unit) { onRefreshTools() }
+    var showSlashHelp by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    var input by remember { mutableStateOf("") }
+    var input by remember { mutableStateOf(TextFieldValue("")) }
     var attached by remember { mutableStateOf<List<String>>(emptyList()) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var attachMenuOpen by remember { mutableStateOf(false) }
@@ -81,7 +121,7 @@ fun ChatScreen(
             val wav = recorder.stop()
             if (wav.isNotEmpty()) {
                 onTranscribe(wav) { text ->
-                    input = if (input.isBlank()) text else "${input.trimEnd()} $text"
+                    input = endOf(if (input.text.isBlank()) text else "${input.text.trimEnd()} $text")
                 }
             }
         }
@@ -126,6 +166,30 @@ fun ChatScreen(
         title = "Chat",
         subtitle = "Ask about tasks, documents, or anything else — routed locally.",
     ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            TextButton(onClick = onNewChat) {
+                Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("New")
+            }
+            TextButton(onClick = onOpenHistory) {
+                Icon(Icons.Rounded.History, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("History")
+            }
+            IconButton(onClick = { showSlashHelp = true }) {
+                Icon(Icons.AutoMirrored.Rounded.HelpOutline, contentDescription = "Slash commands", modifier = Modifier.size(18.dp))
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+
+        if (showSlashHelp) {
+            SlashHelpSheet(tools = tools, onDismiss = { showSlashHelp = false })
+        }
+
         if (messages.isEmpty() && !sending) {
             EmptyState(
                 text = "Start a conversation. Try “Remind me to renew the car registration by Nov 1”, or attach a photo.",
@@ -188,11 +252,56 @@ fun ChatScreen(
             }
         }
 
+        // "/" autocomplete — only while the "/" and a partial command/tool
+        // name are still being typed (no space yet); once there's a space,
+        // the text after it is the request itself, not still picking one.
+        // Only ready, server-kind tools are offered — a static (display-only)
+        // tool has no operations to call via the tools API at all.
+        val slashQuery = input.text.takeIf { it.startsWith("/") && !it.drop(1).contains(" ") }?.drop(1)
+        if (slashQuery != null) {
+            val toolEntries = tools
+                .filter { it.kind == "server" && it.status == "ready" }
+                .map { it.name to it.description }
+            val matches = (SLASH_COMMANDS + toolEntries).filter { (name, _) ->
+                name.contains(slashQuery, ignoreCase = true)
+            }
+            Spacer(Modifier.height(8.dp))
+            AppCard {
+                if (matches.isEmpty()) {
+                    Text(
+                        "No matching commands or tools.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AppAccents.textSecondary,
+                    )
+                } else {
+                    Column {
+                        matches.forEachIndexed { i, (name, description) ->
+                            if (i > 0) Spacer(Modifier.height(8.dp))
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { input = endOf("/$name ") },
+                            ) {
+                                Text(name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AppAccents.textSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Spacer(Modifier.height(10.dp))
         val submit = {
-            if ((input.isNotBlank() || attached.isNotEmpty()) && !sending) {
-                onSend(input.trim(), attached)
-                input = ""
+            if ((input.text.isNotBlank() || attached.isNotEmpty()) && !sending) {
+                onSend(input.text.trim(), attached)
+                input = TextFieldValue("")
                 attached = emptyList()
             }
         }
@@ -253,7 +362,7 @@ fun ChatScreen(
                 value = input,
                 onValueChange = { input = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text(if (isRecording) "Listening…" else "Message, or attach a photo…") },
+                placeholder = { Text(if (isRecording) "Listening…" else "Message, attach a photo, or type / for a command") },
                 maxLines = 4,
                 textStyle = MaterialTheme.typography.bodyLarge,
                 colors = TextFieldDefaults.colors(
@@ -267,7 +376,7 @@ fun ChatScreen(
             )
             FilledIconButton(
                 onClick = submit,
-                enabled = !sending && (input.isNotBlank() || attached.isNotEmpty()),
+                enabled = !sending && (input.text.isNotBlank() || attached.isNotEmpty()),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.size(46.dp),
             ) {
@@ -282,6 +391,58 @@ private fun createChatPhotoUri(context: Context): Uri {
     val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
     val file = File(dir, "photo-$stamp.jpg")
     return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+}
+
+/** Explains the "/" forced-agent commands — the same bottom-sheet pattern
+ *  DetailSheet.kt uses for reference/document previews, but self-contained
+ *  here since the content is static plus the tools ChatScreen already has. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SlashHelpSheet(tools: List<Tool>, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+                .heightIn(max = 560.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text("Slash commands", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Start a message with \"/\" to skip the assistant's own routing and send that turn straight to " +
+                    "one specialist — useful when it doesn't otherwise pick the right one.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppAccents.textSecondary,
+            )
+            Spacer(Modifier.height(16.dp))
+            Text("Commands", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            SLASH_COMMANDS.forEach { (name, description) -> SlashHelpRow("/$name", description) }
+            Spacer(Modifier.height(16.dp))
+            Text("Or one of the family's tools, by name", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            val readyTools = tools.filter { it.kind == "server" && it.status == "ready" }
+            if (readyTools.isEmpty()) {
+                Text(
+                    "The family hasn't built any tools yet — see the Tools tab.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AppAccents.textSecondary,
+                )
+            } else {
+                readyTools.forEach { SlashHelpRow("/${it.name}", it.description) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SlashHelpRow(command: String, description: String) {
+    Column(Modifier.padding(vertical = 4.dp)) {
+        Text(command, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+        Text(description, style = MaterialTheme.typography.bodySmall, color = AppAccents.textSecondary)
+    }
 }
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -330,7 +491,23 @@ private fun ChatBubble(msg: ChatMessage, onReferenceClick: (ChatReference) -> Un
                     if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
                 if (isUser) {
                     // The user types plain text — no need to parse it as Markdown.
-                    Text(msg.text, color = textColor, style = MaterialTheme.typography.bodyLarge)
+                    // A "/" turn forced a specific specialist agent instead of
+                    // the planner — flag it so it's obvious at a glance which
+                    // turns did (see parseForcedAgentCommand, agent-core).
+                    if (msg.text.trimStart().startsWith("/")) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Rounded.Build,
+                                contentDescription = "Sent straight to a specialist agent — skipped the planner",
+                                modifier = Modifier.size(14.dp),
+                                tint = textColor.copy(alpha = 0.75f),
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(msg.text, color = textColor, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    } else {
+                        Text(msg.text, color = textColor, style = MaterialTheme.typography.bodyLarge)
+                    }
                 } else {
                     // The planner model replies in Markdown; render it.
                     Markdown(

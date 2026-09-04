@@ -188,8 +188,38 @@ describe("api client", () => {
   it("chat() forwards an AbortSignal so the caller can cancel it", async () => {
     const fetchMock = mockFetchOnce(200, { reply: "hi" });
     const controller = new AbortController();
-    await api.chat("hello", [], controller.signal);
+    await api.chat("hello", [], undefined, controller.signal);
     expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(controller.signal);
+  });
+
+  it("chat() includes sessionId when resuming a session", async () => {
+    const fetchMock = mockFetchOnce(200, { reply: "hi", sessionId: "s1" });
+    await api.chat("hello", [], "s1");
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      message: "hello",
+      sessionId: "s1",
+    });
+  });
+
+  it("listChatSessions()/getChatSessionMessages()/renameChatSession()/deleteChatSession() hit the right routes", async () => {
+    let fetchMock = mockFetchOnce(200, { sessions: [{ id: "s1", title: "Hi", createdAt: "t", updatedAt: "t", lastMessage: null, messageCount: 0 }] });
+    const sessions = await api.listChatSessions();
+    expect(sessions.sessions).toHaveLength(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/chat/sessions");
+
+    fetchMock = mockFetchOnce(200, { messages: [] });
+    await api.getChatSessionMessages("s1");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/chat/sessions/s1/messages");
+
+    fetchMock = mockFetchOnce(200, { session: { id: "s1", title: "Renamed" } });
+    await api.renameChatSession("s1", "Renamed");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/chat/sessions/s1");
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("PATCH");
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({ title: "Renamed" });
+
+    fetchMock = mockFetchOnce(200, { deleted: true });
+    await api.deleteChatSession("s1");
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("DELETE");
   });
 
   it("transcribe() POSTs the clip as multipart to /transcribe without a JSON content-type", async () => {

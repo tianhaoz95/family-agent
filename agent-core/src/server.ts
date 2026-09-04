@@ -6,10 +6,18 @@ import { Store, ScopedStore, AGENT_SENDER_ID, type UserRecord } from "./db.js";
 import { config, dbPath, envLocked, userInboxDir } from "./config.js";
 import {
   buildFamilyAgent,
+  buildFamilyToolsAgent,
+  buildFamilyTaskAgent,
+  buildFamilyDocumentAgent,
+  buildFamilyBuilderAgent,
+  buildFamilyNotesAgent,
   askFamilyAgent,
   askFamilyAgentInChannel,
   mentionsAgent,
+  parseForcedAgentCommand,
+  type ForcedAgentKind,
   type FamilyAgent,
+  type InvokableAgent,
 } from "./agents/index.js";
 import { extractDocument } from "./agents/extraction.js";
 import { suggestDocumentName } from "./agents/rename.js";
@@ -159,15 +167,15 @@ export function buildServer(
     if (!config.toolsEnabled) return;
     void buildTool(extractionModel, store.scoped(userId), supervisor, prompt)
       // buildTool caches the new tool's MCP manifest itself; just drop this
-      // user's planner graph so it rebuilds and tools-agent sees the change.
-      .then(() => agents.delete(userId))
+      // user's planner graphs so they rebuild and tools-agent sees the change.
+      .then(() => dropAgents(userId))
       .catch((e) => console.error("tool build crashed:", e));
   };
 
   const startToolIterate = (userId: string, toolId: string, instruction: string) => {
     if (!config.toolsEnabled) return;
     void iterateTool(extractionModel, store.scoped(userId), supervisor, toolId, instruction)
-      .then(() => agents.delete(userId))
+      .then(() => dropAgents(userId))
       .catch((e) => console.error("tool improve crashed:", e));
   };
 
@@ -203,33 +211,97 @@ export function buildServer(
     return out;
   };
 
-  // One planner graph per user, built on first use, bound to that user's
+  // One agent per user per "mode": the general planner, plus one scoped-down
+  // ReAct loop per subagent for a "/" forced turn (parseForcedAgentCommand,
+  // agents/index.ts) — each built lazily and cached, bound to that user's
   // scoped store so a subagent can never see another family member's data.
-  const agents = new Map<string, FamilyAgent>();
+  function makeAgentCache<T>(build: (userId: string) => T) {
+    const cache = new Map<string, T>();
+    return {
+      get(userId: string): T {
+        let a = cache.get(userId);
+        if (!a) {
+          a = build(userId);
+          cache.set(userId, a);
+        }
+        return a;
+      },
+      delete: (userId: string) => cache.delete(userId),
+      clear: () => cache.clear(),
+    };
+  }
   // Per-user sink for "the agent looked this up" hints — a fresh array is set
   // just before each /chat turn and read back after, so the reply can carry
-  // clickable task / document references.
+  // clickable task / document references. Declared before the caches below
+  // since every builder's onReference closes over it.
   const chatRefs = new Map<string, { type: "document" | "task" | "tool"; id: string }[]>();
-  const agentFor = (userId: string): FamilyAgent => {
-    let a = agents.get(userId);
-    if (!a) {
-      a = buildFamilyAgent(store.scoped(userId), {
-        startToolBuild: (p) => startToolBuild(userId, p),
-        startToolIterate: (toolId, instruction) => startToolIterate(userId, toolId, instruction),
-        listTools: () => toolsBrief(userId),
-        onReference: (ref) => chatRefs.get(userId)?.push(ref),
-        getEmbedder: () => embedder,
-        familyTools: config.toolsEnabled
-          ? {
-              getCatalog: () => familyToolCatalog(userId),
-              callOperation: (toolId, operation, args) => callOperation(toolId, operation, args, supervisor),
-            }
-          : undefined,
-      });
-      agents.set(userId, a);
-    }
-    return a;
+  const familyToolsDeps = (userId: string) => ({
+    getCatalog: () => familyToolCatalog(userId),
+    callOperation: (toolId: string, operation: string, args: Record<string, unknown>) =>
+      callOperation(toolId, operation, args, supervisor),
+  });
+
+  const plannerAgents = makeAgentCache<FamilyAgent>((userId) =>
+    buildFamilyAgent(store.scoped(userId), {
+      startToolBuild: (p) => startToolBuild(userId, p),
+      startToolIterate: (toolId, instruction) => startToolIterate(userId, toolId, instruction),
+      listTools: () => toolsBrief(userId),
+      onReference: (ref) => chatRefs.get(userId)?.push(ref),
+      getEmbedder: () => embedder,
+      familyTools: config.toolsEnabled ? familyToolsDeps(userId) : undefined,
+    })
+  );
+  // The four "/<keyword>" caches only ever get built when that keyword was
+  // actually used (lazy per-cache, not just per-user), so a family that never
+  // types "/note" never pays for a notes-only agent.
+  const toolsAgents = makeAgentCache((userId) =>
+    buildFamilyToolsAgent(store.scoped(userId), {
+      onReference: (ref) => chatRefs.get(userId)?.push(ref),
+      familyTools: familyToolsDeps(userId),
+    })
+  );
+  const taskAgents = makeAgentCache((userId) =>
+    buildFamilyTaskAgent(store.scoped(userId), { onReference: (ref) => chatRefs.get(userId)?.push(ref) })
+  );
+  const documentAgents = makeAgentCache((userId) =>
+    buildFamilyDocumentAgent(store.scoped(userId), {
+      onReference: (ref) => chatRefs.get(userId)?.push(ref),
+      getEmbedder: () => embedder,
+    })
+  );
+  const builderAgents = makeAgentCache((userId) =>
+    buildFamilyBuilderAgent(store.scoped(userId), {
+      startToolBuild: (p) => startToolBuild(userId, p),
+      startToolIterate: (toolId, instruction) => startToolIterate(userId, toolId, instruction),
+      listTools: () => toolsBrief(userId),
+    })
+  );
+  const notesAgents = makeAgentCache((userId) => buildFamilyNotesAgent(store.scoped(userId)));
+
+  // A tool build/improve/delete (or a model-client rebuild) invalidates every
+  // one of the caches above in lockstep — miss one and a stale agent lingers.
+  const dropAgents = (userId: string) => {
+    plannerAgents.delete(userId);
+    toolsAgents.delete(userId);
+    taskAgents.delete(userId);
+    documentAgents.delete(userId);
+    builderAgents.delete(userId);
+    notesAgents.delete(userId);
   };
+  const dropAllAgents = () => {
+    plannerAgents.clear();
+    toolsAgents.clear();
+    taskAgents.clear();
+    documentAgents.clear();
+    builderAgents.clear();
+    notesAgents.clear();
+  };
+  const agentFor = (userId: string) => plannerAgents.get(userId);
+  const toolsAgentFor = (userId: string) => toolsAgents.get(userId);
+  const taskAgentFor = (userId: string) => taskAgents.get(userId);
+  const documentAgentFor = (userId: string) => documentAgents.get(userId);
+  const builderAgentFor = (userId: string) => builderAgents.get(userId);
+  const notesAgentFor = (userId: string) => notesAgents.get(userId);
   // Resolve collected hints to {type, id, label}, deduped and capped.
   const resolveReferences = (userStore: ScopedStore, userId: string) => {
     const collected = chatRefs.get(userId) ?? [];
@@ -257,7 +329,7 @@ export function buildServer(
   const rebuildModelClients = () => {
     extractionModel = createLocalModel();
     embedder = createEmbedder();
-    agents.clear();
+    dropAllAgents();
   };
   // Just the embedder — for an embedModel change that leaves the chat model
   // (and its warmed prefix cache, watchers, planner graphs) untouched.
@@ -452,21 +524,36 @@ export function buildServer(
       return reply.code(400).send({ error: "Can't delete the only admin." });
     }
     store.deleteUser(id);
-    agents.delete(id);
+    dropAgents(id);
     store.scoped(req.authUser.id).logActivity("user", "user.deleted", `Deleted account "${target.username}"`);
     await hooks.onUserDeleted?.(id);
     return { deleted: true };
   });
 
   // ---- chat ----
+  // A "session" is this user's own persisted conversation with the assistant
+  // (chat_sessions/chat_messages, ScopedStore — not the cross-account
+  // channels/messages behind family chat). POST /chat lazily creates one on
+  // the first turn (no sessionId in the body) and hands its id back; the
+  // client holds onto it for the rest of that conversation.
   const ChatBody = z.object({
     message: z.string().min(1),
     images: z.array(z.string().regex(/^data:image\/[a-z+.-]+;base64,/i)).max(4).optional(),
+    sessionId: z.string().min(1).optional(),
   });
   app.post("/chat", { bodyLimit: 24 * 1024 * 1024 }, async (req, reply) => {
     const parsed = ChatBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
-    const { message, images = [] } = parsed.data;
+    const { message, images = [], sessionId } = parsed.data;
+
+    let session = sessionId ? req.userStore.getChatSession(sessionId) : undefined;
+    if (sessionId && !session) return reply.code(404).send({ error: "No such chat session." });
+    if (!session) session = req.userStore.createChatSession(message);
+
+    // Prior turns of this session, as context for the model — captured before
+    // this turn's own message is stored, so it isn't echoed back to itself.
+    const priorMessages = req.userStore.listChatMessages(session.id).slice(-20);
+    req.userStore.addChatMessage(session.id, "user", message, images);
     req.userStore.logActivity(
       "user",
       "chat.message",
@@ -474,10 +561,40 @@ export function buildServer(
     );
     try {
       chatRefs.set(req.authUser.id, []);
-      const responseText = await askFamilyAgent(agentFor(req.authUser.id), message, images);
+      const history = priorMessages.map((m) => ({ role: m.role, content: m.body }));
+      // A leading "/" (typed by hand, or via the client's command/tool
+      // autocomplete) skips the planner's own delegation decision — unreliable
+      // on a small model — and runs one specialist agent directly.
+      let responseText: string;
+      const forced = parseForcedAgentCommand(message);
+      if (forced) {
+        if (forced.kind === "tools" && !config.toolsEnabled) {
+          responseText = "Tools aren't turned on for this server.";
+        } else {
+          const agentByKind: Record<ForcedAgentKind, (userId: string) => InvokableAgent> = {
+            tools: toolsAgentFor,
+            task: taskAgentFor,
+            document: documentAgentFor,
+            builder: builderAgentFor,
+            notes: notesAgentFor,
+          };
+          const fallbackByKind: Record<ForcedAgentKind, string> = {
+            tools: "What can you do?",
+            task: "List my tasks.",
+            document: "What documents do I have?",
+            builder: "What tools do we have, and what can be built?",
+            notes: "What's on the sticky notes?",
+          };
+          const agent = agentByKind[forced.kind](req.authUser.id);
+          responseText = await askFamilyAgent(agent, forced.text || fallbackByKind[forced.kind], images, history);
+        }
+      } else {
+        responseText = await askFamilyAgent(agentFor(req.authUser.id), message, images, history);
+      }
       const references = resolveReferences(req.userStore, req.authUser.id);
+      req.userStore.addChatMessage(session.id, "assistant", responseText, [], references);
       req.userStore.logActivity("family-planner", "chat.reply", responseText);
-      return { reply: responseText, references };
+      return { reply: responseText, references, sessionId: session.id };
     } catch (err) {
       chatRefs.delete(req.authUser.id);
       req.log?.error?.(err);
@@ -486,6 +603,30 @@ export function buildServer(
         detail: err instanceof Error ? err.message : String(err),
       });
     }
+  });
+
+  app.get("/chat/sessions", async (req) => ({ sessions: req.userStore.listChatSessions() }));
+
+  app.get("/chat/sessions/:id/messages", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!req.userStore.getChatSession(id)) return reply.code(404).send({ error: "No such chat session." });
+    return { messages: req.userStore.listChatMessages(id) };
+  });
+
+  const RenameChatSessionBody = z.object({ title: z.string().min(1).max(120) });
+  app.patch("/chat/sessions/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = RenameChatSessionBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const session = req.userStore.renameChatSession(id, parsed.data.title);
+    if (!session) return reply.code(404).send({ error: "No such chat session." });
+    return { session };
+  });
+
+  app.delete("/chat/sessions/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!req.userStore.deleteChatSession(id)) return reply.code(404).send({ error: "No such chat session." });
+    return { deleted: true };
   });
 
   // ---- voice input ----
@@ -1002,7 +1143,7 @@ export function buildServer(
     if (!tool) return reply.code(404).send({ error: "tool not found" });
     const result = await revertTool(req.userStore, supervisor, id);
     if (!result.ok) return reply.code(400).send({ error: result.note });
-    agents.delete(req.authUser.id);
+    dropAgents(req.authUser.id);
     return { tool: toolView(req.userStore.getTool(id)), note: result.note };
   });
 
@@ -1013,8 +1154,8 @@ export function buildServer(
     supervisor.stop(id);
     await rm(join(toolsDir(), id), { recursive: true, force: true }).catch(() => {});
     req.userStore.deleteTool(id);
-    // Drop the planner graph so tools-agent stops offering the removed tool.
-    agents.delete(req.authUser.id);
+    // Drop the planner graphs so tools-agent stops offering the removed tool.
+    dropAgents(req.authUser.id);
     return { deleted: true };
   });
 

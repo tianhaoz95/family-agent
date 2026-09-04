@@ -94,4 +94,22 @@ describe("askFamilyAgent retry logic", () => {
       ],
     });
   });
+
+  it("prepends prior session turns ahead of the current message", async () => {
+    const { agent, invoke } = stubAgent(["Blue, like you said."]);
+    const history = [
+      { role: "user" as const, content: "my favorite color is blue" },
+      { role: "assistant" as const, content: "Got it — blue." },
+    ];
+    await askFamilyAgent(agent, "what's my favorite color?", [], history);
+    expect(invoke.mock.calls[0][0]).toEqual({
+      messages: [...history, { role: "user", content: "what's my favorite color?" }],
+    });
+  });
+
+  it("omitting history keeps the old single-message shape (no session yet)", async () => {
+    const { agent, invoke } = stubAgent(["ok"]);
+    await askFamilyAgent(agent, "hello", []);
+    expect(invoke.mock.calls[0][0]).toEqual({ messages: [{ role: "user", content: "hello" }] });
+  });
 });

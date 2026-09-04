@@ -104,16 +104,62 @@ class FamilyAgentApiTest {
     }
 
     @Test
-    fun `chat omits images when none attached, includes them when present`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"reply":"hi"}"""))
-        api.chat("hello")
+    fun `chat omits images and sessionId when not given, includes them when present`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"reply":"hi","sessionId":"s1"}"""))
+        val plainReply = api.chat("hello")
+        assertEquals("s1", plainReply.sessionId)
         val plain = server.takeRequest().body.readUtf8()
         assertEquals("""{"message":"hello"}""", plain)
 
-        server.enqueue(MockResponse().setBody("""{"reply":"a cat"}"""))
+        server.enqueue(MockResponse().setBody("""{"reply":"a cat","sessionId":"s1"}"""))
         api.chat("what is this?", listOf("data:image/jpeg;base64,AAAA"))
         val withImg = server.takeRequest().body.readUtf8()
         assertTrue(withImg.contains(""""images":["data:image/jpeg;base64,AAAA"]"""))
+
+        server.enqueue(MockResponse().setBody("""{"reply":"still here","sessionId":"s1"}"""))
+        api.chat("continue", sessionId = "s1")
+        val withSession = server.takeRequest().body.readUtf8()
+        assertEquals("""{"message":"continue","sessionId":"s1"}""", withSession)
+    }
+
+    @Test
+    fun `chat history sessions - list, read messages, rename, delete`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"sessions":[{"id":"s1","title":"Hi","createdAt":"t","updatedAt":"t","lastMessage":null,"messageCount":0}]}"""
+            )
+        )
+        val sessions = api.listChatSessions()
+        assertEquals(1, sessions.size)
+        assertEquals("Hi", sessions[0].title)
+        assertEquals("/chat/sessions", server.takeRequest().path)
+
+        server.enqueue(
+            MockResponse().setBody(
+                """{"messages":[{"id":"m1","role":"user","body":"hi","createdAt":"t"}]}"""
+            )
+        )
+        val messages = api.getChatSessionMessages("s1")
+        assertEquals(1, messages.size)
+        assertEquals("/chat/sessions/s1/messages", server.takeRequest().path)
+
+        server.enqueue(
+            MockResponse().setBody(
+                """{"session":{"id":"s1","title":"Renamed","createdAt":"t","updatedAt":"t"}}"""
+            )
+        )
+        val renamed = api.renameChatSession("s1", "Renamed")
+        assertEquals("Renamed", renamed.title)
+        val renameReq = server.takeRequest()
+        assertEquals("PATCH", renameReq.method)
+        assertEquals("/chat/sessions/s1", renameReq.path)
+        assertEquals("""{"title":"Renamed"}""", renameReq.body.readUtf8())
+
+        server.enqueue(MockResponse().setBody("""{"deleted":true}"""))
+        api.deleteChatSession("s1")
+        val deleteReq = server.takeRequest()
+        assertEquals("DELETE", deleteReq.method)
+        assertEquals("/chat/sessions/s1", deleteReq.path)
     }
 
     @Test

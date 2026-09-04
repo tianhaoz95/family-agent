@@ -1229,6 +1229,80 @@ describe("HTTP API", () => {
     expect((await asKid({ method: "GET", url: `/channels/${channelId}/messages` })).statusCode).toBe(403);
   });
 
+  // ---- chat sessions ----
+  // POST /chat itself needs a live model for a real reply (covered in
+  // agents.integration.test.ts); here we only need to confirm it still does
+  // its bookkeeping — lazily creating a session and persisting the user's
+  // turn — even when the model call fails, and that the session CRUD routes
+  // enforce per-user ownership the same way the channel routes enforce
+  // membership.
+
+  // Lazy session creation + persisting a turn end-to-end through POST /chat
+  // itself is covered by the live-model test in agents.integration.test.ts —
+  // this file's /chat coverage is intentionally limited to what never reaches
+  // the model (see the file comment above), same as everywhere else here.
+
+  it("POST /chat with an unknown sessionId 404s instead of silently starting a new one", async () => {
+    const res = await inject({ method: "POST", url: "/chat", payload: { message: "hi", sessionId: "nope" } });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("GET/PATCH/DELETE /chat/sessions are scoped to the caller", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const asKid = authInject(app, kid.token);
+
+    const session = store.scoped(admin.user.id).createChatSession("what's for dinner?");
+    store.scoped(admin.user.id).addChatMessage(session.id, "user", "what's for dinner?");
+    store.scoped(admin.user.id).addChatMessage(session.id, "assistant", "How about tacos?");
+
+    // The owner sees it, with both turns in order.
+    const own = (await inject({ method: "GET", url: `/chat/sessions/${session.id}/messages` })).json().messages;
+    expect(own.map((m: any) => m.body)).toEqual(["what's for dinner?", "How about tacos?"]);
+
+    // Another user gets 404s across the board, not the owner's data.
+    expect((await asKid({ method: "GET", url: `/chat/sessions/${session.id}/messages` })).statusCode).toBe(404);
+    expect(
+      (await asKid({ method: "PATCH", url: `/chat/sessions/${session.id}`, payload: { title: "steal it" } }))
+        .statusCode
+    ).toBe(404);
+    expect((await asKid({ method: "DELETE", url: `/chat/sessions/${session.id}` })).statusCode).toBe(404);
+    expect((await asKid({ method: "GET", url: "/chat/sessions" })).json().sessions).toEqual([]);
+
+    // The owner can rename and delete it.
+    const renamed = await inject({
+      method: "PATCH",
+      url: `/chat/sessions/${session.id}`,
+      payload: { title: "Dinner plans" },
+    });
+    expect(renamed.json().session.title).toBe("Dinner plans");
+
+    const deleted = await inject({ method: "DELETE", url: `/chat/sessions/${session.id}` });
+    expect(deleted.json().deleted).toBe(true);
+    expect((await inject({ method: "GET", url: "/chat/sessions" })).json().sessions).toEqual([]);
+    expect((await inject({ method: "DELETE", url: `/chat/sessions/${session.id}` })).statusCode).toBe(404);
+  });
+
+  it("a leading '/' with tools disabled replies plainly with no model call, but still persists the turn", async () => {
+    const originalEnabled = config.toolsEnabled;
+    (config as { toolsEnabled: boolean }).toolsEnabled = false;
+    try {
+      const res = await inject({ method: "POST", url: "/chat", payload: { message: "/where is the drill?" } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().reply).toBe("Tools aren't turned on for this server.");
+
+      const sessionId = res.json().sessionId;
+      const messages = (await inject({ method: "GET", url: `/chat/sessions/${sessionId}/messages` })).json()
+        .messages;
+      // The stored user turn keeps the "/" — an honest transcript of what was typed.
+      expect(messages.map((m: { role: string; body: string }) => [m.role, m.body])).toEqual([
+        ["user", "/where is the drill?"],
+        ["assistant", "Tools aren't turned on for this server."],
+      ]);
+    } finally {
+      (config as { toolsEnabled: boolean }).toolsEnabled = originalEnabled;
+    }
+  });
+
   // ---- sticky notes ----
 
   it("sticky notes: shared board is common, private board is per-user", async () => {

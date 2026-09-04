@@ -26,6 +26,8 @@ import {
   type StickyNote,
   type NoteScope,
   type ChatReference,
+  type ChatSession,
+  type ChatSessionMessage,
 } from "./api.js";
 import { startRecording, type Recording } from "./audio.js";
 import {
@@ -63,6 +65,12 @@ function showView(name: string) {
   // Stop any view-scoped polling loops the previous view started.
   if (name !== "messages") stopMessagePolling();
   if (name !== "board") stopBoardPolling();
+  if (name === "chat") {
+    void refreshChatSessions();
+    void refreshTools().then((tools) => {
+      slashTools = tools;
+    });
+  }
   if (name === "tasks") void refreshTasks();
   if (name === "messages") void enterMessages();
   if (name === "board") void enterBoard();
@@ -134,8 +142,41 @@ const chatAttachBtn = document.getElementById("chat-attach-btn") as HTMLButtonEl
 const chatMicBtn = document.getElementById("chat-mic-btn") as HTMLButtonElement;
 const chatAttachmentsEl = document.getElementById("chat-attachments")!;
 const chatNewBtn = document.getElementById("chat-new-btn") as HTMLButtonElement;
+const chatHelpBtn = document.getElementById("chat-help-btn") as HTMLButtonElement;
 const chatSendBtn = document.getElementById("chat-send-btn") as HTMLButtonElement;
 const chatStopBtn = document.getElementById("chat-stop-btn") as HTMLButtonElement;
+const chatSessionList = document.getElementById("chat-session-list")!;
+const chatSlashMenu = document.getElementById("chat-slash-menu")!;
+
+// The active persisted session, if any — null until the first message of a
+// fresh conversation gets a reply and the server hands back a sessionId (see
+// the submit handler below). A private chat has only one writer (this tab),
+// so unlike Messages there's no need to poll.
+let chatSessions: ChatSession[] = [];
+let activeChatSessionId: string | null = null;
+
+// "/" autocomplete: a fixed set of forced-agent commands (see
+// parseForcedAgentCommand, agent-core/src/agents/index.ts — keep these four
+// in sync with FORCED_AGENT_KEYWORDS there) plus the family's own tool names.
+// "search" is a hand-typeable alias for "find", not listed separately, to
+// keep this short.
+interface SlashEntry {
+  name: string;
+  description: string;
+}
+const SLASH_COMMANDS: SlashEntry[] = [
+  { name: "build", description: "Build a new tool, or improve an existing one" },
+  { name: "task", description: "Add, list, or complete a to-do" },
+  { name: "find", description: "Search the family's documents (alias: /search)" },
+  { name: "note", description: "Read or add a sticky note" },
+];
+// Populated (from the same /tools list the Tools view already fetches) when
+// the Chat view is entered; only ready, server-kind tools are offered — a
+// static (display-only) tool has no operations to call via the tools API at
+// all (see familyToolCatalog server-side), so it would be a dead end here.
+let slashTools: Tool[] = [];
+let slashMatches: SlashEntry[] = [];
+let slashHighlight = -1;
 
 // The empty-state block, kept so "New chat" can put it back after it's removed.
 const chatEmptyEl = document.getElementById("chat-empty")!;
@@ -198,7 +239,18 @@ function appendUserMessage(text: string, images: string[]) {
   if (text) {
     const p = document.createElement("div");
     p.className = "bubble-text";
-    p.textContent = text;
+    // A "/" turn forced a specific specialist agent instead of the planner —
+    // flag it so it's obvious at a glance which turns skipped the planner's
+    // routing (see parseForcedAgentCommand, agent-core/src/agents/index.ts).
+    if (text.trimStart().startsWith("/")) {
+      const badge = document.createElement("span");
+      badge.className = "bubble-tool-badge";
+      badge.title = "Sent straight to a specialist agent — skipped the planner";
+      badge.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94Z"/></svg>';
+      p.appendChild(badge);
+    }
+    p.appendChild(document.createTextNode(text));
     el.appendChild(p);
   }
   chatLog.appendChild(el);
@@ -391,9 +443,89 @@ function autoGrowChatInput() {
 }
 chatInput.addEventListener("input", autoGrowChatInput);
 
+function hideSlashMenu() {
+  chatSlashMenu.hidden = true;
+  chatSlashMenu.innerHTML = "";
+  slashMatches = [];
+  slashHighlight = -1;
+}
+
+function renderSlashMenu() {
+  chatSlashMenu.innerHTML = "";
+  if (slashMatches.length === 0) {
+    chatSlashMenu.innerHTML = `<li class="slash-menu-empty">No matching commands or tools.</li>`;
+  } else {
+    slashMatches.forEach((t, i) => {
+      const li = document.createElement("li");
+      li.className = "slash-menu-row" + (i === slashHighlight ? " is-active" : "");
+      li.innerHTML = `<span class="slash-menu-row-name">${escapeHtml(t.name)}</span><span class="slash-menu-row-desc">${escapeHtml(t.description)}</span>`;
+      li.addEventListener("mousedown", (e) => {
+        // mousedown (not click) so this fires before the textarea loses focus.
+        e.preventDefault();
+        selectSlashEntry(t);
+      });
+      chatSlashMenu.appendChild(li);
+    });
+  }
+  chatSlashMenu.hidden = false;
+}
+
+function selectSlashEntry(entry: SlashEntry) {
+  chatInput.value = `/${entry.name} `;
+  hideSlashMenu();
+  chatInput.focus();
+  chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
+  autoGrowChatInput();
+}
+
+// Only a "/" with nothing after it but the current query is a live
+// autocomplete — once the user has typed past the command/tool name (a
+// space) the text is the request itself, not still picking one.
+function updateSlashMenu() {
+  const value = chatInput.value;
+  const m = /^\s*\/([^\s]*)$/.exec(value);
+  if (!m) {
+    hideSlashMenu();
+    return;
+  }
+  const query = m[1].toLowerCase();
+  const toolEntries: SlashEntry[] = slashTools
+    .filter((t) => t.kind === "server" && t.status === "ready")
+    .map((t) => ({ name: t.name, description: t.description }));
+  slashMatches = [...SLASH_COMMANDS, ...toolEntries].filter((e) => e.name.toLowerCase().includes(query));
+  slashHighlight = slashMatches.length ? 0 : -1;
+  renderSlashMenu();
+}
+chatInput.addEventListener("input", updateSlashMenu);
+
 // Enter sends; Shift+Enter (or Enter mid-composition, e.g. an IME) inserts a
-// newline. Matches every other chat app.
+// newline. Matches every other chat app. When the "/" menu is open, arrow
+// keys move the highlight and Enter/Escape act on the menu instead.
 chatInput.addEventListener("keydown", (e) => {
+  if (!chatSlashMenu.hidden && slashMatches.length) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      slashHighlight = (slashHighlight + 1) % slashMatches.length;
+      renderSlashMenu();
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      slashHighlight = (slashHighlight - 1 + slashMatches.length) % slashMatches.length;
+      renderSlashMenu();
+      return;
+    }
+    if (e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      selectSlashEntry(slashMatches[slashHighlight]);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      hideSlashMenu();
+      return;
+    }
+  }
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     chatForm.requestSubmit();
@@ -407,20 +539,123 @@ function setChatPending(pending: boolean) {
   chatSendBtn.disabled = pending;
 }
 
+// ---- chat history sessions ----
+// A session is created lazily server-side on the first turn of a fresh
+// conversation (see POST /chat) — this pane only ever lists/opens/deletes
+// what the server already has.
+function renderChatSessionList() {
+  chatSessionList.innerHTML = "";
+  if (chatSessions.length === 0) {
+    chatSessionList.innerHTML = `<li class="empty-state"><span>No conversations yet.</span></li>`;
+    return;
+  }
+  for (const s of chatSessions) {
+    const li = document.createElement("li");
+    li.className = "channel-row session-row" + (s.id === activeChatSessionId ? " is-active" : "");
+    const preview = s.lastMessage ? s.lastMessage.slice(0, 60) : "No messages yet";
+    li.innerHTML = `
+      <span class="channel-row-title">${escapeHtml(s.title)}</span>
+      <span class="channel-row-preview">${escapeHtml(preview)}</span>
+      <button type="button" class="session-row-delete" title="Delete this conversation" aria-label="Delete this conversation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+      </button>
+    `;
+    li.addEventListener("click", () => void openChatSession(s.id));
+    li.querySelector(".session-row-delete")!.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void deleteChatSessionRow(s.id);
+    });
+    chatSessionList.appendChild(li);
+  }
+}
+
+async function refreshChatSessions() {
+  try {
+    chatSessions = (await api.listChatSessions()).sessions;
+  } catch {
+    return;
+  }
+  if (document.getElementById("view-chat")!.classList.contains("is-active")) renderChatSessionList();
+}
+
+async function openChatSession(id: string) {
+  if (id === activeChatSessionId) return;
+  chatAbort?.abort();
+  chatAbort = null;
+  let messages: ChatSessionMessage[];
+  try {
+    messages = (await api.getChatSessionMessages(id)).messages;
+  } catch (err) {
+    appendBubble("system", `Couldn't open that conversation: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  activeChatSessionId = id;
+  chatTray.clear();
+  chatInput.value = "";
+  autoGrowChatInput();
+  setChatPending(false);
+  hideSlashMenu();
+  chatLog.innerHTML = "";
+  chatLog.appendChild(chatEmptyEl);
+  for (const m of messages) {
+    if (m.role === "user") appendUserMessage(m.body, m.images);
+    else {
+      const bubble = appendBubble("assistant", m.body);
+      if (m.refs.length) appendReferences(bubble, m.refs);
+    }
+  }
+  renderChatSessionList();
+  chatInput.focus();
+}
+
+async function deleteChatSessionRow(id: string) {
+  try {
+    await api.deleteChatSession(id);
+  } catch (err) {
+    appendBubble("system", `Couldn't delete that conversation: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  chatSessions = chatSessions.filter((s) => s.id !== id);
+  if (id === activeChatSessionId) startNewChat();
+  renderChatSessionList();
+}
+
 // Clear the transcript and cancel anything in flight — a fresh conversation.
-// The agent keeps no server-side history, so this is purely the visible thread.
+// Nothing is created server-side until the first message actually sends.
 function startNewChat() {
   chatAbort?.abort();
   chatAbort = null;
+  activeChatSessionId = null;
   chatLog.innerHTML = "";
   chatLog.appendChild(chatEmptyEl);
   chatTray.clear();
   chatInput.value = "";
   autoGrowChatInput();
   setChatPending(false);
+  hideSlashMenu();
   chatInput.focus();
+  renderChatSessionList();
 }
 chatNewBtn.addEventListener("click", startNewChat);
+
+function slashHelpHtml(): string {
+  const commandRows = SLASH_COMMANDS.map(
+    (c) => `<p class="side-panel-hint"><code>/${escapeHtml(c.name)}</code> — ${escapeHtml(c.description)}</p>`
+  ).join("");
+  const toolRows = slashTools
+    .filter((t) => t.kind === "server" && t.status === "ready")
+    .map((t) => `<p class="side-panel-hint"><code>/${escapeHtml(t.name)}</code> — ${escapeHtml(t.description)}</p>`)
+    .join("");
+  return `
+    <p class="side-panel-summary">Start a message with "/" to skip the assistant's own routing and send that turn
+    straight to one specialist — useful when it doesn't otherwise pick the right one.</p>
+    <p class="side-panel-hint"><strong>Commands</strong></p>
+    ${commandRows}
+    <p class="side-panel-hint"><strong>Or one of the family's tools, by name</strong></p>
+    ${toolRows || `<p class="side-panel-hint">The family hasn't built any tools yet — see the Tools tab.</p>`}
+  `;
+}
+chatHelpBtn.addEventListener("click", () => openSidePanel("Slash commands", slashHelpHtml()));
 chatStopBtn.addEventListener("click", () => chatAbort?.abort());
 
 chatForm.addEventListener("submit", async (e) => {
@@ -433,16 +668,24 @@ chatForm.addEventListener("submit", async (e) => {
   const message = typed || "What's in this image?";
   chatInput.value = "";
   autoGrowChatInput();
+  hideSlashMenu();
   chatTray.clear();
   appendUserMessage(typed, images);
   const pending = appendTypingIndicator();
   chatAbort = new AbortController();
   setChatPending(true);
   try {
-    const { reply, references } = await api.chat(message, images, chatAbort.signal);
+    const { reply, references, sessionId } = await api.chat(
+      message,
+      images,
+      activeChatSessionId ?? undefined,
+      chatAbort.signal
+    );
     pending.remove();
     const bubble = appendBubble("assistant", reply);
     if (references?.length) appendReferences(bubble, references);
+    activeChatSessionId = sessionId;
+    void refreshChatSessions();
   } catch (err) {
     pending.remove();
     if (err instanceof DOMException && err.name === "AbortError") {

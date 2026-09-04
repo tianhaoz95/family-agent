@@ -149,6 +149,25 @@ export interface Message {
 /** senderId of an assistant message (mirrors AGENT_SENDER_ID server-side). */
 export const AGENT_SENDER_ID = "_agent_";
 
+// ---- chat sessions (private 1:1 assistant chat history) ----
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessage: string | null;
+  messageCount: number;
+}
+
+export interface ChatSessionMessage {
+  id: string;
+  role: "user" | "assistant";
+  body: string;
+  images: string[];
+  refs: ChatReference[];
+  createdAt: string;
+}
+
 export type NoteScope = "shared" | "private";
 
 export interface StickyNote {
@@ -384,12 +403,18 @@ export const api = {
   updateSettings: (patch: SettingsPatch) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(patch) }),
   listOllamaModels: () => request<{ models: string[]; reachable: boolean }>("/ollama/models"),
-  chat: (message: string, images: string[] = [], signal?: AbortSignal) =>
-    request<{ reply: string; references?: ChatReference[] }>("/chat", {
+  chat: (message: string, images: string[] = [], sessionId?: string, signal?: AbortSignal) =>
+    request<{ reply: string; references?: ChatReference[]; sessionId: string }>("/chat", {
       method: "POST",
-      body: JSON.stringify(images.length ? { message, images } : { message }),
+      body: JSON.stringify({ message, ...(images.length ? { images } : {}), ...(sessionId ? { sessionId } : {}) }),
       signal,
     }),
+  listChatSessions: () => request<{ sessions: ChatSession[] }>("/chat/sessions"),
+  getChatSessionMessages: (id: string) =>
+    request<{ messages: ChatSessionMessage[] }>(`/chat/sessions/${id}/messages`),
+  renameChatSession: (id: string, title: string) =>
+    request<{ session: ChatSession }>(`/chat/sessions/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  deleteChatSession: (id: string) => request<{ deleted: true }>(`/chat/sessions/${id}`, { method: "DELETE" }),
   /** Transcribe a recorded voice clip (16 kHz mono WAV) for the chat composer. */
   transcribe: (wav: Blob) => upload<{ text: string }>("/transcribe", wav, "audio", "voice.wav"),
   listTasks: () => request<{ tasks: Task[] }>("/tasks"),

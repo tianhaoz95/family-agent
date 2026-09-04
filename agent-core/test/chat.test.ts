@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { Store, AGENT_SENDER_ID } from "../src/db.js";
-import { mentionsAgent } from "../src/agents/index.js";
+import { mentionsAgent, parseForcedAgentCommand } from "../src/agents/index.js";
 
 describe("Store — family chat (cross-account, membership-checked)", () => {
   let store: Store;
@@ -120,5 +120,51 @@ describe("mentionsAgent", () => {
   it("does not match an email address or a trailing sentence word", () => {
     expect(mentionsAgent("mail me at bob@agentcorp.com")).toBe(false);
     expect(mentionsAgent("I talked to the agent yesterday")).toBe(false);
+  });
+});
+
+describe("parseForcedAgentCommand", () => {
+  it("returns null when the message doesn't start with '/'", () => {
+    expect(parseForcedAgentCommand("what is 10/2?")).toBeNull();
+    expect(parseForcedAgentCommand("where is the drill")).toBeNull();
+  });
+
+  it("leading whitespace before the '/' still counts", () => {
+    expect(parseForcedAgentCommand("  /where is the drill")).toEqual({ kind: "tools", text: "where is the drill" });
+  });
+
+  it("a tool name (or anything else unrecognized) after '/' still means tools — unchanged from before", () => {
+    expect(parseForcedAgentCommand("/where is the drill")).toEqual({ kind: "tools", text: "where is the drill" });
+    expect(parseForcedAgentCommand("/Item Tracker where is the drill")).toEqual({
+      kind: "tools",
+      text: "Item Tracker where is the drill",
+    });
+    expect(parseForcedAgentCommand("/log that the screwdriver is in the garage")).toEqual({
+      kind: "tools",
+      text: "log that the screwdriver is in the garage",
+    });
+    expect(parseForcedAgentCommand("/")).toEqual({ kind: "tools", text: "" });
+  });
+
+  it("a recognized keyword picks that agent and is stripped, case-insensitively", () => {
+    expect(parseForcedAgentCommand("/build a tool to split chores")).toEqual({
+      kind: "builder",
+      text: "a tool to split chores",
+    });
+    expect(parseForcedAgentCommand("/Task buy stamps")).toEqual({ kind: "task", text: "buy stamps" });
+    expect(parseForcedAgentCommand("/find the insurance policy")).toEqual({
+      kind: "document",
+      text: "the insurance policy",
+    });
+    expect(parseForcedAgentCommand("/SEARCH the water bill")).toEqual({ kind: "document", text: "the water bill" });
+    expect(parseForcedAgentCommand("/note plumber comes Friday")).toEqual({
+      kind: "notes",
+      text: "plumber comes Friday",
+    });
+  });
+
+  it("a keyword with nothing after it yields an empty text (caller supplies a fallback prompt)", () => {
+    expect(parseForcedAgentCommand("/build")).toEqual({ kind: "builder", text: "" });
+    expect(parseForcedAgentCommand("/task   ")).toEqual({ kind: "task", text: "" });
   });
 });

@@ -119,8 +119,24 @@ class FamilyAgentApi(
         runCatching { sendNoBody("POST", "/auth/logout") }
     }
 
-    suspend fun chat(message: String, images: List<String> = emptyList()): ChatResponse =
-        json.decodeFromString(send("POST", "/chat", json.encodeToString(ChatRequest(message, images))))
+    suspend fun chat(message: String, images: List<String> = emptyList(), sessionId: String? = null): ChatResponse =
+        json.decodeFromString(send("POST", "/chat", json.encodeToString(ChatRequest(message, images, sessionId))))
+
+    // ---- chat history sessions (private 1:1 assistant chat) ----
+    suspend fun listChatSessions(): List<ChatSession> =
+        json.decodeFromString<ChatSessionsResponse>(get("/chat/sessions")).sessions
+
+    suspend fun getChatSessionMessages(id: String): List<ChatSessionMessage> =
+        json.decodeFromString<ChatSessionMessagesResponse>(get("/chat/sessions/$id/messages")).messages
+
+    suspend fun renameChatSession(id: String, title: String): ChatSession =
+        json.decodeFromString<ChatSessionResponse>(
+            send("PATCH", "/chat/sessions/$id", json.encodeToString(RenameChatSessionRequest(title)))
+        ).session
+
+    suspend fun deleteChatSession(id: String) {
+        sendNoBody("DELETE", "/chat/sessions/$id")
+    }
 
     /** Upload a recorded voice clip (16 kHz mono WAV) and get back the transcript. */
     suspend fun transcribe(wav: ByteArray): TranscribeResponse = withContext(Dispatchers.IO) {

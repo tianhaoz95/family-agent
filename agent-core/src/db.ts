@@ -277,6 +277,42 @@ export interface MessageRecord {
   createdAt: string;
 }
 
+// ---- chat sessions (private 1:1 assistant chat history) ----
+// Unlike channels/messages (cross-account, membership-gated) a chat session
+// belongs to exactly one user, so it follows the tasks/documents shape: a
+// plain `user_id` column, scoped through ScopedStore.
+export interface ChatSessionRecord {
+  id: string;
+  userId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A row in the session list: session + a preview of its last message. */
+export interface ChatSessionSummary extends ChatSessionRecord {
+  lastMessage: string | null;
+  messageCount: number;
+}
+
+export interface ChatReference {
+  type: "document" | "task" | "tool";
+  id: string;
+  label: string;
+}
+
+export interface ChatSessionMessageRecord {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant";
+  body: string;
+  /** Image attachments as data URIs — user turns only. */
+  images: string[];
+  /** Reference chips resolved for that reply — assistant turns only. */
+  refs: ChatReference[];
+  createdAt: string;
+}
+
 // ---- sticky notes ----
 export type NoteScope = "shared" | "private";
 
@@ -407,6 +443,27 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sticky_scope ON sticky_notes(scope, user_id);
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  body TEXT NOT NULL,
+  images TEXT,
+  refs TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, created_at);
 
 -- Semantic search: one row per text chunk of a document. The vec column is a
 -- little-endian Float32 BLOB; the model column records which embedding model
@@ -771,6 +828,8 @@ export class Store {
       "sessions",
       "channel_members",
       "sticky_notes",
+      "chat_messages",
+      "chat_sessions",
     ] as const) {
       this.db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).run(id);
     }
@@ -2029,6 +2088,107 @@ export class ScopedStore {
     this.logActivity("user", "note.deleted", `Removed a ${note.scope} sticky note`);
     return note;
   }
+
+  // ---- chat sessions (private assistant chat history) ----
+  createChatSession(firstMessageForTitle: string): ChatSessionRecord {
+    const now = new Date().toISOString();
+    const rec: ChatSessionRecord = {
+      id: shortId(),
+      userId: this.userId,
+      title: titleFromMessage(firstMessageForTitle),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare("INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+      .run(rec.id, rec.userId, rec.title, rec.createdAt, rec.updatedAt);
+    return rec;
+  }
+
+  listChatSessions(): ChatSessionSummary[] {
+    const rows = this.db
+      .prepare(
+        `SELECT s.*,
+                (SELECT body FROM chat_messages m WHERE m.session_id = s.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+                (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS message_count
+         FROM chat_sessions s WHERE s.user_id = ? ORDER BY s.updated_at DESC`
+      )
+      .all(this.userId) as any[];
+    return rows.map(rowToChatSessionSummary);
+  }
+
+  getChatSession(id: string): ChatSessionRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM chat_sessions WHERE id = ? AND user_id = ?").get(id, this.userId) as
+      | any
+      | undefined;
+    return row ? rowToChatSession(row) : undefined;
+  }
+
+  renameChatSession(id: string, title: string): ChatSessionRecord | undefined {
+    if (!this.getChatSession(id)) return undefined;
+    const trimmed = title.trim().slice(0, 120) || "Untitled chat";
+    const now = new Date().toISOString();
+    this.db
+      .prepare("UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(trimmed, now, id, this.userId);
+    return this.getChatSession(id);
+  }
+
+  deleteChatSession(id: string): boolean {
+    if (!this.getChatSession(id)) return false;
+    this.db.prepare("DELETE FROM chat_messages WHERE session_id = ? AND user_id = ?").run(id, this.userId);
+    this.db.prepare("DELETE FROM chat_sessions WHERE id = ? AND user_id = ?").run(id, this.userId);
+    return true;
+  }
+
+  /** [] for a session that doesn't exist or isn't this user's — same "missed
+   *  check surfaces as empty" shape as the channel methods use for membership. */
+  listChatMessages(sessionId: string): ChatSessionMessageRecord[] {
+    if (!this.getChatSession(sessionId)) return [];
+    const rows = this.db
+      .prepare("SELECT * FROM chat_messages WHERE session_id = ? AND user_id = ? ORDER BY created_at ASC")
+      .all(sessionId, this.userId) as any[];
+    return rows.map(rowToChatSessionMessage);
+  }
+
+  addChatMessage(
+    sessionId: string,
+    role: "user" | "assistant",
+    body: string,
+    images: string[] = [],
+    refs: ChatReference[] = []
+  ): ChatSessionMessageRecord {
+    const now = new Date().toISOString();
+    const rec: ChatSessionMessageRecord = { id: shortId(), sessionId, role, body, images, refs, createdAt: now };
+    this.db
+      .prepare(
+        "INSERT INTO chat_messages (id, session_id, user_id, role, body, images, refs, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run(
+        rec.id,
+        rec.sessionId,
+        this.userId,
+        rec.role,
+        rec.body,
+        images.length ? JSON.stringify(images) : null,
+        refs.length ? JSON.stringify(refs) : null,
+        rec.createdAt
+      );
+    this.db
+      .prepare("UPDATE chat_sessions SET updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(now, sessionId, this.userId);
+    return rec;
+  }
+}
+
+/** First ~60 chars of a message, single line, trimmed — the session's default
+ *  title until the user renames it. No model call: instant, and this app's
+ *  local model is already slow enough (see docs/DECISIONS.md) to not spend a
+ *  turn on cosmetics. */
+function titleFromMessage(message: string): string {
+  const flat = message.replace(/\s+/g, " ").trim();
+  if (!flat) return "New chat";
+  return flat.length > 60 ? `${flat.slice(0, 60).trimEnd()}…` : flat;
 }
 
 function rowToUser(r: any): UserRecord {
@@ -2127,6 +2287,38 @@ function rowToStickyNote(r: any): StickyNoteRecord {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
+}
+
+function rowToChatSession(r: any): ChatSessionRecord {
+  return { id: r.id, userId: r.user_id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at };
+}
+
+function rowToChatSessionSummary(r: any): ChatSessionSummary {
+  return { ...rowToChatSession(r), lastMessage: r.last_message ?? null, messageCount: r.message_count ?? 0 };
+}
+
+function rowToChatSessionMessage(r: any): ChatSessionMessageRecord {
+  return {
+    id: r.id,
+    sessionId: r.session_id,
+    role: (r.role as "user" | "assistant") ?? "user",
+    body: r.body,
+    images: parseImages(r.images),
+    refs: parseRefs(r.refs),
+    createdAt: r.created_at,
+  };
+}
+
+function parseRefs(raw: unknown): ChatReference[] {
+  if (typeof raw !== "string" || raw.length === 0) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v)
+      ? v.filter((x): x is ChatReference => x && typeof x === "object" && typeof x.id === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function rowToTool_(r: any): ToolRecord {
