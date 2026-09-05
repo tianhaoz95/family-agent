@@ -149,22 +149,14 @@ textarea {
   padding: 6px 8px 18px;
 }
 
-/* Flat fill, no gradient, no shadow — a warm accent square like a sticky note. */
+/* The project logo — a family "huddle" of circles with the assistant (accent
+   blue) nestled among them. See docs/DECISIONS.md. */
 .brand-mark {
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  background: var(--marigold);
-  display: grid;
-  place-items: center;
   flex: none;
-}
-.brand-mark::after {
-  content: "";
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--text);
+  display: block;
 }
 
 .brand-name {

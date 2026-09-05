@@ -1,5 +1,7 @@
 # Family Agent
 
+<img src="logo.png" alt="Family Agent logo" width="96" height="96" />
+
 A local-first agentic app for organizing a family's documents, schedules, and
 misc to-dos. Everything — the model, the storage, the document processing —
 runs on hardware you own. Nothing is sent to a cloud API.

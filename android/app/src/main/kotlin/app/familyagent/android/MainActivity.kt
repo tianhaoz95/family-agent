@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,8 +33,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -332,22 +333,16 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
     }
 }
 
-/** A rounded indigo→pink gradient tile — the app's brand mark (DESIGN.md §2). */
+/** The project logo — a family "huddle" of circles with the assistant (accent
+ *  blue) nestled among them. Same image as the desktop app and the launcher
+ *  icon; see docs/DECISIONS.md. */
 @Composable
 private fun BrandMark(size: Int = 30) {
-    Box(
-        Modifier
-            .size(size.dp)
-            .clip(RoundedCornerShape((size * 0.32f).dp))
-            .background(
-                Brush.linearGradient(
-                    listOf(MaterialTheme.colorScheme.primary, AppAccents.pink),
-                ),
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("n", style = MaterialTheme.typography.titleMedium, color = Color.White)
-    }
+    Image(
+        painter = painterResource(R.drawable.logo),
+        contentDescription = null,
+        modifier = Modifier.size(size.dp).clip(RoundedCornerShape((size * 0.32f).dp)),
+    )
 }
 
 /**
