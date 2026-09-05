@@ -480,6 +480,18 @@
               <button type="submit">Save</button>
             </form>
             <p id="settings-servername-status" class="settings-hint" role="status"></p>
+
+            <h3 id="settings-background-heading" hidden>Background &amp; startup</h3>
+            <p class="settings-hint" id="settings-background-hint" hidden>
+              Closing this window keeps Family Agent running in the background (look for it in
+              the tray) so other devices can still reach it — use Quit below to stop it completely.
+            </p>
+            <label class="settings-checkbox" id="settings-autostart-row" hidden>
+              <input type="checkbox" id="settings-autostart-checkbox" />
+              Launch at login
+            </label>
+            <p id="settings-autostart-status" class="settings-hint" role="status"></p>
+            <button type="button" id="settings-quit-btn" class="btn-ghost" hidden>Quit Family Agent</button>
           </div>
 
           <div class="settings-section">

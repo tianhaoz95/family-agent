@@ -184,9 +184,72 @@ fn grant_webview_media_permission(app: &tauri::App) {
     }
 }
 
+/// Best-effort system tray icon: Open / status / Quit. Not load-bearing for
+/// correctness — if it fails to build (missing tray host, older Linux setup
+/// with no libayatana-appindicator, etc.) the app still works fully via the
+/// two safety nets that don't depend on it: relaunching the app (see the
+/// single-instance plugin below) and the in-app "Quit Family Agent" button
+/// in Settings. See docs/DECISIONS.md.
+fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::TrayIconBuilder;
+
+    let open_item = MenuItem::with_id(app, "open", "Open Family Agent", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open_item, &separator, &quit_item])?;
+
+    let builder = TrayIconBuilder::new()
+        // Embedded at compile time (not app.default_window_icon(), which
+        // doesn't reliably resolve to the real app icon under `cargo run`/
+        // `tauri dev` — confirmed by hand: it showed a generic icon there).
+        // Works identically in dev and in a bundled build either way.
+        .icon(tauri::include_image!("icons/128x128.png"))
+        .tooltip("Family Agent")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        });
+    builder.build(app)?;
+    Ok(())
+}
+
+/// Called from the frontend's Settings "Quit Family Agent" button — the
+/// in-app escape hatch that fully stops the app (and, via RunEvent::Exit,
+/// agent-core with it) without depending on a visible tray menu.
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 fn main() {
     tauri::Builder::default()
+        // Must be the first plugin registered (Tauri's own requirement).
+        // Without it, launching the app a second time while it's hidden in
+        // the tray would just spawn a second instance instead of surfacing
+        // the existing window — the universal "get my window back" path
+        // that doesn't depend on the tray icon being visible (see
+        // build_tray above and docs/DECISIONS.md).
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![quit_app])
         .manage(AgentCoreProcess(Mutex::new(None)))
         .setup(|app| {
             kill_stale_agent_core();
@@ -204,15 +267,33 @@ fn main() {
             }
             #[cfg(target_os = "linux")]
             grant_webview_media_permission(app);
+            if let Err(err) = build_tray(app) {
+                eprintln!(
+                    "family-agent-desktop: could not create a tray icon ({err}) — \
+                     the app still works; use the in-app Quit button in Settings to stop it."
+                );
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let state = window.state::<AgentCoreProcess>();
-                let mut guard = state.0.lock().unwrap();
-                if let Some(mut child) = guard.take() {
-                    shutdown_child(&mut child);
+            // A normal close hides the window instead of destroying it, so
+            // agent-core keeps running for other devices on the network —
+            // see docs/DECISIONS.md. Destroyed is kept as a defensive
+            // fallback (harmless if it fires after the child was already
+            // reaped elsewhere: `guard.take()` is a no-op the second time).
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
+                tauri::WindowEvent::Destroyed => {
+                    let state = window.state::<AgentCoreProcess>();
+                    let mut guard = state.0.lock().unwrap();
+                    if let Some(mut child) = guard.take() {
+                        shutdown_child(&mut child);
+                    }
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())

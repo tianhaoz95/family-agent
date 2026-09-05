@@ -1853,6 +1853,21 @@ input[type="file"]::file-selector-button:hover {
   line-height: 1.55;
 }
 
+.settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 0.9rem;
+  color: var(--text);
+  cursor: pointer;
+}
+.settings-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
 .settings-hint code,
 #view-settings p code {
   font-family: var(--font-mono);

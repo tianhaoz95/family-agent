@@ -2233,6 +2233,12 @@ const settingsAsrHintEl = document.getElementById("settings-asr-hint")!;
 const settingsServerNameInput = document.getElementById("settings-servername-input") as HTMLInputElement;
 const settingsServerNameForm = document.getElementById("settings-servername-form") as HTMLFormElement;
 const settingsServerNameStatusEl = document.getElementById("settings-servername-status")!;
+const settingsBackgroundHeading = document.getElementById("settings-background-heading")!;
+const settingsBackgroundHint = document.getElementById("settings-background-hint")!;
+const settingsAutostartRow = document.getElementById("settings-autostart-row")!;
+const settingsAutostartCheckbox = document.getElementById("settings-autostart-checkbox") as HTMLInputElement;
+const settingsAutostartStatusEl = document.getElementById("settings-autostart-status")!;
+const settingsQuitBtn = document.getElementById("settings-quit-btn") as HTMLButtonElement;
 const accountNameEl = document.getElementById("account-name")!;
 const accountRoleEl = document.getElementById("account-role")!;
 const passwordForm = document.getElementById("password-form") as HTMLFormElement;
@@ -2318,6 +2324,25 @@ async function refreshSettings() {
     // The Browse button is Tauri-only; re-hide/disable handled separately.
     settingsInboxBrowseBtn.hidden = !isTauri();
     if (settings.envLocked.inboxDir) settingsInboxBrowseBtn.disabled = true;
+
+    // Background/tray behavior — Tauri-only (no such thing in a plain
+    // browser tab, e.g. `npm run dev` or the test suite).
+    const tauriBackground = isTauri();
+    settingsBackgroundHeading.hidden = !tauriBackground;
+    settingsBackgroundHint.hidden = !tauriBackground;
+    settingsAutostartRow.hidden = !tauriBackground;
+    settingsQuitBtn.hidden = !tauriBackground;
+    if (tauriBackground) {
+      settingsAutostartCheckbox.disabled = !settings.isAdmin;
+      settingsQuitBtn.disabled = !settings.isAdmin;
+      settingsAutostartStatusEl.textContent = settings.isAdmin ? "" : "Only an admin can change this.";
+      try {
+        const { isEnabled } = await import("@tauri-apps/plugin-autostart");
+        settingsAutostartCheckbox.checked = await isEnabled();
+      } catch (err) {
+        settingsAutostartStatusEl.textContent = `Couldn't check launch-at-login status: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
 
     if (!ollama.reachable) {
       settingsModelStatusEl.textContent = "Ollama isn't reachable — can't list models.";
@@ -2567,6 +2592,36 @@ settingsInboxBrowseBtn.addEventListener("click", async () => {
     }
   } catch (err) {
     settingsStatusEl.textContent = `Could not open the folder picker: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+
+// Closing the window hides it to the tray instead of quitting (see
+// docs/DECISIONS.md) — these two Tauri-only controls are the corresponding
+// "launch at login" toggle and the explicit way to actually stop everything.
+settingsAutostartCheckbox.addEventListener("change", async () => {
+  const wantEnabled = settingsAutostartCheckbox.checked;
+  settingsAutostartStatusEl.textContent = "Saving…";
+  try {
+    const autostart = await import("@tauri-apps/plugin-autostart");
+    await (wantEnabled ? autostart.enable() : autostart.disable());
+    settingsAutostartStatusEl.textContent = wantEnabled
+      ? "Family Agent will launch at login."
+      : "Launch at login turned off.";
+  } catch (err) {
+    settingsAutostartCheckbox.checked = !wantEnabled;
+    settingsAutostartStatusEl.textContent = `Couldn't change this: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+
+settingsQuitBtn.addEventListener("click", async () => {
+  if (!confirm("Quit Family Agent completely? Other devices won't be able to reach it until you reopen this app.")) {
+    return;
+  }
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("quit_app");
+  } catch (err) {
+    settingsAutostartStatusEl.textContent = `Couldn't quit: ${err instanceof Error ? err.message : String(err)}`;
   }
 });
 
