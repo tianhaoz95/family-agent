@@ -1639,6 +1639,37 @@ connections expose, for the UI. Secrets in `headers` / `env` are redacted
 "Connections (MCP)"; Android is a drawer `Destination.Connections`, both
 admin-only.
 
+### Follow-up: a `describe_*` rung (list → describe → call)
+
+`tools-agent` and `connections-agent` originally had two generic tools —
+`list_*` (dumps every operation + a flattened one-line param list) and
+`call_*`. Two problems for a 2B model: a big flat `list_*` dump is hard to
+parse when there are many tools, and the one-liner is *lossy* for a nested
+schema (a `when: { start, end }` object just showed as `when (object)`), so
+the model guessed the input shape.
+
+**Not** ported from Claude Code's `ToolSearch`: making each MCP/family tool a
+*real* bound tool once "activated". deepagents compiles a graph with a fixed
+tool set and `.invoke()` runs it to completion — you can't grow the tool set
+mid-turn without restarting the turn, and the whole point of the generic-tool
+design (documented under "Tools as an agent API") is *no graph rebuild when a
+tool changes*. So the tools stay text.
+
+**What was added instead:** a middle rung. `list_*` now renders a compact
+summary (name, read/write, a one-line param hint) and points at
+`describe_mcp_tool(server, tool)` / `describe_family_tool(tool, operation?)`,
+which return the *full* schema as an indented tree — nested objects, array
+item shapes, enums, required flags (`agents/schemaText.ts`, shared so
+`oneLineParams` / `fullSchemaText` aren't reimplemented per subagent). The
+subagent prompts say to call `describe_*` first when a param shape isn't
+obvious; `call_*` still validates and reports the expected shape on a bad
+input, so a model that skips the rung isn't stuck. Same `list → load-detail →
+act` shape as skills' `list_skills → use_skill`.
+
+Tests: `test/schemaText.test.ts` (one-liner + nested-tree rendering),
+`test/toolMcp.test.ts` and `test/mcp.test.ts` (`describe_*` returns the nested
+schema, the list stays compact, unknown names suggest near matches).
+
 Tests: `test/skills.test.ts` (folder store, front-matter parse, the planner
 tools, sandboxed script isolation, routes + admin gating) and
 `test/mcp.test.ts` (config CRUD + scope filtering + redaction, `McpManager`

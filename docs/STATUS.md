@@ -695,3 +695,11 @@ Later changes (not part of the original autonomous session):
     + `/health`); desktop typecheck + build + 35 tests; Android
     `compileDebugKotlin` + `testDebugUnitTest` + `assembleDebug`. Live-model
     exercise still pending (author is away 6h).
+  - **Follow-up — a `describe_*` rung.** `tools-agent` and `connections-agent`
+    went from `list_ → call_` to `list_ (compact) → describe_ (full nested
+    schema) → call_`, so a 2B model sees the exact parameter shape (nested
+    objects, array items, enums) right before calling instead of guessing from
+    a lossy one-liner. Schema rendering shared in `agents/schemaText.ts`. Not
+    a port of Claude Code's `ToolSearch` "activate a real tool" — deepagents
+    compiles a fixed graph per turn, so the tools stay text. Fast suite now
+    394 pass / 1 skip (+`test/schemaText.test.ts`).

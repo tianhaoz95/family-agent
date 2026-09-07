@@ -1,8 +1,9 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { OnReference } from "./references.js";
-import type { CallResult, JsonSchema, ToolOperation } from "../tools/toolMcp.js";
+import type { CallResult, ToolOperation } from "../tools/toolMcp.js";
 import { validateInput } from "../tools/validateInput.js";
+import { fullSchemaText, oneLineParams } from "./schemaText.js";
 
 // The "tools-agent" subagent's tools. Unlike task-agent / document-agent, the
 // operations here aren't fixed — they come from whatever the family has built.
@@ -28,18 +29,7 @@ export interface FamilyToolDeps {
   logActivity: (actor: string, action: string, detail: string) => void;
 }
 
-function paramList(schema: JsonSchema | undefined): string {
-  const props = schema?.properties ?? {};
-  const required = new Set(schema?.required ?? []);
-  const parts = Object.entries(props).map(([name, s]) => {
-    const bits = [s.type ?? "any"];
-    if (s.enum) bits.push(`one of ${s.enum.map((e) => JSON.stringify(e)).join("/")}`);
-    if (required.has(name)) bits.push("required");
-    const note = s.description ? ` — ${s.description}` : "";
-    return `${name} (${bits.join(", ")})${note}`;
-  });
-  return parts.length ? parts.join("; ") : "no parameters";
-}
+const paramList = oneLineParams;
 
 function renderCatalog(catalog: FamilyToolEntry[]): string {
   if (catalog.length === 0) {
@@ -55,7 +45,9 @@ function renderCatalog(catalog: FamilyToolEntry[]): string {
         .join("\n");
       return `- ${t.name}: ${t.description}\n${ops}`;
     })
-    .join("\n\n");
+    .join("\n\n") +
+    `\n\nThe "params" lines are summaries. For an operation with nested or unclear ` +
+    `parameters, call describe_family_tool first to see the full shape.`;
 }
 
 /** Case-insensitive exact match, then unique substring match. */
@@ -73,8 +65,47 @@ export function makeFamilyToolTools(deps: FamilyToolDeps) {
     {
       name: "list_family_tools",
       description:
-        "List the custom tools the family has built and the operations each one exposes (name, whether it reads or writes, and its parameters). Call this first, then call_family_tool.",
+        "List the custom tools the family has built and the operations each exposes (name, read/write, and a one-line parameter summary). Call this first; then describe_family_tool for a full schema, then call_family_tool.",
       schema: z.object({}),
+    },
+  );
+
+  const describeFamilyTool = tool(
+    async ({ tool: toolName, operation }) => {
+      const catalog = deps.getCatalog();
+      const entry = resolveTool(catalog, toolName);
+      if (!entry) {
+        const names = catalog.map((t) => t.name).join(", ");
+        return names
+          ? `No family tool matches "${toolName}". The tools are: ${names}.`
+          : `The family hasn't built any tools yet.`;
+      }
+      if (entry.operations.length === 0) {
+        return `The "${entry.name}" tool is display-only — it has no operations to describe.`;
+      }
+      const ops = operation
+        ? entry.operations.filter((o) => o.name === operation)
+        : entry.operations;
+      if (ops.length === 0) {
+        return `The "${entry.name}" tool has no operation "${operation}". It has: ${entry.operations
+          .map((o) => o.name)
+          .join(", ")}.`;
+      }
+      return ops
+        .map(
+          (o) =>
+            `${entry.name}.${o.name} [${o.access}] — ${o.description}\n\nParameters:\n${fullSchemaText(o.inputSchema)}`
+        )
+        .join("\n\n---\n\n");
+    },
+    {
+      name: "describe_family_tool",
+      description:
+        "Show the full parameter schema for a family tool's operation(s) — every field, including nested objects and arrays. Call this before call_family_tool when the parameters look complex. Omit `operation` to see them all.",
+      schema: z.object({
+        tool: z.string().describe("The tool's name, e.g. 'Item Tracker'"),
+        operation: z.string().optional().describe("One operation name; omit for all of them"),
+      }),
     },
   );
 
@@ -135,7 +166,7 @@ export function makeFamilyToolTools(deps: FamilyToolDeps) {
     {
       name: "call_family_tool",
       description:
-        "Run one operation on a family tool. Give the tool name and operation name exactly as list_family_tools shows them, plus an input object with the operation's parameters.",
+        "Run one operation on a family tool. Give the tool name and operation name exactly as list_family_tools shows them, plus an input object with the operation's parameters (use describe_family_tool first if the shape isn't obvious).",
       schema: z.object({
         tool: z.string().describe("The tool's name, e.g. 'Item Tracker'"),
         operation: z.string().describe("The operation name, e.g. 'find_item'"),
@@ -147,5 +178,5 @@ export function makeFamilyToolTools(deps: FamilyToolDeps) {
     },
   );
 
-  return [listFamilyTools, callFamilyTool];
+  return [listFamilyTools, describeFamilyTool, callFamilyTool];
 }

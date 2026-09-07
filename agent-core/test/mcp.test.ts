@@ -18,6 +18,7 @@ import {
   type McpServerConfig,
 } from "../src/mcp/config.js";
 import { McpManager } from "../src/mcp/manager.js";
+import { makeMcpTools } from "../src/agents/mcpTools.js";
 import { seedUser, authInject, type SeededUser } from "./helpers.js";
 
 let realDataDir: string;
@@ -198,6 +199,68 @@ describe("McpManager (against a fake server)", () => {
     const mgr = new McpManager();
     expect(mgr.enabled()).toBe(false);
     expect(await mgr.toolsForUser("u1")).toEqual([]);
+  });
+});
+
+describe("makeMcpTools (list / describe / call)", () => {
+  it("list is a compact summary; describe shows the full nested schema", async () => {
+    const fake = await startFakeMcp({
+      tools: [
+        {
+          name: "create_event",
+          description: "add a calendar event",
+          inputSchema: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              when: {
+                type: "object",
+                properties: { start: { type: "string", description: "ISO datetime" }, end: { type: "string" } },
+                required: ["start"],
+              },
+            },
+            required: ["title", "when"],
+          },
+        },
+      ],
+      onCall: (name, args) => ({ text: `made ${name} ${JSON.stringify(args)}` }),
+    });
+    try {
+      upsertMcpServer({ name: "cal", transport: "http", enabled: true, url: fake.url } as McpServerConfig);
+      const [list, describe, call] = makeMcpTools({
+        userId: "u1",
+        manager: new McpManager(),
+        logActivity: () => {},
+      });
+
+      const listed = (await list.invoke({})) as string;
+      expect(listed).toContain("create_event");
+      expect(listed).toContain("describe_mcp_tool"); // the pointer to the next rung
+      expect(listed).not.toContain("ISO datetime"); // nested detail is NOT in the list
+
+      const described = (await describe.invoke({ server: "cal", tool: "create_event" })) as string;
+      expect(described).toMatch(/- title \(string, required\)/);
+      expect(described).toMatch(/- when \(object, required\)/);
+      expect(described).toMatch(/ {2}- start \(string, required\) — ISO datetime/);
+
+      const called = (await call.invoke({ server: "cal", tool: "create_event", input: { title: "x" } })) as string;
+      expect(called).toContain("made create_event");
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it("describe_mcp_tool on an unknown tool suggests near matches", async () => {
+    const fake = await startFakeMcp({ tools: [{ name: "search" }] });
+    try {
+      upsertMcpServer({ name: "kb", transport: "http", enabled: true, url: fake.url } as McpServerConfig);
+      const [, describe] = makeMcpTools({ userId: "u1", manager: new McpManager(), logActivity: () => {} });
+      const out = (await describe.invoke({ server: "kb", tool: "serch" })) as string;
+      expect(out).toMatch(/No tool "serch" on service "kb"/);
+      expect(out).toMatch(/kb\.search/);
+    } finally {
+      await fake.close();
+    }
   });
 });
 

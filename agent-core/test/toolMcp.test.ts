@@ -108,7 +108,7 @@ describe("makeFamilyToolTools", () => {
     const activity: string[] = [];
     const refs: string[] = [];
     const calls: { toolId: string; op: string; args: unknown }[] = [];
-    const [listTool, callTool] = makeFamilyToolTools({
+    const [listTool, describeTool, callTool] = makeFamilyToolTools({
       getCatalog: () => catalog,
       callOperation: async (toolId, op, args) => {
         calls.push({ toolId, op, args });
@@ -117,7 +117,7 @@ describe("makeFamilyToolTools", () => {
       onReference: (r) => refs.push(`${r.type}:${r.id}`),
       logActivity: (_actor, action, detail) => activity.push(`${action} ${detail}`),
     });
-    return { listTool, callTool, activity, refs, calls };
+    return { listTool, describeTool, callTool, activity, refs, calls };
   }
 
   it("list_family_tools renders the catalog with operations and params", async () => {
@@ -185,6 +185,29 @@ describe("makeFamilyToolTools", () => {
     const out = (await callTool.invoke({ tool: "Item Tracker", operation: "export_csv", input: {} })) as string;
     expect(out).toMatch(/no operation "export_csv"/);
     expect(out).toMatch(/improved|don't build a new tool/i);
+  });
+
+  it("describe_family_tool returns one operation's full schema", async () => {
+    const { describeTool } = setup({ ok: true });
+    const out = (await describeTool.invoke({ tool: "Item Tracker", operation: "save_item" })) as string;
+    expect(out).toMatch(/Item Tracker\.save_item \[write\]/);
+    expect(out).toMatch(/- name \(string, required\)/);
+    expect(out).toMatch(/- location \(string, required\)/);
+    expect(out).not.toMatch(/find_item/);
+  });
+
+  it("describe_family_tool with no operation lists them all", async () => {
+    const { describeTool } = setup({ ok: true });
+    const out = (await describeTool.invoke({ tool: "Item Tracker" })) as string;
+    expect(out).toMatch(/find_item/);
+    expect(out).toMatch(/save_item/);
+  });
+
+  it("describe_family_tool rejects an unknown operation with the real names", async () => {
+    const { describeTool } = setup({ ok: true });
+    const out = (await describeTool.invoke({ tool: "Item Tracker", operation: "nope" })) as string;
+    expect(out).toMatch(/no operation "nope"/);
+    expect(out).toMatch(/find_item, save_item/);
   });
 });
 

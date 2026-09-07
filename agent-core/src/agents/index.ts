@@ -256,9 +256,11 @@ made in the Tools tab. You do NOT build tools (that's builder-agent's job) and
 you do NOT touch tasks, documents, or sticky notes.
 
 Always call list_family_tools first. It shows every tool, and for each one the
-operations you can call — their exact names, whether they read or write, and
-their parameters. Then call call_family_tool with the tool name, the operation
-name (both exactly as listed), and an input object with the parameters.
+operations you can call — their exact names, whether they read or write, and a
+one-line parameter summary. If an operation's parameters are nested or you're
+unsure of the exact shape, call describe_family_tool next for its full schema.
+Then call call_family_tool with the tool name, the operation name (both exactly
+as listed), and an input object with the parameters.
 
 If a lookup ("where is…", "who has…", "how many…") — use a read operation and
 report what it returns, plainly. If a change ("we moved…", "add…", "log
@@ -363,8 +365,10 @@ automation, a company system, and so on.
 
 Always call list_mcp_tools first. It shows every connected service, and for
 each the tools you can call — their exact names, whether they read or write,
-and their parameters. Then call call_mcp_tool with the service name, the tool
-name (both exactly as listed), and an input object.
+and a one-line parameter summary. If a tool's parameters are nested or you're
+unsure of the exact shape, call describe_mcp_tool next for its full schema.
+Then call call_mcp_tool with the service name, the tool name (both exactly as
+listed), and an input object.
 
 For a lookup ("what's on the calendar", "search the wiki for…"), use a read
 tool and report what it returns, plainly. For a change ("add an event", "turn
