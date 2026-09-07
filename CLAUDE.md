@@ -548,11 +548,45 @@ provide `logActivity` + the `saveAsDocument`/`saveToInbox` closures), guarded by
 `research` branch. `ForcedAgentKind` gained `research` (`/web`, `/lookup`) and
 `workshop` (`/run`, `/shell`).
 
+## Code sandbox: `run_code` (compute/*)
+
+A stateless "run this snippet, give me the answer" tool — `agent-core/src/compute/run.ts`,
+`agents/computeTools.ts`. A 2B model does arithmetic / date math / small data
+analysis wrong in its head; `run_code` runs a JavaScript snippet and returns an
+exact result.
+
+- **Runtime**: QuickJS compiled to WebAssembly (`quickjs-emscripten`) — ~1 MB,
+  ships the `.wasm` in the npm package, loads in plain Node `WebAssembly`, **no
+  native dependency, no build step**, cross-platform (desktop is Mac/Windows
+  too). The module has **zero syscalls** — no filesystem, network, process,
+  clock, or randomness. Isolation is structural, not a policy.
+- **Caps**: memory (`setMemoryLimit`, 64 MB), stack, wall-clock 3 s via
+  `setInterruptHandler` — which fires from inside the interpreter loop **and the
+  regex engine** (verified: catastrophic backtracking is stopped), and returned-
+  value size. A fresh runtime + context per call → no state leaks between calls.
+- **Shape**: `run_code({ code, input? })` → `{ result, logs, error, limitHit }`.
+  `input` (any JSON) is the global `input`; the current time is the ISO string
+  `NOW` (injectable for deterministic tests). The snippet's **last expression**
+  is the result (Node-REPL model — a top-level `return` errors); `console.log`
+  is captured into `logs`. A preamble sets these up on `globalThis` and ends
+  with a bare `undefined;` so an all-declarations snippet yields `result:
+  undefined` rather than leaking a preamble value.
+- **Where**: bound **directly** onto the planner and `document-agent` (compute
+  a value read off a bill) — it's a leaf capability, not a domain, so no
+  subagent. Also a `/calc` (alias `/compute`) forced turn → `buildFamilyCalcAgent`.
+- **On by default** (`FAMILY_AGENT_COMPUTE=0` disables; `/health.compute`
+  boolean). Unlike web/shell this changes no security posture — it's a pure
+  function — so it isn't an admin-gated switch. `warmCompute()` pre-loads the
+  wasm at startup.
+- Tests: `test/compute.test.ts` (13 — result/logs/input/NOW, error reporting,
+  every cap enforced, no ambient globals, no state leak).
+
 ## Scope notes
 
 Eight subagents ship: `task-agent`, `document-agent`, `builder-agent`,
 `notes-agent`, `tools-agent`, `routine-agent`, `research-agent` (web access
-on), and `workshop-agent` (file processing on). `builder-agent`
+on), and `workshop-agent` (file processing on) — plus `run_code`, a leaf tool
+on the planner + `document-agent` (see "Code sandbox" above). `builder-agent`
 generates small self-contained web tools (`agent-core/src/tools/*`, and a "Tools" screen in
 both apps) — see `docs/STATUS.md` for the architecture. A build starts with a **plan pass**
 (`planTool` / `PLAN_SYSTEM`): the model decides `{ needsBackend, operations }` for the ask

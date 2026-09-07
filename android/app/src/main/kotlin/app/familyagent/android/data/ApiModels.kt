@@ -94,6 +94,8 @@ data class HealthResponse(
     val web: String = "off",
     /** "on" when file processing works here; "unavailable" if requested but the sandbox is missing. */
     val shell: String = "off",
+    /** Whether the stateless code sandbox (run_code / the /calc command) is available. */
+    val compute: Boolean = true,
 )
 
 @Serializable

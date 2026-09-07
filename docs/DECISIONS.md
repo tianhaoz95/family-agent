@@ -1403,3 +1403,90 @@ escape-arg rejection, and — where bwrap works — a real sandboxed `jq` run).
 Full fast suite 327 pass / 1 skip. Live: `fetchPage` against example.com +
 Wikipedia, SSRF blocked; `runSandboxed` isolation confirmed by hand; the
 DuckDuckGo scrape is blocked from this environment's IP (residential works).
+
+## Code sandbox: `run_code` (QuickJS-in-wasm, not wasmtime or Python)
+
+The planner couldn't do arithmetic — "split $847.50 three ways with 18% tip",
+an amortization payment, "how many days until the passport expires", "sum the
+deposits in this statement". A 2B model gets these wrong in its head and there
+was no primitive that just *computes*. Builder-tools are the wrong shape
+(persistent, user-facing, UI + storage); workshop-agent is the wrong shape
+(file-processing, needs bubblewrap). What was missing is a **stateless "run
+this snippet, give me the answer" tool** used mid-conversation.
+
+### Runtime: QuickJS compiled to wasm, run in plain Node
+
+`quickjs-emscripten` — QuickJS-ng built to WebAssembly, ~1 MB, ships the `.wasm`
+inside the npm package, loads via Node's built-in `WebAssembly`. Chosen over:
+
+- **A full `wasmtime` host + arbitrary wasm modules** — the model can't produce
+  wasm binaries; the useful layer is an interpreter-in-wasm driven by
+  model-written source.
+- **Python (Pyodide / RustPython-wasm)** — 4–10 MB, hundreds-of-ms to seconds
+  cold start, and Pyodide is Emscripten-not-WASI anyway. Python is marginally
+  more natural for the model on analysis, but for bill-splits and date math the
+  weight isn't worth it. If real dataframe analysis is ever needed, add Pyodide
+  as a second engine behind the same tool.
+- **`isolated-vm` (V8 isolates)** — faster and more capable, but a native
+  addon with a build step, and V8-not-wasm is a weaker isolation story than the
+  user asked for.
+- **`deno eval` in the existing Deno sandbox** — Deno isn't always present
+  (builder-tools degrade without it), cold start is ~50–100 ms vs ~2 ms, and it
+  spawns a process.
+
+The deciding properties: **zero native dependency, zero build step,
+cross-platform** (the desktop app runs on Mac and Windows), ~2 ms cold start,
+and — the important one — **the wasm module has no syscalls at all**. No
+filesystem, network, process, clock, or randomness source is reachable from
+inside it. Isolation is structural; the caps below are belt-and-suspenders.
+
+### Caps, and why in-process is safe
+
+`setMemoryLimit(64MB)`, `setMaxStackSize`, a 3 s wall-clock via
+`setInterruptHandler`, and a cap on the returned value's serialised size. The
+interrupt handler is polled from inside the interpreter loop **and** libregexp —
+verified by test that `/(a+)+$/.test("a".repeat(40) + "X")` is stopped at the
+deadline, not hung. Because there are no host calls a snippet can wedge, running
+in-process (no Worker, no `terminate()`) is safe. A fresh `QuickJSRuntime` +
+context per call means no state survives between `run_code` invocations
+(verified).
+
+### Shape
+
+`run_code({ code, input? })` → `{ result, logs, error, limitHit }`.
+
+- The snippet is JavaScript; its **last expression** is the result (the
+  Node-REPL model — the tool description says so). No IIFE wrap, so a top-level
+  `return` is a syntax error rather than silently swallowing the result.
+- A preamble installs `console` (captured into `logs`), the global `input`
+  (parsed from JSON), and `NOW` (an ISO string; injectable so tests are
+  deterministic) on `globalThis` — not with `const`, so the snippet's own
+  top-level declarations don't collide. It ends with a bare `undefined;` so a
+  snippet that's all declarations yields `result: undefined` instead of leaking
+  a preamble assignment's completion value.
+
+### Placement + default
+
+Bound **directly onto the planner and `document-agent`** — computing an exact
+answer is a leaf capability, not a domain, so there's no `compute-agent`
+subagent (routing through one would be a needless hop the small model
+mis-takes). Also a `/calc` / `/compute` forced turn (`buildFamilyCalcAgent`).
+`document-agent` gets it so "how many days until this bill is due" is one turn,
+not a round-trip.
+
+**On by default** (`FAMILY_AGENT_COMPUTE=0` to disable; `/health.compute` is a
+plain boolean). Unlike the web and shell capabilities this widens nothing — a
+pure function with no I/O — so it's not an admin-gated env switch, just a kill
+switch. `warmCompute()` loads the wasm at startup so the first call isn't slow.
+
+### Verified
+
+`test/compute.test.ts` (13): last-expression result, ordered `console.log`
+capture, `input` / `NOW` globals, syntax + thrown errors reported not thrown,
+all-declarations → no result, no ambient `process`/`require`/`fetch`/`Deno`,
+runaway loop + regex backtracking + allocation bomb all stopped at their limit,
+oversized result capped, no state leak between calls. Live against `gemma4:e2b`:
+`/calc split a $128.40 dinner bill 4 ways with a 20% tip` → "$38.52" (correct:
+128.40 × 1.20 / 4), and the plain planner picked `run_code` unprompted for
+"how many days between today and 2026-12-25" → 109 (correct). Activity logs a
+`compute | compute.run` line per call. Fast suite 340 pass / 1 skip.

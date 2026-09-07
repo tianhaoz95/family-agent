@@ -607,3 +607,21 @@ Later changes (not part of the original autonomous session):
     unreliable — the tooling is ready for a bigger model, same as builder tools.
   - **Not yet**: an admin "capabilities" screen (env-var only for now); web in
     a "sources" side panel; OS notifications.
+- **Code sandbox (`run_code`)** — a stateless "run this snippet, give me the
+  answer" tool so the assistant can do exact arithmetic / date math / small
+  data analysis instead of guessing (a 2B model gets "split $84 three ways"
+  wrong). `agent-core/src/compute/run.ts`: **QuickJS compiled to WebAssembly**
+  (`quickjs-emscripten`) — ~1 MB, no native dependency, no build step,
+  cross-platform, and the module has **no syscalls at all** (no fs / network /
+  clock / randomness). Memory + stack + 3 s wall-clock + output-size caps; the
+  interrupt handler stops runaway loops *and* catastrophic regex backtracking.
+  Bound directly onto the planner and `document-agent` (compute a value read
+  off a bill), plus a `/calc` (alias `/compute`) forced turn. **On by default**
+  (`FAMILY_AGENT_COMPUTE=0`; `/health.compute`) — unlike web/shell it widens no
+  trust boundary. Both clients gained the `/calc` slash hint.
+  - Verified: `test/compute.test.ts` (13 — result/logs/input/NOW, errors
+    reported not thrown, every cap enforced, no ambient globals, no state leak);
+    fast suite 340 pass / 1 skip; desktop typecheck + build + 35 tests; Android
+    26 API tests + APK. Live (`gemma4:e2b`): `/calc split a $128.40 bill 4 ways
+    with 20% tip` → "$38.52"; the plain planner picked `run_code` unprompted for
+    "days between today and 2026-12-25" → 109.

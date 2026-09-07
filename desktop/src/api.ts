@@ -353,6 +353,8 @@ export interface Health {
   web?: "on" | "off";
   /** "on" when file processing works here; "unavailable" if requested but the sandbox is missing. */
   shell?: "on" | "off" | "unavailable";
+  /** Whether the stateless code sandbox (run_code / the /calc command) is available. */
+  compute?: boolean;
 }
 
 /** Document search strategy — see agent-core embeddings.ts. */

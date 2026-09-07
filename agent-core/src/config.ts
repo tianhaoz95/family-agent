@@ -172,6 +172,17 @@ export const config = {
   shellMaxOutputBytes: Number(process.env.FAMILY_AGENT_SHELL_MAX_OUTPUT ?? 20_000),
   workspaceMaxBytes: Number(process.env.FAMILY_AGENT_WORKSPACE_MAX_BYTES ?? 512 * 1024 * 1024),
   bwrapPath: process.env.FAMILY_AGENT_BWRAP_PATH ?? "",
+
+  // ---- Code sandbox (compute/run.ts, agents/computeTools.ts) ----
+  // A stateless `run_code` tool — the planner runs a JS snippet for
+  // arithmetic / date math / small data analysis (a 2B model does those wrong
+  // in its head). QuickJS-in-wasm: no syscalls at all, so this is a pure
+  // function and safe to leave ON by default (unlike web/shell it changes no
+  // security posture). FAMILY_AGENT_COMPUTE=0 disables it.
+  computeEnabled: process.env.FAMILY_AGENT_COMPUTE !== "0",
+  computeTimeoutMs: Number(process.env.FAMILY_AGENT_COMPUTE_TIMEOUT_MS ?? 3_000),
+  computeMemoryBytes: Number(process.env.FAMILY_AGENT_COMPUTE_MEMORY_BYTES ?? 64 * 1024 * 1024),
+  computeMaxOutputChars: Number(process.env.FAMILY_AGENT_COMPUTE_MAX_OUTPUT ?? 10_000),
 };
 
 /** The watched folder for one user — their own override, or the derived default. */

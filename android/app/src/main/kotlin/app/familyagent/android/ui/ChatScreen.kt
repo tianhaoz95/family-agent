@@ -79,6 +79,7 @@ private val SLASH_COMMANDS = listOf(
     "schedule" to "Create or manage a scheduled routine (alias: /remind)",
     "web" to "Search the web and read a page (alias: /lookup)",
     "run" to "Process a file with command-line tools (alias: /shell)",
+    "calc" to "Compute an exact answer — maths, dates, totals (alias: /compute)",
 )
 
 @Composable

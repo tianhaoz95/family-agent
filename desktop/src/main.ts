@@ -117,9 +117,10 @@ let semanticSearchOff = false;
 // Mirrors /health.routinesEnabled — hides the Routines nav item when off.
 let routinesEnabled = true;
 const navRoutines = document.getElementById("nav-routines") as HTMLButtonElement;
-// Mirror /health.web / .shell — gate the /web and /run slash commands.
+// Mirror /health.web / .shell / .compute — gate the /web, /run, /calc slash commands.
 let webEnabled = false;
 let shellEnabled = false;
+let computeEnabled = true;
 
 async function refreshStatus() {
   try {
@@ -135,6 +136,7 @@ async function refreshStatus() {
     navRoutines.hidden = !routinesEnabled;
     webEnabled = health.web === "on";
     shellEnabled = health.shell === "on";
+    computeEnabled = health.compute !== false;
     const meaningOpt = documentSearchMode.querySelector<HTMLOptionElement>('option[value="semantic"]');
     if (meaningOpt) {
       meaningOpt.textContent = semanticSearchOff ? "By meaning (needs a model)" : "By meaning";
@@ -187,6 +189,7 @@ const SLASH_COMMANDS: SlashEntry[] = [
   { name: "schedule", description: "Create or manage a scheduled routine (alias: /remind)" },
   { name: "web", description: "Search the web and read a page (alias: /lookup)" },
   { name: "run", description: "Process a file with command-line tools (alias: /shell)" },
+  { name: "calc", description: "Compute an exact answer — maths, dates, totals (alias: /compute)" },
 ];
 // Populated (from the same /tools list the Tools view already fetches) when
 // the Chat view is entered; only ready, server-kind tools are offered — a
@@ -511,7 +514,10 @@ function updateSlashMenu() {
     .filter((t) => t.kind === "server" && t.status === "ready")
     .map((t) => ({ name: t.name, description: t.description }));
   const commands = SLASH_COMMANDS.filter(
-    (c) => (c.name !== "web" || webEnabled) && (c.name !== "run" || shellEnabled)
+    (c) =>
+      (c.name !== "web" || webEnabled) &&
+      (c.name !== "run" || shellEnabled) &&
+      (c.name !== "calc" || computeEnabled)
   );
   slashMatches = [...commands, ...toolEntries].filter((e) => e.name.toLowerCase().includes(query));
   slashHighlight = slashMatches.length ? 0 : -1;

@@ -89,6 +89,7 @@ const ACTOR_LABELS: Record<string, string> = {
   "tools-agent": "Tools",
   "research-agent": "Web",
   "workshop-agent": "Files",
+  compute: "Calculator",
   routine: "Routines",
 };
 

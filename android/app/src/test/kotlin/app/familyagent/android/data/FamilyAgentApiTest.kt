@@ -275,6 +275,20 @@ class FamilyAgentApiTest {
     }
 
     @Test
+    fun `health parses web, shell and compute capability flags`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"ok":true,"model":"m","web":"on","shell":"unavailable","compute":false}"""))
+        val h = api.health()
+        assertEquals("on", h.web)
+        assertEquals("unavailable", h.shell)
+        assertEquals(false, h.compute)
+        server.enqueue(MockResponse().setBody("""{"ok":true,"model":"m"}"""))
+        val d = api.health()
+        assertEquals("off", d.web)
+        assertEquals("off", d.shell)
+        assertEquals(true, d.compute)
+    }
+
+    @Test
     fun `searchTasks passes q and status`() = runBlocking {
         server.enqueue(
             MockResponse().setBody(

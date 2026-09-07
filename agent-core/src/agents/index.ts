@@ -9,6 +9,8 @@ import { makeNoteTools } from "./noteTools.js";
 import { makeRoutineTools } from "./routineTools.js";
 import { makeWebTools, type WebToolDeps } from "./webTools.js";
 import { makeWorkshopTools, type WorkshopToolDeps } from "./workshopTools.js";
+import { makeComputeTools, type ComputeToolDeps } from "./computeTools.js";
+import { config } from "../config.js";
 import { makeFamilyToolTools, type FamilyToolDeps } from "./toolTools.js";
 import type { OnReference } from "./references.js";
 import type { Embedder } from "../embeddings.js";
@@ -143,9 +145,15 @@ HEIC photo to a JPG": call task with subagent_type "workshop-agent" and
 description "Merge the two insurance PDF documents into a single PDF and save
 it as a document" / "Convert the HEIC photo document to JPG and save it."
 
+You also have a "run_code" tool: it runs a short JavaScript snippet and returns
+an exact result. Use it for ANY arithmetic, percentage, tip, loan/interest,
+date-difference, unit-conversion, or "add these up / average these" question —
+never do the maths yourself, you get it wrong. Example: "split $84 three ways"
+→ call run_code with 'Math.round(84/3*100)/100'.
+
 Keep replies short and concrete. If a request needs no tool at all (a plain
-question with nothing to look up, like "what can you help with?"), answer
-directly.`;
+question with nothing to look up or compute, like "what can you help with?"),
+answer directly.`;
 
 const TASK_AGENT_PROMPT = `You manage the family's task list — you never do
 anything in the real world yourself, only track that it needs doing. Every
@@ -179,6 +187,10 @@ member asking; reporting what one says is your job, never a privacy
 violation. "I can't share that", "that's personal information", and "check
 the document yourself" are always the wrong answer here — if you found the
 document, answer with what it says.
+
+If the question needs maths on a value you read — how many days until a due
+date, the total of some line items, a percentage — use the run_code tool
+rather than working it out yourself.
 
 The first time you read a document, call save_extraction with a category, a
 one-line summary, and any important dates you find (due dates, expirations,
@@ -398,11 +410,17 @@ function makeBuilderTools(deps: Pick<FamilyAgentDeps, "startToolBuild" | "startT
 export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {}) {
   const model = createLocalModel();
   const [startBuild, listToolsForBuilder, improveTool] = makeBuilderTools(deps);
+  // `run_code` is a leaf capability (compute an exact answer), not a domain —
+  // bound straight onto the planner rather than routed to a subagent.
+  const computeTools = config.computeEnabled
+    ? makeComputeTools({ logActivity: (a, ac, d) => store.logActivity(a, ac, d) })
+    : [];
 
   return createDeepAgent({
     name: "family-planner",
     model,
     systemPrompt: PLANNER_PROMPT,
+    tools: computeTools,
     // deepagents bakes in generic ls/read_file/write_file tools for the
     // agent's own "working memory" filesystem. A 3B-class model reliably
     // confused those with our domain concept of "documents" — asked "what
@@ -430,7 +448,9 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
           "Searches the family's documents by meaning or keyword (typo-tolerant), reads one by id, and extracts its category, summary, and important dates.",
         systemPrompt: DOCUMENT_AGENT_PROMPT,
         model,
-        tools: makeDocumentTools(store, deps.onReference, deps.getEmbedder),
+        // + run_code so it can do maths on a value it read off a document
+        // (days until a due date, total of line items) without a round-trip.
+        tools: [...makeDocumentTools(store, deps.onReference, deps.getEmbedder), ...computeTools],
       },
       {
         name: "builder-agent",
@@ -549,13 +569,40 @@ export function buildFamilyDocumentAgent(
   store: ScopedStore,
   deps: Pick<FamilyAgentDeps, "onReference" | "getEmbedder"> = {}
 ) {
+  const compute = config.computeEnabled
+    ? makeComputeTools({ logActivity: (a, ac, d) => store.logActivity(a, ac, d) })
+    : [];
   return createDeepAgent({
     name: "family-document-direct",
     model: createLocalModel(),
     systemPrompt: DOCUMENT_AGENT_PROMPT,
     permissions: [{ operations: ["read", "write"], paths: ["/**"], mode: "deny" }],
     middleware: [createFilesystemMiddleware({ tools: ["read_file"] })],
-    tools: makeDocumentTools(store, deps.onReference, deps.getEmbedder),
+    tools: [...makeDocumentTools(store, deps.onReference, deps.getEmbedder), ...compute],
+  });
+}
+
+const CALC_AGENT_PROMPT = `You compute exact answers with the run_code tool.
+
+The user wants a number: a bill split, a tip, an amount after tax or a
+discount, loan or interest maths, how many days/weeks between two dates, a unit
+conversion, a total or average of a list, or the result of a simple rule
+("if income under 40k then 10% else 12%").
+
+Write a short JavaScript snippet and call run_code. The value of the LAST
+expression is the result; use console.log to show your working. The current
+time is the ISO string NOW; JSON data you were given is the global input.
+Then state the answer in one plain sentence. Never do the arithmetic yourself.`;
+
+/** Same shape as buildFamilyToolsAgent, for a "/calc" (alias "/compute") forced turn. */
+export function buildFamilyCalcAgent(store: ScopedStore) {
+  return createDeepAgent({
+    name: "family-calc-direct",
+    model: createLocalModel(),
+    systemPrompt: CALC_AGENT_PROMPT,
+    permissions: [{ operations: ["read", "write"], paths: ["/**"], mode: "deny" }],
+    middleware: [createFilesystemMiddleware({ tools: ["read_file"] })],
+    tools: makeComputeTools({ logActivity: (a, ac, d) => store.logActivity(a, ac, d) }),
   });
 }
 
@@ -717,7 +764,8 @@ export type ForcedAgentKind =
   | "notes"
   | "routine"
   | "research"
-  | "workshop";
+  | "workshop"
+  | "calc";
 
 // A keyword right after "/" picks the agent; "search" is a hand-typeable
 // alias for "find" and "remind" for "schedule" (not offered as separate
@@ -735,6 +783,8 @@ const FORCED_AGENT_KEYWORDS: Record<string, ForcedAgentKind> = {
   lookup: "research",
   run: "workshop",
   shell: "workshop",
+  calc: "calc",
+  compute: "calc",
 };
 
 export interface ForcedAgentCommand {

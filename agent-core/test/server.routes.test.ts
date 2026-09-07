@@ -45,6 +45,9 @@ describe("HTTP API", () => {
     expect(body.model).toBe("gemma4:e2b");
     expect(typeof body.serverName).toBe("string");
     expect(body.needsSetup).toBe(false); // an admin was seeded
+    expect(body.compute).toBe(true); // code sandbox on by default
+    expect(body.web).toBe("off");
+    expect(body.shell).toBe("off");
   });
 
   it("rejects an unauthenticated request to a protected route", async () => {

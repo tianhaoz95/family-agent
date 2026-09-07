@@ -24,6 +24,7 @@ import {
   buildFamilyRoutineAgent,
   buildFamilyResearchAgent,
   buildFamilyWorkshopAgent,
+  buildFamilyCalcAgent,
   askFamilyAgent,
   askFamilyAgentInChannel,
   mentionsAgent,
@@ -45,6 +46,7 @@ import {
   type SearchMode,
 } from "./embeddings.js";
 import { warmModel } from "./warmup.js";
+import { warmCompute } from "./compute/run.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { persistSettings } from "./settingsFile.js";
 import { verifyPassword, bearerToken } from "./auth.js";
@@ -380,6 +382,7 @@ export function buildServer(
   const workshopAgents = makeAgentCache((userId) =>
     buildFamilyWorkshopAgent({ ...shellDeps(userId)!, onReference: (ref) => chatRefs.get(userId)?.push(ref) })
   );
+  const calcAgents = makeAgentCache((userId) => buildFamilyCalcAgent(store.scoped(userId)));
 
   // A tool build/improve/delete (or a model-client rebuild) invalidates every
   // one of the caches above in lockstep — miss one and a stale agent lingers.
@@ -393,6 +396,7 @@ export function buildServer(
     routineAgents.delete(userId);
     researchAgents.delete(userId);
     workshopAgents.delete(userId);
+    calcAgents.delete(userId);
   };
   const dropAllAgents = () => {
     plannerAgents.clear();
@@ -404,6 +408,7 @@ export function buildServer(
     routineAgents.clear();
     researchAgents.clear();
     workshopAgents.clear();
+    calcAgents.clear();
   };
   const agentFor = (userId: string) => plannerAgents.get(userId);
   const toolsAgentFor = (userId: string) => toolsAgents.get(userId);
@@ -414,6 +419,7 @@ export function buildServer(
   const routineAgentFor = (userId: string) => routineAgents.get(userId);
   const researchAgentFor = (userId: string) => researchAgents.get(userId);
   const workshopAgentFor = (userId: string) => workshopAgents.get(userId);
+  const calcAgentFor = (userId: string) => calcAgents.get(userId);
   // Resolve collected hints to {type, id, label}, deduped and capped.
   const resolveReferences = (userStore: ScopedStore, userId: string) => {
     const collected = chatRefs.get(userId) ?? [];
@@ -566,6 +572,8 @@ export function buildServer(
     web: webEnabled() ? "on" : "off",
     // "on" when file processing is enabled AND the sandbox works here.
     shell: shellReady ? "on" : config.shellEnabled ? "unavailable" : "off",
+    // The stateless code sandbox (run_code). On by default — it's a pure function.
+    compute: config.computeEnabled,
   }));
 
   app.post("/_diag", async (req) => {
@@ -757,6 +765,7 @@ export function buildServer(
           tools: config.toolsEnabled ? "" : "Tools aren't turned on for this server.",
           research: webEnabled() ? "" : "Web access isn't turned on for this server.",
           workshop: shellReady ? "" : "File processing isn't turned on for this server.",
+          calc: config.computeEnabled ? "" : "The calculator is turned off on this server.",
         };
         if (offByKind[forced.kind]) {
           responseText = offByKind[forced.kind]!;
@@ -770,6 +779,7 @@ export function buildServer(
             routine: routineAgentFor,
             research: researchAgentFor,
             workshop: workshopAgentFor,
+            calc: calcAgentFor,
           };
           const fallbackByKind: Record<ForcedAgentKind, string> = {
             tools: "What can you do?",
@@ -780,6 +790,7 @@ export function buildServer(
             routine: "List my scheduled routines.",
             research: "What can you look up for me?",
             workshop: "What files can you help me process?",
+            calc: "What can you calculate for me?",
           };
           const agent = agentByKind[forced.kind](req.authUser.id);
           responseText = await askFamilyAgent(agent, forced.text || fallbackByKind[forced.kind], images, history);
@@ -1858,6 +1869,8 @@ async function main() {
   // Load + prefill the planner prompt now so the first chat turn is fast.
   // Fire-and-forget — startup must not block on Ollama being reachable.
   void warmModel();
+  // Pre-load the QuickJS wasm module so the first run_code isn't slow.
+  void warmCompute();
 
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, async () => {
