@@ -52,9 +52,14 @@ layers:
 
 ## Navigation
 
-Unchanged: chat is the home surface, a `ModalNavigationDrawer` (hamburger in
-the top bar) switches views. The active drawer item now uses the desktop's
-`accent-soft` background + `accent` text/icon (was a filled indigo pill).
+Chat is the home surface, a `ModalNavigationDrawer` switches views. **There is
+no app bar** — it was removed (the persistent wordmark + divider ate ~56dp for
+little value). A single **floating menu button** (top-left, white glass,
+`statusBarsPadding()` + 6dp) opens the drawer; `ScreenScaffold` reserves 58dp
+of top space for it. The button is hidden on the tool WebView and inside a
+conversation, which have their own top-left back/close controls. The active
+drawer item uses the desktop's `accent-soft` background + `accent` text/icon
+(was a filled indigo pill).
 
 ## Nunito
 

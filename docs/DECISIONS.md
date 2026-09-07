@@ -1797,3 +1797,20 @@ Verified on the emulator: login, Chat, Messages, drawer, Board, Events (Month),
 Settings — all show the warm canvas + animated gradient + glass + floating
 cards, consistent with the desktop. `compileDebugKotlin` +
 `testDebugUnitTest` + `assembleDebug` green.
+
+### Follow-up: no Android app bar, floating menu button
+
+The Android `AppTopBar` (a `statusBarsPadding` Row with a menu button + brand
+mark + "Family Agent" wordmark + a `HorizontalDivider`) was a persistent
+~56dp strip that mostly repeated what the drawer header already shows. Removed
+it — the `Scaffold` has no `topBar`. A single **floating menu button**
+(`Box` with `clip` + `background(surface, 0.9α)` + `shadow(5dp)` +
+`clickable`, `align(TopStart).statusBarsPadding().padding(start=12, top=6)`,
+42dp, blue Menu icon) opens the drawer. It's rendered as an overlay sibling of
+the `NavHost` inside a wrapping `Box`, shown when
+`!onToolView && route != CONVERSATION_ROUTE` (the WebView and a conversation
+have their own top-left nav). `ScreenScaffold` top padding went 16→58dp to
+clear the button (and, as a bonus, this finally clears the status bar on the
+pre-auth Login/Discovery screens, which `ScreenScaffold` renders without a
+`Scaffold`). No change to bottom insets — the `Scaffold`'s default
+`contentWindowInsets` still feeds `Modifier.padding(padding)` on the `NavHost`.

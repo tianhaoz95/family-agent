@@ -735,3 +735,9 @@ Later changes (not part of the original autonomous session):
     across login, Chat, Messages, drawer, Board, Events, Settings —
     `compileDebugKotlin` + `testDebugUnitTest` + `assembleDebug` green.
     `android/DESIGN.md` rewritten; `CLAUDE.md` / `docs/DECISIONS.md` updated.
+  - **Follow-up — Android app bar removed.** The `AppTopBar` (menu button +
+    wordmark + divider, ~56dp) is gone; a single **floating menu button**
+    (white glass, top-left) opens the drawer, hidden on the tool WebView and
+    inside a conversation. `ScreenScaffold` top padding 16→58dp to clear it
+    (also fixes the pre-auth screens' status-bar overlap). Verified on the
+    emulator.

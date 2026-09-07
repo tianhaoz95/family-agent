@@ -11,6 +11,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -205,14 +207,14 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
             )
         },
     ) {
+        // No app bar — a floating menu button (bottom of this block) opens the
+        // drawer, reclaiming the space the bar used to take. Hidden on the tool
+        // WebView and inside a conversation (both have their own top-left nav).
+        val showMenuButton = !onToolView && currentDestination?.route != CONVERSATION_ROUTE
         Scaffold(
             containerColor = Color.Transparent,
-            topBar = {
-                if (!onToolView) {
-                    AppTopBar(onMenuClick = { scope.launch { drawerState.open() } })
-                }
-            },
         ) { padding ->
+          Box(Modifier.fillMaxSize()) {
             NavHost(
                 navController = navController,
                 startDestination = Destination.Chat.route,
@@ -400,6 +402,28 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                     )
                 }
             }
+
+            if (showMenuButton) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .statusBarsPadding()
+                        .padding(start = 12.dp, top = 6.dp)
+                        .shadow(5.dp, RoundedCornerShape(13.dp))
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
+                        .clickable { scope.launch { drawerState.open() } }
+                        .size(42.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.Menu,
+                        contentDescription = "Open menu",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+          }
         }
     }
 
@@ -421,46 +445,8 @@ private fun BrandMark(size: Int = 30) {
 }
 
 /**
- * Top chrome: the menu toggle, the brand mark and wordmark. Translucent glass
- * over the animated canvas, with a hairline divider under it.
- */
-@Composable
-private fun AppTopBar(onMenuClick: () -> Unit) {
-    Column(Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f))) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            FilledIconButton(
-                onClick = onMenuClick,
-                shape = RoundedCornerShape(13.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                ),
-            ) {
-                Icon(Icons.Rounded.Menu, contentDescription = "Open menu")
-            }
-            Spacer(Modifier.width(12.dp))
-            BrandMark(size = 26)
-            Spacer(Modifier.width(9.dp))
-            Text(
-                "Family Agent",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-    }
-}
-
-/**
- * The collapsible sidebar: gradient brand mark, nav items with a filled
- * indigo pill behind the active one and rounded icons, and a connection pill
- * pinned to the footer.
+ * The collapsible sidebar: brand mark + wordmark, nav items with an accent-soft
+ * pill behind the active one, and a connection pill pinned to the footer.
  */
 @Composable
 private fun AppDrawer(

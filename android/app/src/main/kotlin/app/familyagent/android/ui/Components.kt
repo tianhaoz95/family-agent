@@ -50,7 +50,9 @@ fun ScreenScaffold(
         modifier
             .fillMaxSize()
             .padding(horizontal = 20.dp)
-            .padding(top = 16.dp, bottom = 8.dp),
+            // Room for the floating menu button (MainActivity) that replaced the
+            // app bar; also clears the status bar on the pre-auth screens.
+            .padding(top = 58.dp, bottom = 8.dp),
     ) {
         Text(
             title,
