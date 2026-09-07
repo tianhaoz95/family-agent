@@ -205,30 +205,61 @@ textarea {
 }
 
 #app {
+  /* The rail is a fixed-position floating panel, out of flow; the content
+     column reserves space for it via padding-left (--rail-space), which
+     shrinks as the rail collapses to icons or hides entirely. */
   display: grid;
-  grid-template-columns: 244px 1fr;
+  grid-template-columns: 1fr;
   height: 100vh;
   position: relative;
   z-index: 1;
+  --rail-space: 268px;
+}
+#app.rail-collapsed {
+  --rail-space: 96px;
+}
+#app.rail-hidden {
+  --rail-space: 58px;
 }
 
-/* ---------- Rail ---------------------------------------------------------- */
+/* ---------- Rail — a floating, semi-transparent panel -------------------- */
 .rail {
+  position: fixed;
+  left: 14px;
+  top: 14px;
+  bottom: 14px;
+  width: 240px;
+  z-index: 60;
   background: var(--glass);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
-  border-right: 1px solid rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-pop);
   display: flex;
   flex-direction: column;
-  padding: 18px 12px 14px;
+  padding: 14px 12px 12px;
   gap: 4px;
+  overflow: hidden;
+  transition: width var(--dur-lg) var(--ease-out), transform var(--dur-lg) var(--ease-out),
+    opacity var(--dur) var(--ease-out);
+}
+#app.rail-collapsed .rail {
+  width: 66px;
+  padding-left: 9px;
+  padding-right: 9px;
+}
+#app.rail-hidden .rail {
+  transform: translateX(calc(-100% - 22px));
+  opacity: 0;
+  pointer-events: none;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px 18px;
+  padding: 4px 4px 14px 8px;
 }
 
 /* The project logo — a family "huddle" of circles with the assistant (accent
@@ -258,15 +289,21 @@ textarea {
 .nav-item {
   all: unset;
   cursor: pointer;
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
   color: var(--text-muted);
   font-size: 0.875rem;
   font-weight: 500;
+  white-space: nowrap;
   transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.nav-label {
+  overflow: hidden;
 }
 
 .nav-item svg {
@@ -352,6 +389,139 @@ textarea {
   }
 }
 
+/* ---------- Rail controls: collapse to icons, hide entirely ------------- */
+.rail-ctl {
+  all: unset;
+  cursor: pointer;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-md);
+  color: var(--text-faint);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.rail-ctl:hover {
+  background: var(--surface-2);
+  color: var(--text-strong);
+}
+.rail-ctl:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent-ring);
+}
+.rail-ctl svg {
+  width: 17px;
+  height: 17px;
+}
+
+#rail-collapse-btn {
+  margin-left: auto;
+}
+#app.rail-collapsed #rail-collapse-btn {
+  margin-left: 0;
+  transform: rotate(180deg);
+}
+
+/* the "hide" control lives in the footer, full-width like a nav row */
+.rail-hide-btn {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  height: auto;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-top: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+/* Floating button that brings the rail back when it's hidden. Always in the
+   DOM (no `hidden` attr, so it can transition); only interactive when hidden. */
+.rail-reveal {
+  all: unset;
+  position: fixed;
+  left: 13px;
+  top: 14px;
+  z-index: 60;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.85) translateX(-6px);
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease-out), transform var(--dur-lg) var(--ease-spring),
+    background var(--dur) var(--ease);
+}
+.rail-reveal svg {
+  width: 18px;
+  height: 18px;
+}
+.rail-reveal:hover {
+  color: var(--text-strong);
+  background: var(--surface);
+}
+#app.rail-hidden .rail-reveal {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* ---- Collapsed (icon-only) rail --------------------------------------- */
+#app.rail-collapsed .brand {
+  justify-content: center;
+  padding: 4px 0 12px;
+}
+#app.rail-collapsed .brand-name,
+#app.rail-collapsed .nav-label,
+#app.rail-collapsed .rail-user,
+#app.rail-collapsed .status-pill #status-text {
+  display: none;
+}
+#app.rail-collapsed .nav-item {
+  justify-content: center;
+  padding: 9px 0;
+}
+#app.rail-collapsed .nav-item svg {
+  width: 18px;
+  height: 18px;
+}
+/* a badge collapses to a small dot in the corner of the icon */
+#app.rail-collapsed .nav-badge {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  min-width: 7px;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  font-size: 0;
+  border: 1.5px solid var(--glass);
+}
+#app.rail-collapsed .rail-footer {
+  padding: 8px 0 2px;
+}
+#app.rail-collapsed .status-pill {
+  justify-content: center;
+  padding: 6px;
+  width: 30px;
+  margin: 0 auto;
+}
+#app.rail-collapsed .rail-hide-btn {
+  justify-content: center;
+  padding: 8px 0;
+}
+
 /* ---------- Content ----------------------------------------------------- */
 .content {
   overflow: hidden;
@@ -359,6 +529,8 @@ textarea {
   flex-direction: column;
   min-width: 0;
   position: relative; /* anchors the tool viewer to the content area */
+  padding-left: var(--rail-space);
+  transition: padding-left var(--dur-lg) var(--ease-out);
 }
 
 .view {

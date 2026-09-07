@@ -466,8 +466,19 @@ changes is depth and motion. This overrides three of the "Don't"s above **for
   (`bubble-rise`). All of it freezes under `prefers-reduced-motion` (the
   global rule near the end of `style.css`, extended to `body::after` and the
   hover lifts) — the canvas holds a static position, cards keep their depth.
+- **Floating, collapsible sidebar.** `.rail` is `position: fixed` with a gutter
+  on all sides (glass, `--r-xl`, `--shadow-pop`) — no longer docked to the
+  edge. Three states on `#app`: default (`--rail-space` 268px), `.rail-collapsed`
+  (icon-only, ~66px, labels hidden, badges become corner dots), `.rail-hidden`
+  (slid off-screen, a floating `.rail-reveal` button brings it back).
+  `.content` reserves `padding-left: var(--rail-space)` so nothing sits under
+  the panel. Controls: a chevron in the brand row (expand ⇄ collapse), a "Hide
+  sidebar" row in the footer, and `Ctrl/Cmd+B`. State persists in
+  `localStorage` (`familyAgent.railState`).
 
 It lives as one appended block at the end of `desktop/src/style.css`
-(`/* Atmosphere layer — a page taken from the Gemini app... */`) plus the
-token edits in `:root` and the `body` backdrop, so it's easy to see and
-revert. See `docs/DECISIONS.md` → "Desktop atmosphere layer".
+(`/* Atmosphere layer — a page taken from the Gemini app... */`), the rail /
+`#app` / `.content` rules near the top, plus the token edits in `:root` and the
+`body` backdrop — easy to see and revert. Sidebar state logic is a small block
+in `main.ts` (`setRailState`). See `docs/DECISIONS.md` → "Desktop atmosphere
+layer".

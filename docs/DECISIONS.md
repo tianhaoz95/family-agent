@@ -1723,3 +1723,31 @@ and a floating-glass treatment fights Material. Android keeps flat paper.
 
 Reversible: `git revert` the commit, or delete the appended block + the `:root`
 diff. No JS or DOM changes — it's `style.css` only.
+
+### Follow-up: floating, collapsible sidebar
+
+The rail was a docked 244px grid column. Owner asked for a floating
+semi-transparent panel that can collapse to icons and hide entirely behind a
+button — Gemini/VS-Code style.
+
+- `#app` stops being a two-column grid (`grid-template-columns: 1fr`); `.rail`
+  becomes `position: fixed` with a 14px gutter on every side, glass +
+  `--r-xl` + `--shadow-pop`. `.content` reserves room with
+  `padding-left: var(--rail-space)` (transitioned), so the panel never
+  overlaps content and the tool viewer / side panel still anchor correctly to
+  `.content`'s padding box.
+- Three states, driven by classes on `#app` and one `--rail-space` value each:
+  `expanded` 268px → `rail-collapsed` 96px (rail 66px, `.nav-label` /
+  `.brand-name` / user / status text hidden, nav badges shrink to a corner
+  dot, `title` attrs added in JS for hover tooltips) → `rail-hidden` 58px
+  (rail `translateX` off-screen, a fixed `.rail-reveal` button fades in).
+- Controls: a chevron in the brand row toggles expanded ⇄ collapsed; a "Hide
+  sidebar" row in the footer goes to hidden; `.rail-reveal` and `Ctrl/Cmd+B`
+  bring it back to the last visible state. `setRailState()` in `main.ts`
+  persists to `localStorage` (`familyAgent.railState`) and restores on load.
+- `.rail-reveal` has no `hidden` attribute (the global `[hidden]{display:none}`
+  reset would kill its transition) — it's always in the DOM, `opacity: 0` +
+  `pointer-events: none` until `#app.rail-hidden`.
+- Reduced motion: the existing global rule zeroes the width/transform/padding
+  transitions, so state changes snap instead of slide; the layout is correct
+  either way.

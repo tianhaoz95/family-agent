@@ -715,3 +715,11 @@ Later changes (not part of the original autonomous session):
   in the browser across Chat, Events, Board, Routines, Settings, Documents, and
   a chat conversation. `DESIGN.md` and `docs/DECISIONS.md` updated to record the
   deliberate divergence.
+  - **Follow-up — floating, collapsible sidebar.** `.rail` went from a docked
+    244px grid column to a `position: fixed` glass panel with a gutter on all
+    sides. Three states on `#app` (`--rail-space` per state): expanded →
+    `rail-collapsed` (icon-only ~66px) → `rail-hidden` (off-screen, a floating
+    `.rail-reveal` button + `Ctrl/Cmd+B` bring it back). `.content` reserves
+    `padding-left: var(--rail-space)`. `setRailState()` in `main.ts` persists to
+    `localStorage`. Verified in-browser: all three states, cycling, and reload
+    persistence.

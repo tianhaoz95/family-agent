@@ -104,6 +104,59 @@ function showView(name: string) {
 
 for (const btn of navButtons) {
   btn.addEventListener("click", () => showView(btn.dataset.view!));
+  // Native tooltip for the icon-only (collapsed) rail.
+  const label = btn.querySelector(".nav-label")?.textContent?.trim();
+  if (label && !btn.title) btn.title = label;
+}
+
+// ---------- rail: floating panel, collapse to icons, hide entirely -------
+const RAIL_STATE_KEY = "familyAgent.railState";
+type RailState = "expanded" | "collapsed" | "hidden";
+const railApp = document.getElementById("app")!;
+const railCollapseBtn = document.getElementById("rail-collapse-btn") as HTMLButtonElement;
+const railHideBtn = document.getElementById("rail-hide-btn") as HTMLButtonElement;
+const railRevealBtn = document.getElementById("rail-reveal-btn") as HTMLButtonElement;
+
+let railState: RailState = "expanded";
+// Where "show" returns to after a full hide — the last visible state.
+let railLastVisible: Exclude<RailState, "hidden"> = "expanded";
+
+function setRailState(next: RailState, persist = true) {
+  railState = next;
+  if (next !== "hidden") railLastVisible = next;
+  railApp.classList.toggle("rail-collapsed", next === "collapsed");
+  railApp.classList.toggle("rail-hidden", next === "hidden");
+  const collapsed = next === "collapsed";
+  railCollapseBtn.title = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  railCollapseBtn.setAttribute("aria-label", railCollapseBtn.title);
+  if (persist) {
+    try {
+      localStorage.setItem(RAIL_STATE_KEY, next);
+    } catch {
+      /* private mode — fine, just won't persist */
+    }
+  }
+}
+
+railCollapseBtn.addEventListener("click", () =>
+  setRailState(railState === "collapsed" ? "expanded" : "collapsed")
+);
+railHideBtn.addEventListener("click", () => setRailState("hidden"));
+railRevealBtn.addEventListener("click", () => setRailState(railLastVisible));
+
+// Ctrl/Cmd+B toggles the sidebar in/out entirely (VS Code convention).
+window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    setRailState(railState === "hidden" ? railLastVisible : "hidden");
+  }
+});
+
+try {
+  const saved = localStorage.getItem(RAIL_STATE_KEY);
+  if (saved === "collapsed" || saved === "hidden") setRailState(saved, false);
+} catch {
+  /* ignore */
 }
 
 // ---------- status pill ----------
