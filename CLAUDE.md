@@ -26,8 +26,14 @@ board. Everything else (tasks/"Events", documents, tools, activity) stays
 per-account. See `docs/STATUS.md` and `docs/DECISIONS.md` → "Cross-account chat".
 
 The **desktop** app follows `DESIGN.md` at the repo root (the "Notion — warm paper notebook"
-system: `#f6f5f4` canvas, single `#0075de` blue accent, hairline-border / no-shadow cards, Inter
-+ Source Serif 4, **light theme only**). Its tokens live in `desktop/src/style.css` `:root`.
+palette: `#f6f5f4` canvas, single `#0075de` blue accent, Inter + Source Serif 4, **light theme
+only**) with a Gemini-inspired **atmosphere layer** on top: an animated gradient canvas
+(`body::before/::after` bloom layers), translucent-glass chrome, soft floating card shadows
+(`--shadow-sm` is no longer `none`), rounder corners (`--r-lg` 16, `--r-xl` 22), and springy
+view/bubble transitions — all frozen under `prefers-reduced-motion`. It's one appended block at
+the end of `desktop/src/style.css` plus the `:root` token edits. Tokens live in
+`desktop/src/style.css` `:root`. See `DESIGN.md` → "Desktop atmosphere layer" and
+`docs/DECISIONS.md`. Android keeps the flat paper treatment.
 
 The **Android** app follows its own `android/DESIGN.md` (the "Playful Color Mobile Design
 System": `#6366F1` indigo / `#F472B6` pink / `#22D3EE` cyan, soft-shadow rounded cards, Nunito,

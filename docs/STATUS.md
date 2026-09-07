@@ -703,3 +703,15 @@ Later changes (not part of the original autonomous session):
     a port of Claude Code's `ToolSearch` "activate a real tool" — deepagents
     compiles a fixed graph per turn, so the tools stay text. Fast suite now
     394 pass / 1 skip (+`test/schemaText.test.ts`).
+- **Desktop atmosphere layer (Gemini-inspired).** A soft presentation pass over
+  the warm-paper base: an animated gradient canvas (two counter-drifting
+  `body::before/::after` bloom layers in the accent-cast colours), translucent
+  glass chrome (rail, side panel, tool viewer), floating card shadows
+  (`--shadow-sm` was `none`), rounder corners (`--r-lg` 16 / `--r-xl` 22), and
+  springy view/bubble transitions — all frozen by `prefers-reduced-motion`. The
+  identity (`#f6f5f4`, `#0075de`, Inter) is unchanged; no cool-palette shift.
+  Built as `:root` token edits + one appended block in `desktop/src/style.css`
+  (no JS), so it's a one-commit revert. Android untouched (flat paper). Verified
+  in the browser across Chat, Events, Board, Routines, Settings, Documents, and
+  a chat conversation. `DESIGN.md` and `docs/DECISIONS.md` updated to record the
+  deliberate divergence.

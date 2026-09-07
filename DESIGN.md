@@ -182,6 +182,10 @@ SVG logo at native proportions, color desaturated to near-black (#000000 at 60% 
 - Keep motion at 200ms with ease timing for hovers and transitions; reserve spring/bounce animations for character marks and hero elements
 
 ### Don't
+> **Desktop exception:** the three rules below about gradients, card shadows and
+> `>12px` radius are deliberately overridden by the desktop "atmosphere layer" —
+> see "Desktop atmosphere layer (Gemini-inspired)" near the end of this file.
+> They still hold for `android/` and for any new marketing surface.
 - Do not use pure #ffffff as the page background — the warm #f6f5f4 canvas is the system's signature warmth
 - Do not add shadows to content cards — the system uses hairline borders only, shadows appear only on the product UI mockup and nav bar
 - Do not use multiple chromatic button colors in the same view — #0075de is the only filled button; color variety belongs in card backgrounds
@@ -426,14 +430,44 @@ Character marks (round illustrated faces in 2px colored circles) and abstract de
 
 ## Applying this in the apps (nana-specific)
 
-This system is the source of truth for both `desktop/` and `android/`. It is a
-**light-only** theme — no dark mode.
+This system is the palette / type / spacing source of truth for both `desktop/`
+and `android/`. It is a **light-only** theme — no dark mode.
 
 - **Desktop** (`desktop/src/style.css`): the `:root` token block mirrors the
   values above (`--bg` = `#f6f5f4`, `--surface` = `#fff`, `--border` =
   `rgba(0,0,0,0.08)`, `--accent` = `#0075de`, `--accent-soft` = `#e6f3fe`).
   Inter and Source Serif 4 are bundled locally via `@fontsource` (no CDN).
-  Content cards use hairline borders only — `--shadow-sm` is `none`.
 - **Android** (`android/.../ui/theme/Theme.kt`): the Material 3 `lightColorScheme`
   and `Typography` map to the same tokens; Inter is bundled in `res/font/`.
-  Always light (`isSystemInDarkTheme()` is not consulted).
+  Always light (`isSystemInDarkTheme()` is not consulted). Android keeps the flat
+  paper treatment.
+
+### Desktop atmosphere layer (Gemini-inspired) — deliberate divergence
+
+The desktop app layers a soft, animated presentation pass **on top of** the
+palette above — a page taken from the Gemini app. The identity (warm `#f6f5f4`
+canvas, single `#0075de` accent, Inter + Source Serif) is unchanged; what
+changes is depth and motion. This overrides three of the "Don't"s above **for
+`desktop/` only**:
+
+- **Animated gradient canvas.** `body::before` / `body::after` paint two
+  counter-drifting layers of soft radial colour blooms (sky / peach / lilac /
+  mint, drawn from the accent cast) over the paper base. They sit behind the
+  app (`#app` is `z-index: 1`), the rail and side panels are translucent glass
+  (`backdrop-filter`), and the centred content column is transparent, so the
+  wash shows around and between the floating cards. Tokens: `--bloom-*`.
+- **Floating cards.** `--shadow-sm` is now a real soft, warm-tinted shadow
+  (was `none`); container cards carry it and list rows lift (`translateY(-2px)`
+  + `--shadow-hover`) on hover. `--shadow-pop` for menus / the side panel.
+- **Rounder corners.** `--r-md` 8→11, `--r-lg` 12→16, `--r-xl` 12→22. Pills
+  unchanged.
+- **Springier motion.** `--ease-out` / `--ease-spring` curves; `--dur-lg`
+  (420ms) for view transitions (`view-rise`) and the bubble entrance
+  (`bubble-rise`). All of it freezes under `prefers-reduced-motion` (the
+  global rule near the end of `style.css`, extended to `body::after` and the
+  hover lifts) — the canvas holds a static position, cards keep their depth.
+
+It lives as one appended block at the end of `desktop/src/style.css`
+(`/* Atmosphere layer — a page taken from the Gemini app... */`) plus the
+token edits in `:root` and the `body` backdrop, so it's easy to see and
+revert. See `docs/DECISIONS.md` → "Desktop atmosphere layer".

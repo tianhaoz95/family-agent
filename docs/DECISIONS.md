@@ -1675,3 +1675,51 @@ tools, sandboxed script isolation, routes + admin gating) and
 `test/mcp.test.ts` (config CRUD + scope filtering + redaction, `McpManager`
 against an in-process fake MCP server incl. result clamping and graceful
 degradation, routes + `/health`).
+
+## Desktop atmosphere layer (Gemini-inspired) — animated gradient, float, motion
+
+The desktop app's `DESIGN.md` base ("Notion — warm paper notebook") is
+deliberately flat: no gradients, hairline borders instead of shadows, 12px max
+radius, 200ms ease. The owner asked for a pass taking cues from the Gemini
+mobile app — an animated gradient background, floating cards, animated
+transitions, rounder corners — while keeping the warm identity (`#f6f5f4`
+canvas, `#0075de` accent, Inter). Decision: keep the palette, layer the
+presentation.
+
+**Kept the identity, changed depth + motion.** No palette shift toward Gemini's
+cool blue/lavander world — the base canvas is still warm paper; the gradient is
+soft colour blooms *drawn from the existing accent cast* (sky `#62aef0`, peach
+`#ffb110`, a lilac off `#02093a`/accent, a mint off the "local" green), not a
+new palette.
+
+**How it's built — token layer + one appended block, not a rewrite.** `style.css`
+is 3.6k lines with ~50 hand-styled card selectors and an explicit "never a
+shadow" comment. Rewriting each was the wrong call. Instead:
+- `:root` edits cascade everywhere: `--r-md` 8→11 / `--r-lg` 12→16 / `--r-xl`
+  12→22 round every `var(--r-*)` consumer at once; `--shadow-sm` goes from
+  `none` to a real soft warm shadow so any card that opts in floats; new
+  `--shadow-hover` / `--shadow-pop`, `--glass*`, `--bloom-*`, `--ease-out` /
+  `--ease-spring` / `--dur-lg`.
+- `body::before` + `body::after` are two full-viewport fixed layers of blurred
+  radial-gradient blooms, counter-drifting (`canvas-drift` 34s, `canvas-drift-2`
+  52s, `scale(1.25–1.4)` so the rotate/translate never exposes an edge).
+  `#app` gets `z-index: 1`; the rail becomes `backdrop-filter` glass; `.content`
+  / `.view` were already transparent — so the wash shows around and between the
+  floating cards. (First cut used `inset: -30vmax` on the pseudo-elements and
+  the bloom centres landed off-screen — fixed to `inset: 0` + bigger `scale()`.)
+- One block appended at the end of the file adds the float shadow + hover lift
+  to the enumerated card/row selectors, glass to the side panel / tool viewer /
+  db inspector, a focus glow on the composer, the springy `view-rise` /
+  `bubble-rise` keyframes, and card-ifies the Settings sections (they were bare
+  stacks on the canvas).
+
+**`prefers-reduced-motion`.** `style.css` already had a global rule zeroing all
+animation/transition durations; extended it to `body::after` and to remove the
+hover `transform`s. The gradient then holds a static (still pleasant) position
+and cards keep their depth — motion is the only thing dropped.
+
+**Android is untouched** — the two design systems are independent (STATUS.md),
+and a floating-glass treatment fights Material. Android keeps flat paper.
+
+Reversible: `git revert` the commit, or delete the appended block + the `:root`
+diff. No JS or DOM changes — it's `style.css` only.
