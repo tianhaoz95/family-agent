@@ -180,10 +180,14 @@ fun ConversationScreen(
     sending: Boolean,
     currentUserId: String,
     ttsEnabled: Boolean = false,
+    voiceEnabled: Boolean = false,
+    transcribing: Boolean = false,
     speakingText: String? = null,
     speakLoadingText: String? = null,
     onSpeak: (String) -> Unit = {},
     onSend: (String, List<String>) -> Unit,
+    onVoiceSend: (ByteArray) -> Unit = {},
+    onTranscribe: (ByteArray, (String) -> Unit) -> Unit = { _, _ -> },
     onDelete: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -193,6 +197,7 @@ fun ConversationScreen(
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val recorder = remember { VoiceRecorder() }
 
     fun addUris(uris: List<Uri>) {
         scope.launch {
@@ -323,6 +328,19 @@ fun ConversationScreen(
                     contentDescription = "Attach image",
                     modifier = Modifier.size(22.dp),
                     tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (voiceEnabled) {
+                HoldToTalkMic(
+                    enabled = !sending,
+                    transcribing = transcribing,
+                    recorder = recorder,
+                    onDictate = { wav ->
+                        onTranscribe(wav) { text ->
+                            input = if (input.isBlank()) text else "${input.trimEnd()} $text"
+                        }
+                    },
+                    onVoiceSend = onVoiceSend,
                 )
             }
             TextField(

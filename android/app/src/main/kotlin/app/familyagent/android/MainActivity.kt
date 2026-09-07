@@ -244,6 +244,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onSpeak = viewModel::speak,
                         onSend = viewModel::sendChat,
                         onTranscribe = viewModel::transcribeVoice,
+                        onVoiceSend = viewModel::sendChatVoice,
                         onReferenceClick = viewModel::openReferenceDetail,
                         onNewChat = viewModel::startNewChatSession,
                         onOpenHistory = { navController.navigate(CHAT_SESSIONS_ROUTE) },
@@ -288,10 +289,14 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         sending = state.channelSending,
                         currentUserId = (state.auth as? AuthState.Authenticated)?.user?.id ?: "",
                         ttsEnabled = state.ttsEnabled,
+                        voiceEnabled = state.voiceEnabled,
+                        transcribing = state.channelTranscribing,
                         speakingText = state.speakingText,
                         speakLoadingText = state.speakLoadingText,
                         onSpeak = viewModel::speak,
                         onSend = viewModel::sendChannelMessage,
+                        onVoiceSend = viewModel::sendChannelVoice,
+                        onTranscribe = viewModel::transcribeChannelVoice,
                         onDelete = {
                             viewModel.deleteChannel(id) { navController.popBackStack() }
                         },

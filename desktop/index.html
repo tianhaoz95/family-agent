@@ -184,7 +184,7 @@
                 <button type="button" id="chat-attach-btn" class="chat-attach-btn" title="Attach image" aria-label="Attach image">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
                 </button>
-                <button type="button" id="chat-mic-btn" class="chat-attach-btn" title="Voice input" aria-label="Record a voice message" aria-pressed="false" hidden>
+                <button type="button" id="chat-mic-btn" class="chat-attach-btn" title="Hold to talk, tap to dictate" aria-label="Hold to talk, or tap to dictate" aria-pressed="false" hidden>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
                 </button>
                 <button type="button" id="chat-expand-btn" class="chat-attach-btn chat-expand-btn" title="Expand the input" aria-label="Expand the input" aria-pressed="false" hidden>
@@ -301,7 +301,7 @@
                   <button type="button" id="message-attach-btn" class="chat-attach-btn" title="Attach image" aria-label="Attach image">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
                   </button>
-                  <button type="button" id="message-mic-btn" class="chat-attach-btn" title="Voice input" aria-label="Record a voice message" aria-pressed="false" hidden>
+                  <button type="button" id="message-mic-btn" class="chat-attach-btn" title="Hold to talk, tap to dictate" aria-label="Hold to talk, or tap to dictate" aria-pressed="false" hidden>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
                   </button>
                   <button type="button" id="message-expand-btn" class="chat-attach-btn chat-expand-btn" title="Expand the input" aria-label="Expand the input" aria-pressed="false" hidden>
@@ -776,6 +776,16 @@
           <div id="side-panel-body" class="side-panel-body"></div>
         </aside>
       </main>
+    </div>
+
+    <!-- Push-to-talk overlay: shown while the mic button is held down. The
+         waveform bars are created + driven from main.ts (real mic levels). -->
+    <div id="voice-overlay" class="voice-overlay" hidden role="dialog" aria-label="Listening" aria-live="polite">
+      <div class="voice-overlay-inner">
+        <div id="voice-wave" class="voice-wave" aria-hidden="true"></div>
+        <p id="voice-overlay-label" class="voice-overlay-label">Listening…</p>
+        <p id="voice-overlay-hint" class="voice-overlay-hint">Release to send · slide away to cancel</p>
+      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

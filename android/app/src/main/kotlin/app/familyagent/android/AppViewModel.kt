@@ -5,6 +5,7 @@ import android.media.MediaPlayer
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.familyagent.android.data.AGENT_SENDER_ID
 import app.familyagent.android.data.ActivityEntry
 import app.familyagent.android.data.Channel
 import app.familyagent.android.data.Document
@@ -117,6 +118,8 @@ data class AppUiState(
     val activeChannel: Channel? = null,
     val channelMessages: List<Message> = emptyList(),
     val channelSending: Boolean = false,
+    /** A recorded voice clip is being transcribed for the family channel. */
+    val channelTranscribing: Boolean = false,
     val notes: List<StickyNote> = emptyList(),
     val noteScope: String = "shared",
     // ---- scheduled routines ----
@@ -330,7 +333,7 @@ class AppViewModel(
         }
     }
 
-    fun sendChat(message: String, images: List<String> = emptyList()) {
+    fun sendChat(message: String, images: List<String> = emptyList(), speakReply: Boolean = false) {
         if (message.isBlank() && images.isEmpty()) return
         // The model needs a prompt; supply a default when it's an image only.
         val prompt = message.ifBlank { "What's in this image?" }
@@ -350,13 +353,45 @@ class AppViewModel(
                 chatMessages = withUser + assistant,
                 chatSending = false,
             )
-            if (assistant.role == "assistant" && _state.value.autoRead && _state.value.ttsEnabled &&
-                !assistant.text.startsWith("Error:")
+            // Speak the reply when auto-read is on, or when this turn came in by
+            // voice (push-to-talk) — the user chose to talk, so talk back.
+            if (assistant.role == "assistant" && !assistant.text.startsWith("Error:") &&
+                _state.value.ttsEnabled && (speakReply || _state.value.autoRead)
             ) {
                 speak(assistant.text)
             }
             refreshActivity()
             refreshChatSessions()
+        }
+    }
+
+    /** Transcribe a clip via /transcribe. Reports a friendly message on empty
+     *  speech or failure; returns the text (or null). */
+    private suspend fun runTranscribe(wav: ByteArray, onProblem: (String) -> Unit): String? {
+        if (wav.isEmpty()) return null
+        return apiCall { api.transcribe(wav) }.fold(
+            onSuccess = { r ->
+                if (r.text.isBlank()) {
+                    onProblem("Didn't catch any speech — try again, closer to the mic.")
+                    null
+                } else r.text
+            },
+            onFailure = { onProblem("Voice input failed: ${it.message}"); null },
+        )
+    }
+
+    /** Push-to-talk in Chat: transcribe the held clip, then send it and speak
+     *  the reply back. */
+    fun sendChatVoice(wav: ByteArray) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(chatTranscribing = true)
+            val text = runTranscribe(wav) { msg ->
+                _state.value = _state.value.copy(
+                    chatMessages = _state.value.chatMessages + ChatMessage("assistant", msg),
+                )
+            }
+            _state.value = _state.value.copy(chatTranscribing = false)
+            if (text != null) sendChat(text, speakReply = true)
         }
     }
 
@@ -476,33 +511,33 @@ class AppViewModel(
     /**
      * Transcribe a recorded voice clip and hand the text back to the composer
      * (via [onText]) for the user to review — never auto-sent. A failed or
-     * empty transcription drops an assistant note into the thread.
+     * empty transcription drops an assistant note into the chat thread.
      */
     fun transcribeVoice(wav: ByteArray, onText: (String) -> Unit) {
         if (wav.isEmpty()) return
         viewModelScope.launch {
             _state.value = _state.value.copy(chatTranscribing = true)
-            val result = apiCall { api.transcribe(wav) }
+            val text = runTranscribe(wav) { msg ->
+                _state.value = _state.value.copy(
+                    chatMessages = _state.value.chatMessages + ChatMessage("assistant", msg),
+                )
+            }
             _state.value = _state.value.copy(chatTranscribing = false)
-            result.fold(
-                onSuccess = { r ->
-                    if (r.text.isBlank()) {
-                        _state.value = _state.value.copy(
-                            chatMessages = _state.value.chatMessages +
-                                ChatMessage("assistant", "Didn't catch any speech — try again, closer to the mic."),
-                        )
-                    } else {
-                        onText(r.text)
-                    }
-                },
-                onFailure = {
-                    _state.value = _state.value.copy(
-                        chatMessages = _state.value.chatMessages +
-                            ChatMessage("assistant", "Voice input failed: ${it.message}"),
-                    )
-                },
-            )
+            if (text != null) onText(text)
             refreshActivity()
+        }
+    }
+
+    /** Dictation in a family channel — transcript goes to the composer for
+     *  review (never auto-sent). Errors are surfaced by the mic returning to
+     *  idle with nothing inserted. */
+    fun transcribeChannelVoice(wav: ByteArray, onText: (String) -> Unit) {
+        if (wav.isEmpty()) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(channelTranscribing = true)
+            val text = runTranscribe(wav) { /* transient */ }
+            _state.value = _state.value.copy(channelTranscribing = false)
+            if (text != null) onText(text)
         }
     }
 
@@ -741,6 +776,7 @@ class AppViewModel(
 
     fun openChannel(id: String) {
         conversationJob?.cancel()
+        speakNextChannelReplyUntil = 0L
         val known = _state.value.channels.firstOrNull { it.id == id }
         _state.value = _state.value.copy(activeChannel = known, channelMessages = emptyList())
         conversationJob = viewModelScope.launch {
@@ -758,12 +794,14 @@ class AppViewModel(
                     _state.value = _state.value.copy(channelMessages = merged)
                     lastTs = merged.lastOrNull()?.createdAt
                     merged.lastOrNull()?.let { api.markChannelRead(id, it.createdAt) }
+                    maybeSpeakChannelReply(merged.lastOrNull())
                 }
                 // A pending assistant reply resolves in place — re-pull the tail.
                 if (_state.value.channelMessages.any { it.pending }) {
                     apiCall { api.listMessages(id, null) }.getOrNull()?.let { all ->
                         _state.value = _state.value.copy(channelMessages = all)
                         lastTs = all.lastOrNull()?.createdAt
+                        maybeSpeakChannelReply(all.lastOrNull())
                     }
                 }
                 delay(2500)
@@ -806,12 +844,31 @@ class AppViewModel(
         }
     }
 
-    fun sendChannelMessage(body: String, images: List<String> = emptyList()) {
+    // A push-to-talk send in a channel wants the @agent reply spoken back once
+    // it lands (it arrives via the poll loop). Timestamped so a stale intent
+    // can't grab an unrelated later reply; tracks the id it already spoke.
+    private var speakNextChannelReplyUntil = 0L
+    private var spokenChannelReplyId: String? = null
+
+    private fun maybeSpeakChannelReply(last: Message?) {
+        if (last == null || System.currentTimeMillis() >= speakNextChannelReplyUntil) return
+        if (last.senderId != AGENT_SENDER_ID || last.pending || last.body.isBlank()) return
+        if (last.id == spokenChannelReplyId) return
+        spokenChannelReplyId = last.id
+        speakNextChannelReplyUntil = 0L
+        if (_state.value.ttsEnabled) speak(last.body)
+    }
+
+    fun sendChannelMessage(body: String, images: List<String> = emptyList(), speakReply: Boolean = false) {
         val channelId = _state.value.activeChannel?.id ?: return
         if (body.isBlank() && images.isEmpty()) return
         // The server requires a non-empty body; stand in for an image-only message.
         val text = body.trim().ifBlank { if (images.size > 1) "(shared images)" else "(shared an image)" }
         val mention = Regex("(^|[^\\w@])@(agent|ai|assistant)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        if (speakReply) {
+            speakNextChannelReplyUntil = System.currentTimeMillis() + 240_000
+            spokenChannelReplyId = null
+        }
         viewModelScope.launch {
             _state.value = _state.value.copy(channelSending = true)
             apiCall { api.postMessage(channelId, text, mention, images) }
@@ -821,6 +878,20 @@ class AppViewModel(
                     _state.value = _state.value.copy(channelMessages = merged)
                 }
             _state.value = _state.value.copy(channelSending = false)
+        }
+    }
+
+    /** Push-to-talk in a family channel: transcribe the held clip, send it, and
+     *  speak the @agent reply back when it arrives. */
+    fun sendChannelVoice(wav: ByteArray) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(channelTranscribing = true)
+            val text = runTranscribe(wav) { /* transient — surfaced via the mic returning to idle */ }
+            _state.value = _state.value.copy(channelTranscribing = false)
+            // Send as spoken. If it addresses @agent (or a "/" command), the
+            // reply is spoken back when it lands; a plain message to family
+            // members has no reply to speak, which is correct.
+            if (text != null) sendChannelMessage(text, speakReply = true)
         }
     }
 

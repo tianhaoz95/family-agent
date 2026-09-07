@@ -1,8 +1,6 @@
 package app.familyagent.android.ui
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -27,10 +25,8 @@ import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.PhotoLibrary
-import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -45,7 +41,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import app.familyagent.android.ChatMessage
 import app.familyagent.android.data.ChatReference
@@ -98,6 +93,7 @@ fun ChatScreen(
     onSpeak: (String) -> Unit = {},
     onSend: (String, List<String>) -> Unit,
     onTranscribe: (ByteArray, (String) -> Unit) -> Unit,
+    onVoiceSend: (ByteArray) -> Unit = {},
     onReferenceClick: (ChatReference) -> Unit = {},
     onNewChat: () -> Unit = {},
     onOpenHistory: () -> Unit = {},
@@ -118,38 +114,8 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    // ---- voice input ----
+    // ---- voice input ---- (HoldToTalkMic owns the recorder + gestures)
     val recorder = remember { VoiceRecorder() }
-    var isRecording by remember { mutableStateOf(false) }
-    DisposableEffect(Unit) { onDispose { recorder.cancel() } }
-
-    fun beginRecording() {
-        runCatching { recorder.start() }.onSuccess { isRecording = true }
-    }
-    fun finishRecording() {
-        if (!isRecording) return
-        isRecording = false
-        scope.launch {
-            val wav = recorder.stop()
-            if (wav.isNotEmpty()) {
-                onTranscribe(wav) { text ->
-                    input = endOf(if (input.text.isBlank()) text else "${input.text.trimEnd()} $text")
-                }
-            }
-        }
-    }
-    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) beginRecording()
-    }
-    fun onMicClick() {
-        if (isRecording) {
-            finishRecording()
-            return
-        }
-        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-            PackageManager.PERMISSION_GRANTED
-        if (granted) beginRecording() else micPermission.launch(Manifest.permission.RECORD_AUDIO)
-    }
 
     fun addUris(uris: List<Uri>) {
         scope.launch {
@@ -360,19 +326,17 @@ fun ChatScreen(
                 }
             }
             if (voiceEnabled) {
-                when {
-                    transcribing -> Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                    }
-                    else -> IconButton(onClick = { onMicClick() }, enabled = !sending) {
-                        Icon(
-                            if (isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                            contentDescription = if (isRecording) "Stop recording" else "Voice input",
-                            modifier = Modifier.size(22.dp),
-                            tint = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
+                HoldToTalkMic(
+                    enabled = !sending,
+                    transcribing = transcribing,
+                    recorder = recorder,
+                    onDictate = { wav ->
+                        onTranscribe(wav) { text ->
+                            input = endOf(if (input.text.isBlank()) text else "${input.text.trimEnd()} $text")
+                        }
+                    },
+                    onVoiceSend = onVoiceSend,
+                )
             }
             TextField(
                 value = input,
@@ -380,7 +344,7 @@ fun ChatScreen(
                 modifier = Modifier.weight(1f),
                 placeholder = {
                     Text(
-                        if (isRecording) "Listening…" else "Ask anything, or type /",
+                        "Ask anything, or type /",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

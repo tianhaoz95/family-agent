@@ -67,6 +67,7 @@ function showView(name: string) {
   closeDbInspector();
   closeSidePanel();
   stopSpeech();
+  cancelActiveRecordings();
   for (const btn of navButtons) btn.classList.toggle("is-active", btn.dataset.view === name);
   for (const view of views) view.classList.toggle("is-active", view.id === `view-${name}`);
   // Stop any view-scoped polling loops the previous view started.
@@ -610,54 +611,255 @@ wireImagePasteAndDrop(chatTray, chatInput, chatLog);
 // a bigger view), a "/" command autocomplete, voice input, and image attach.
 // Only how the message is delivered differs.
 
-// -- voice --
-// Tap once to start recording, tap again to stop; the transcript is dropped
-// into the input for the user to review and send (never auto-sent).
+// -- push-to-talk overlay --
+// A full-screen "listening" overlay with a live waveform, shown while the mic
+// button is held down for push-to-talk (see wireMic). The bars travel
+// right-to-left, each one a past mic level — reads clearly as "recording now".
+const voiceOverlay = document.getElementById("voice-overlay") as HTMLElement;
+const voiceWave = document.getElementById("voice-wave") as HTMLElement;
+const voiceOverlayLabel = document.getElementById("voice-overlay-label") as HTMLElement;
+const voiceOverlayHint = document.getElementById("voice-overlay-hint") as HTMLElement;
+const VOICE_BARS = 32;
+const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const voiceBarEls: HTMLElement[] = [];
+for (let i = 0; i < VOICE_BARS; i++) {
+  const b = document.createElement("span");
+  b.className = "bar";
+  voiceWave.appendChild(b);
+  voiceBarEls.push(b);
+}
+const voiceLevels = new Array<number>(VOICE_BARS).fill(0);
+
+function renderVoiceBars() {
+  for (let i = 0; i < VOICE_BARS; i++) {
+    voiceBarEls[i].style.height = `${6 + voiceLevels[i] * 84}px`;
+  }
+}
+function pushVoiceLevel(level: number) {
+  if (prefersReducedMotion.matches) return;
+  voiceLevels.push(level);
+  voiceLevels.shift();
+  renderVoiceBars();
+}
+function showVoiceOverlay() {
+  voiceLevels.fill(prefersReducedMotion.matches ? 0.28 : 0);
+  renderVoiceBars();
+  voiceOverlay.classList.remove("is-cancel");
+  voiceOverlayLabel.textContent = "Listening…";
+  voiceOverlayHint.textContent = "Release to send · slide away to cancel";
+  voiceOverlay.hidden = false;
+}
+function hideVoiceOverlay() {
+  voiceOverlay.hidden = true;
+}
+function setVoiceCancelArmed(armed: boolean) {
+  voiceOverlay.classList.toggle("is-cancel", armed);
+  voiceOverlayLabel.textContent = armed ? "Release to cancel" : "Listening…";
+}
+
+// -- voice input --
+// Two gestures on one button:
+//  • quick tap  → start recording; tap again to stop; transcript lands in the
+//    composer for review (never auto-sent) — the original behaviour.
+//  • press-and-hold → push-to-talk: the listening overlay appears, and on
+//    release the clip is transcribed and *sent immediately* (onAutoSend).
+//    Sliding the pointer away from the button before releasing cancels it.
+// Every wired mic registers a canceller so a view change abandons a live clip.
+const micCancellers: Array<() => void> = [];
+function cancelActiveRecordings() {
+  for (const c of micCancellers) c();
+}
+const HOLD_MS = 320;
+const CANCEL_SLIDE_PX = 90;
+
 function wireMic(
   micBtn: HTMLButtonElement,
   target: HTMLTextAreaElement,
   report: (msg: string) => void,
-  afterInsert: () => void
+  afterInsert: () => void,
+  onAutoSend?: (text: string) => void
 ) {
+  type Mode = "idle" | "arming" | "tap" | "ptt";
+  let mode: Mode = "idle";
   let recording: Recording | null = null;
-  const setRecording = (on: boolean) => {
-    micBtn.classList.toggle("is-recording", on);
-    micBtn.setAttribute("aria-pressed", String(on));
-    micBtn.title = on ? "Stop recording" : "Voice input";
+  let holdTimer: number | undefined;
+  let abortPtt: (() => void) | null = null;
+
+  const setMicUi = () => {
+    micBtn.classList.toggle("is-recording", mode === "tap");
+    micBtn.classList.toggle("is-holding", mode === "ptt" || mode === "arming");
+    micBtn.setAttribute("aria-pressed", String(mode !== "idle"));
+    micBtn.title = mode === "idle" ? "Hold to talk, tap to dictate" : "Stop recording";
   };
-  micBtn.addEventListener("click", async () => {
-    if (recording) {
-      const rec = recording;
-      recording = null;
-      setRecording(false);
-      micBtn.disabled = true;
-      try {
-        const wav = await rec.stop();
-        const { text } = await api.transcribe(wav);
-        if (text) {
-          const existing = target.value.trim();
-          target.value = existing ? `${existing} ${text}` : text;
-          target.focus();
-          afterInsert();
-        } else {
-          report("Didn't catch any speech — try again, a bit closer to the mic.");
-        }
-      } catch (err) {
-        report(`Voice input failed: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
-        micBtn.disabled = false;
+
+  const insertTranscript = (text: string) => {
+    const existing = target.value.trim();
+    target.value = existing ? `${existing} ${text}` : text;
+    target.focus();
+    afterInsert();
+  };
+
+  // Stop the clip and either send it (push-to-talk) or drop it in the composer.
+  const finish = async (opts: { send: boolean }) => {
+    const rec = recording;
+    recording = null;
+    mode = "idle";
+    setMicUi();
+    hideVoiceOverlay();
+    if (!rec) return;
+    micBtn.disabled = true;
+    try {
+      const wav = await rec.stop();
+      const { text } = await api.transcribe(wav);
+      if (!text) {
+        report("Didn't catch any speech — try again, a bit closer to the mic.");
+      } else if (opts.send && onAutoSend) {
+        onAutoSend(text);
+      } else {
+        insertTranscript(text);
       }
+    } catch (err) {
+      report(`Voice input failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      micBtn.disabled = false;
+    }
+  };
+
+  const abandon = () => {
+    window.clearTimeout(holdTimer);
+    recording?.cancel();
+    recording = null;
+    mode = "idle";
+    abortPtt = null;
+    setMicUi();
+    hideVoiceOverlay();
+  };
+  micCancellers.push(abandon);
+
+  micBtn.addEventListener("pointerdown", (e) => {
+    if (micBtn.disabled) return;
+    // A press while a tap-dictation is running stops it (the "tap again").
+    if (mode === "tap") {
+      void finish({ send: false });
       return;
     }
-    try {
-      recording = await startRecording();
-      setRecording(true);
-    } catch (err) {
-      report(
-        `Couldn't start recording: ${err instanceof Error ? err.message : String(err)}. ` +
-          "Check that a microphone is connected and this app has permission to use it."
-      );
+    if (mode !== "idle") return;
+    e.preventDefault();
+    micBtn.setPointerCapture(e.pointerId);
+    mode = "arming";
+    setMicUi();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let released = false;
+    let cancelArmed = false;
+
+    const recReady = startRecording((lvl) => pushVoiceLevel(lvl))
+      .then((rec) => {
+        if (released && mode === "idle") {
+          rec.cancel(); // released before the mic even opened
+        } else {
+          recording = rec;
+        }
+      })
+      .catch((err) => {
+        mode = "idle";
+        setMicUi();
+        window.clearTimeout(holdTimer);
+        hideVoiceOverlay();
+        report(
+          `Couldn't start recording: ${err instanceof Error ? err.message : String(err)}. ` +
+            "Check that a microphone is connected and this app has permission to use it."
+        );
+      });
+
+    holdTimer = window.setTimeout(() => {
+      if (mode !== "arming" || released) return;
+      mode = "ptt";
+      setMicUi();
+      showVoiceOverlay();
+    }, HOLD_MS);
+
+    const onMove = (ev: PointerEvent) => {
+      if (mode !== "ptt") return;
+      const armed = Math.hypot(ev.clientX - startX, ev.clientY - startY) > CANCEL_SLIDE_PX;
+      if (armed !== cancelArmed) {
+        cancelArmed = armed;
+        setVoiceCancelArmed(armed);
+      }
+    };
+    const cleanup = () => {
+      micBtn.removeEventListener("pointermove", onMove);
+      micBtn.removeEventListener("pointerup", onUp);
+      micBtn.removeEventListener("pointercancel", onPointerCancel);
+      abortPtt = null;
+      try {
+        micBtn.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+    };
+    const onUp = async () => {
+      released = true;
+      window.clearTimeout(holdTimer);
+      cleanup();
+      await recReady;
+      if (mode === "ptt") {
+        await finish({ send: !cancelArmed });
+      } else if (mode === "arming") {
+        // A quick tap — fall back to dictation mode (tap again to stop).
+        mode = recording ? "tap" : "idle";
+        setMicUi();
+      }
+    };
+    const onPointerCancel = async () => {
+      released = true;
+      window.clearTimeout(holdTimer);
+      cleanup();
+      await recReady;
+      if (mode === "ptt") await finish({ send: false });
+      else abandon();
+    };
+    abortPtt = () => {
+      released = true;
+      window.clearTimeout(holdTimer);
+      cleanup();
+      void recReady.then(() => {
+        if (mode === "ptt") void finish({ send: false });
+        else abandon();
+      });
+    };
+    micBtn.addEventListener("pointermove", onMove);
+    micBtn.addEventListener("pointerup", onUp);
+    micBtn.addEventListener("pointercancel", onPointerCancel);
+  });
+
+  // Keyboard activation (Enter/Space synth-click, detail === 0) can't hold —
+  // treat it as the tap/dictation toggle.
+  micBtn.addEventListener("click", (e) => {
+    if (e.detail !== 0 || micBtn.disabled) return;
+    if (mode === "tap") {
+      void finish({ send: false });
+    } else if (mode === "idle") {
+      mode = "arming";
+      startRecording((lvl) => pushVoiceLevel(lvl))
+        .then((rec) => {
+          if (mode === "arming") {
+            recording = rec;
+            mode = "tap";
+            setMicUi();
+          } else {
+            rec.cancel();
+          }
+        })
+        .catch((err) => {
+          mode = "idle";
+          report(`Couldn't start recording: ${err instanceof Error ? err.message : String(err)}.`);
+        });
     }
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && mode === "ptt" && abortPtt) abortPtt();
   });
 }
 
@@ -911,7 +1113,15 @@ const chatExpandBtn = document.getElementById("chat-expand-btn") as HTMLButtonEl
 const chatSlashChip = document.getElementById("chat-slash-chip")!;
 const chatGrow = wireAutoGrow(chatInput, chatForm, chatExpandBtn);
 const chatSlash = wireSlashMenu(chatInput, chatSlashMenu, chatSlashChip, chatForm, chatGrow.refresh);
-wireMic(chatMicBtn, chatInput, (m) => appendBubble("system", m), chatGrow.refresh);
+// Push-to-talk: a held mic auto-sends the transcript, and — since the user
+// chose to talk — the reply is spoken back (see the submit handler).
+let speakChatReply = false;
+wireMic(chatMicBtn, chatInput, (m) => appendBubble("system", m), chatGrow.refresh, (text) => {
+  chatInput.value = text;
+  chatGrow.refresh();
+  speakChatReply = true;
+  chatForm.requestSubmit();
+});
 
 // Toggle the composer between "ready to send" and "reply in flight" (Stop).
 function setChatPending(pending: boolean) {
@@ -1046,6 +1256,8 @@ chatForm.addEventListener("submit", async (e) => {
   const typed = chatInput.value.trim();
   const cmd = chatSlash.getCommand();
   const images = chatTray.images.slice();
+  const speakReply = speakChatReply;
+  speakChatReply = false;
   if (!typed && !images.length && !cmd) return;
   // Rebuild the wire form: "/cmd rest", or the plain text (with an image-only
   // default), and show the same in the transcript bubble.
@@ -1072,7 +1284,7 @@ chatForm.addEventListener("submit", async (e) => {
     const bubble = appendBubble("assistant", reply);
     if (references?.length) appendReferences(bubble, references);
     const speakBtn = appendBubbleActions(bubble, reply);
-    if (autoRead && speakBtn) speakBtn.click();
+    if ((autoRead || speakReply) && speakBtn) speakBtn.click();
     activeChatSessionId = sessionId;
     void refreshChatSessions();
   } catch (err) {
@@ -4001,7 +4213,16 @@ const messageSlash = wireSlashMenu(
   messageForm,
   messageGrow.refresh
 );
-wireMic(messageMicBtn, messageInput, appendMessageError, messageGrow.refresh);
+// Push-to-talk in a family channel: auto-send, and speak the agent's reply
+// back when it lands (it arrives via the poll loop, so renderMessage does it).
+// The flag is timestamped so a stale intent can't grab an unrelated later reply.
+let speakNextAgentMessageUntil = 0;
+wireMic(messageMicBtn, messageInput, appendMessageError, messageGrow.refresh, (text) => {
+  messageInput.value = text;
+  messageGrow.refresh();
+  speakNextAgentMessageUntil = Date.now() + 240_000;
+  messageForm.requestSubmit();
+});
 
 let familyMembers: FamilyMember[] = [];
 let channels: Channel[] = [];
@@ -4061,7 +4282,15 @@ async function refreshChannels() {
   if (document.getElementById("view-messages")!.classList.contains("is-active")) renderChannelList();
 }
 
+// After a push-to-talk send in a channel, speak the agent's reply back once.
+function maybeSpeakAgentReply(container: HTMLElement) {
+  if (Date.now() >= speakNextAgentMessageUntil) return;
+  speakNextAgentMessageUntil = 0;
+  container.querySelector<HTMLButtonElement>(".bubble-speak")?.click();
+}
+
 function renderMessage(m: Message) {
+  const agentReply = m.senderId === AGENT_SENDER_ID && !m.pending && m.body.trim();
   if (renderedMessageIds.has(m.id)) {
     // Update a pending agent bubble in place once it resolves.
     const existing = messageLog.querySelector<HTMLElement>(`[data-msg-id="${m.id}"]`);
@@ -4069,6 +4298,7 @@ function renderMessage(m: Message) {
       existing.classList.remove("is-pending");
       existing.querySelector(".msg-body")!.innerHTML = renderMarkdown(m.body);
       if (!existing.querySelector(".msg-actions")) existing.appendChild(msgActionsRow(m.body));
+      if (agentReply) maybeSpeakAgentReply(existing);
     }
     return;
   }
@@ -4097,9 +4327,10 @@ function renderMessage(m: Message) {
     el.querySelector(".msg-body")!.insertAdjacentElement("beforebegin", grid);
   }
   // Copy + read-aloud on the assistant's replies (the Markdown-rendered ones).
-  if (agent && !m.pending && m.body.trim()) el.appendChild(msgActionsRow(m.body));
+  if (agentReply) el.appendChild(msgActionsRow(m.body));
   messageLog.appendChild(el);
   messageLog.scrollTop = messageLog.scrollHeight;
+  if (agentReply) maybeSpeakAgentReply(el);
 }
 
 async function openChannel(id: string) {

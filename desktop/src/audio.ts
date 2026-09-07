@@ -17,7 +17,11 @@ export interface Recording {
 
 const TARGET_RATE = 16000;
 
-export async function startRecording(): Promise<Recording> {
+/**
+ * @param onLevel called on every audio-process tick with a 0..1 loudness
+ *   estimate (RMS, lightly smoothed) — drives the push-to-talk waveform.
+ */
+export async function startRecording(onLevel?: (level: number) => void): Promise<Recording> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
   const AudioCtx: typeof AudioContext =
@@ -36,10 +40,20 @@ export async function startRecording(): Promise<Recording> {
 
   const chunks: Float32Array[] = [];
   let capturing = true;
+  let smoothed = 0;
   processor.onaudioprocess = (e) => {
     if (!capturing) return;
     // getChannelData returns a view that's reused between callbacks — copy it.
-    chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    const frame = new Float32Array(e.inputBuffer.getChannelData(0));
+    chunks.push(frame);
+    if (onLevel) {
+      let sum = 0;
+      for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
+      const rms = Math.sqrt(sum / frame.length);
+      // Attack fast, release slow — reads as a lively but not jittery meter.
+      smoothed = rms > smoothed ? rms * 0.6 + smoothed * 0.4 : rms * 0.2 + smoothed * 0.8;
+      onLevel(Math.min(1, smoothed * 6));
+    }
   };
 
   source.connect(processor);

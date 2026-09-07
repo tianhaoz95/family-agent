@@ -193,6 +193,17 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   text for the user to review. Clients send a 16 kHz mono WAV so the module is a
   dependency-free header parse (`decodeWav`), not an audio-codec problem. `FAMILY_AGENT_ASR=0`
   disables it (route 403s, `/health.asrEnabled` false, both clients hide the mic button).
+  The mic button has **two gestures**: a quick **tap** dictates into the composer for review
+  (never auto-sent — the original behaviour); a **press-and-hold** is push-to-talk — a
+  full-screen "listening" overlay with a live waveform, and on release the clip is
+  transcribed **and sent immediately**, with the reply **spoken back** (voice in → voice out,
+  regardless of the auto-read setting). Sliding the pointer/finger off the button before
+  releasing cancels it (Esc also cancels on desktop). Desktop: `wireMic` in `main.ts` (pointer
+  events, `#voice-overlay` in `index.html`, `startRecording(onLevel)` in `audio.ts` feeds the
+  bars); a channel reply is spoken via the poll loop (`maybeSpeakAgentReply`, 240s window).
+  Android: `HoldToTalkMic` + `VoiceOverlay` in `ui/VoiceOverlay.kt` (Compose `awaitEachGesture`,
+  `VoiceRecorder.amplitude` StateFlow), `AppViewModel.sendChatVoice` / `sendChannelVoice`
+  (`speakReply`), `maybeSpeakChannelReply` on the channel poll.
 - `tts.ts` — text-to-speech for the "Read aloud" button on every assistant/agent reply (`POST
   /speak`, JSON `{ text, voice? }` in, `audio/wav` out; `GET /tts/voices` lists the 28 voices).
   **Kokoro-82M** (`config.ttsModel`, default `onnx-community/Kokoro-82M-v1.0-ONNX`, `q8` ~86MB)

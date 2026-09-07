@@ -5,10 +5,14 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.min
+import kotlin.math.sqrt
 
 /**
  * Records mic audio as 16 kHz mono 16-bit PCM and hands back a WAV byte array —
@@ -26,6 +30,11 @@ class VoiceRecorder {
     @Volatile private var recording = false
     private var record: AudioRecord? = null
     private val pcm = ByteArrayOutputStream()
+
+    /** 0..1 loudness estimate (RMS, smoothed) — drives the push-to-talk
+     *  waveform. Resets to 0 when not recording. */
+    private val _amplitude = MutableStateFlow(0f)
+    val amplitude: StateFlow<Float> = _amplitude
 
     val isRecording: Boolean get() = recording
 
@@ -45,14 +54,33 @@ class VoiceRecorder {
         )
         check(rec.state == AudioRecord.STATE_INITIALIZED) { "Microphone unavailable." }
         pcm.reset()
+        _amplitude.value = 0f
         record = rec
         recording = true
         rec.startRecording()
         Thread {
             val chunk = ByteArray(bufferSize)
+            var smoothed = 0f
             while (recording) {
                 val n = rec.read(chunk, 0, chunk.size)
-                if (n > 0) synchronized(pcm) { pcm.write(chunk, 0, n) }
+                if (n > 0) {
+                    synchronized(pcm) { pcm.write(chunk, 0, n) }
+                    // RMS of the 16-bit LE samples, normalised and smoothed
+                    // (fast attack, slow release) so the meter is lively but
+                    // not jittery.
+                    var sum = 0.0
+                    var i = 0
+                    while (i + 1 < n) {
+                        val s = (chunk[i].toInt() and 0xff) or (chunk[i + 1].toInt() shl 8)
+                        val f = s / 32768.0
+                        sum += f * f
+                        i += 2
+                    }
+                    val rms = sqrt(sum / (n / 2)).toFloat()
+                    smoothed = if (rms > smoothed) rms * 0.6f + smoothed * 0.4f
+                               else rms * 0.2f + smoothed * 0.8f
+                    _amplitude.value = min(1f, smoothed * 6f)
+                }
             }
         }.also { it.isDaemon = true }.start()
     }
@@ -61,6 +89,7 @@ class VoiceRecorder {
     suspend fun stop(): ByteArray = withContext(Dispatchers.IO) {
         if (!recording) return@withContext ByteArray(0)
         recording = false
+        _amplitude.value = 0f
         record?.run {
             runCatching { stop() }
             release()
@@ -75,6 +104,7 @@ class VoiceRecorder {
     /** Abandon the recording and free the mic. */
     fun cancel() {
         recording = false
+        _amplitude.value = 0f
         record?.run {
             runCatching { stop() }
             release()

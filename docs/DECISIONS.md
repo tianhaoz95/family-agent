@@ -574,6 +574,46 @@ This is a **third in-process inference path** with the exact shape of OCR
   reply. `FAMILY_AGENT_TTS=0` disables the whole feature (routes 403,
   `/health.ttsEnabled` false, both clients hide the button + toggle).
 
+## Push-to-talk: the mic button gains a press-and-hold gesture
+
+**Requested:** long-press the mic in Chat or a channel → a full-screen "listening"
+overlay with an animated waveform; on release, transcribe **and send** with no
+separate Send press; and since the user chose voice, **speak the reply back**.
+
+- **One button, two gestures, no new controls.** A quick **tap** keeps the
+  original dictation behaviour (transcript into the composer for review, never
+  sent). A **press-and-hold** (≥ ~320 ms) is push-to-talk. Same discoverability
+  as WhatsApp / Telegram voice notes; nothing new to learn for people who only
+  want dictation.
+- **Slide-away-to-cancel**, not a separate cancel button. Dragging the
+  pointer/finger off the button past a threshold arms cancel (the overlay turns
+  red, "Release to cancel"); releasing there discards the clip without
+  transcribing. Esc also cancels on desktop. Accidental long-presses are common,
+  so a silent escape hatch matters.
+- **~320 ms of leading audio is deliberately dropped on Android** (recording
+  starts only when the hold promotes, not on touch-down) to keep the tap path
+  and the hold path from both owning the recorder. People pause after pressing
+  before speaking, so it isn't felt. Desktop starts recording on pointer-down
+  (its `AudioContext` opens fast enough) and just discards it if the press turns
+  out to be a tap.
+- **Voice-in → voice-out overrides the auto-read setting**, but only for that
+  one turn. A PTT send always speaks the reply; a typed send still respects the
+  toggle. In a **family channel** the reply arrives via the poll loop, so a
+  timestamped one-shot flag (`maybeSpeakAgentReply` / `maybeSpeakChannelReply`,
+  240 s window, keyed to the message id it already spoke) picks it up — a plain
+  voice message to family members with no `@agent` simply has nothing to speak,
+  which is correct.
+- **Desktop uses raw Pointer Events, not `click`.** `setPointerCapture` keeps
+  move/up events flowing to the mic while the finger roams over the overlay;
+  keyboard activation (`detail === 0`) still maps to the tap toggle for a11y.
+- **Android renders the overlay inline, not in a `Popup`/`Dialog`.** A separate
+  window sends the host an `ACTION_CANCEL` the moment it appears, which killed
+  the in-flight `awaitEachGesture` mid-hold (found in emulator testing). A plain
+  `Box(fillMaxSize())` sibling with no pointer modifiers draws over everything
+  and leaves the gesture stream untouched. The waveform is driven by a real RMS
+  meter on `VoiceRecorder` (`amplitude: StateFlow<Float>`), frozen to a static
+  bar row when the OS animation scale is 0 (same rule as `Atmosphere.kt`).
+
 ## Document & task search: SQLite FTS5, not an external search engine
 
 **Context.** Until now both subagents "searched" by enumerating everything —

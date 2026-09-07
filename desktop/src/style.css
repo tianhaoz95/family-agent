@@ -962,6 +962,79 @@ textarea {
   cursor: default;
 }
 
+/* Mic button being held for push-to-talk — same danger fill as .is-recording
+   but a steady ring (the overlay carries the motion). */
+.chat-attach-btn.is-holding,
+.chat-attach-btn.is-holding:hover {
+  color: var(--accent-contrast);
+  background: var(--danger);
+}
+
+/* ---- Push-to-talk full-screen overlay ---- */
+.voice-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  backdrop-filter: blur(18px) saturate(1.1);
+  animation: voice-overlay-in 0.18s var(--ease);
+}
+.voice-overlay.is-cancel .voice-overlay-inner {
+  color: var(--danger);
+}
+@keyframes voice-overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+.voice-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 40px 56px;
+}
+.voice-wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 96px;
+}
+.voice-wave .bar {
+  width: 6px;
+  min-height: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: height 0.09s linear, background-color 0.15s var(--ease);
+}
+.voice-overlay.is-cancel .voice-wave .bar {
+  background: var(--danger);
+}
+.voice-overlay-label {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.voice-overlay.is-cancel .voice-overlay-label {
+  color: var(--danger);
+}
+.voice-overlay-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-wave .bar {
+    transition: none;
+  }
+}
+
 /* Expand / collapse toggle — only shown when the input has more than 3 lines
    of content (main.ts). Swap the icon on aria-pressed. */
 .chat-expand-btn .icon-collapse {

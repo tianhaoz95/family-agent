@@ -266,6 +266,22 @@ Later changes (not part of the original autonomous session):
   default, private Chat only. `FAMILY_AGENT_TTS=0` disables it (routes 403,
   `/health.ttsEnabled` false, clients hide the button + toggle). Verified
   end-to-end on both clients.
+- **Push-to-talk voice mode**: the mic button in Chat *and* the family-channel
+  composer (both clients) gains a **press-and-hold** gesture alongside the
+  existing quick-tap dictation. Holding shows a full-screen "listening" overlay
+  with a live mic-driven waveform; releasing transcribes **and sends** in one
+  motion, then **speaks the reply back** (voice in → voice out, overriding the
+  auto-read setting for that turn only). Sliding off the button before releasing
+  cancels (overlay turns red, "Release to cancel"; Esc also cancels on desktop).
+  Desktop: raw Pointer Events in `wireMic` (`main.ts`), `#voice-overlay`,
+  `startRecording(onLevel)` in `audio.ts`. Android: `HoldToTalkMic` +
+  `VoiceOverlay` (`ui/VoiceOverlay.kt`, Compose `awaitEachGesture`, rendered
+  inline not in a `Popup` so it can't cancel the in-flight gesture),
+  `VoiceRecorder.amplitude`, `AppViewModel.sendChatVoice` / `sendChannelVoice`.
+  Also adds a mic button to the Android Conversation screen, which had none.
+  Verified: desktop end-to-end (mocked audio — overlay, slide-cancel, quick-tap,
+  auto-send, auto-speak); Android on the emulator (overlay, slide-to-cancel,
+  permission flow, graceful empty-speech handling).
 - **Builder tools shipped** (the §03 "sandboxed scratch-tool builder" that the
   original session deferred). The planner has a third subagent, `builder-agent`;
   "build me a…" in chat, or the Tools tab, generates a small self-contained web
