@@ -33,14 +33,18 @@ only**) with a Gemini-inspired **atmosphere layer** on top: an animated gradient
 view/bubble transitions — all frozen under `prefers-reduced-motion`. It's one appended block at
 the end of `desktop/src/style.css` plus the `:root` token edits. Tokens live in
 `desktop/src/style.css` `:root`. See `DESIGN.md` → "Desktop atmosphere layer" and
-`docs/DECISIONS.md`. Android keeps the flat paper treatment.
+`docs/DECISIONS.md`.
 
-The **Android** app follows its own `android/DESIGN.md` (the "Playful Color Mobile Design
-System": `#6366F1` indigo / `#F472B6` pink / `#22D3EE` cyan, soft-shadow rounded cards, Nunito,
-**light + dark**). Its tokens live in `android/.../ui/theme/Theme.kt` (`AppAccents`, the two
-`ColorScheme`s, typography, shapes) and `android/app/src/main/res/values{,-night}/colors.xml`.
-The two design systems are deliberately independent — there is no shared token file, and a
-desktop change does **not** imply an Android change (or vice versa).
+The **Android** app **converged onto the same look** (as of 2026-09-07 — it previously had a
+standalone "Playful Color" indigo/pink/cyan system, now retired). Same warm `#f6f5f4` canvas,
+single `#0075de` blue accent, Inter (+ Source Serif for subtitles), floating cards, an animated
+gradient canvas (`ui/Atmosphere.kt` — the counterpart of `body::before`), glass top bar +
+drawer, springy `NavHost` transitions. **Light only now** — no dark mode, no `values-night/`.
+Tokens live in `android/.../ui/theme/Theme.kt` (`LightColors`, `AppAccents`, `AppTypography`,
+`AppShapes`) and `android/app/src/main/res/values/colors.xml`. It's still a hand-maintained
+mirror — a token change on one platform is a deliberate, separate change on the other, not
+automatic. See `android/DESIGN.md` and `docs/DECISIONS.md` → "Converging Android onto the
+desktop style".
 
 ## Prerequisites
 

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Window background shown for the split-second before Compose draws.
-         Matches the DESIGN.md Background token per mode so there's no flash. -->
-    <color name="window_background">#FFFFFFFF</color>
+         The warm paper canvas (#f6f5f4) from the root DESIGN.md — light only,
+         so there's no -night variant. -->
+    <color name="window_background">#FFF6F5F4</color>
 </resources>

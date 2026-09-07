@@ -32,10 +32,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.ui.theme.AppAccents
+import app.familyagent.android.ui.theme.SourceSerif
 
 /**
- * Standard screen frame: safe-area padding, a big friendly title and a muted
- * subtitle, then section content with generous spacing (DESIGN.md §5, §3).
+ * Standard screen frame: safe-area padding, a title and an editorial serif
+ * subtitle, then section content with generous spacing. Transparent — the
+ * animated gradient canvas (AtmosphereBackground) shows through.
  */
 @Composable
 fun ScreenScaffold(
@@ -47,7 +49,6 @@ fun ScreenScaffold(
     Column(
         modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
             .padding(horizontal = 20.dp)
             .padding(top = 16.dp, bottom = 8.dp),
     ) {
@@ -59,8 +60,8 @@ fun ScreenScaffold(
         Spacer(Modifier.height(6.dp))
         Text(
             subtitle,
-            style = MaterialTheme.typography.bodyLarge,
-            color = AppAccents.textSecondary,
+            style = MaterialTheme.typography.bodyLarge.copy(fontFamily = SourceSerif),
+            color = AppAccents.textBody,
         )
         Spacer(Modifier.height(22.dp))
         content()
@@ -96,10 +97,10 @@ fun AppCard(
             .fillMaxWidth()
             .scale(scale)
             .then(clickModifier),
-        shape = MaterialTheme.shapes.large,
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = 3.dp,
+        shadowElevation = 4.dp,
     ) {
         Column {
             if (accent != null) {
@@ -166,19 +167,19 @@ fun EmptyState(
     }
 }
 
-/** Three bouncing dots in the accent hues — the "assistant is thinking" cue. */
+/** Three bouncing dots — the "assistant is thinking" cue. Muted, like the
+ *  desktop typing indicator. */
 @Composable
 fun TypingDots(modifier: Modifier = Modifier) {
     val transition = rememberInfiniteTransition(label = "typing")
-    val hues = listOf(
-        MaterialTheme.colorScheme.primary,
-        AppAccents.pink,
-        AppAccents.cyan,
-    )
+    val dot = AppAccents.textSecondary
+    val hues = listOf(dot, dot, dot)
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 4.dp,
     ) {
         Row(
             Modifier.padding(horizontal = 18.dp, vertical = 15.dp),

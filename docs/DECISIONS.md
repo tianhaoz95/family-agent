@@ -1751,3 +1751,49 @@ button — Gemini/VS-Code style.
 - Reduced motion: the existing global rule zeroes the width/transform/padding
   transitions, so state changes snap instead of slide; the layout is correct
   either way.
+
+## Converging Android onto the desktop style
+
+The Android app had its own "Playful Color Mobile Design System" (indigo/pink/
+cyan, Nunito, light + dark), deliberately independent from the desktop's warm
+paper. After the desktop got its Gemini-inspired atmosphere layer the owner
+asked to "match the Android app to the new overall style" and chose full
+convergence (not just porting the effects onto the Playful palette).
+
+**What changed:**
+- `Theme.kt` rewritten: `Pal` and `LightColors` mirror `desktop/src/style.css`
+  `:root` — `#f6f5f4` canvas, `#ffffff` surface, `#0075de` accent, `#e6f3fe`
+  accent-soft, black-alpha text hierarchy, `rgba(0,0,0,0.08)` border. Inter
+  replaces Nunito (`res/font/inter_variable.ttf`, already bundled); Source Serif
+  4 for `ScreenScaffold` subtitles only (the `.view-sub` editorial voice).
+  `AppShapes` bumped to 12/16/20/26. Typography matches the desktop feel
+  (Inter, tight tracking on display sizes, 14–15 body at 1.5 line-height).
+- **Dark mode dropped.** `FamilyAgentTheme` always uses `LightColors`; the dark
+  palette, `DarkColors`, `isSystemInDarkTheme()` and `values-night/colors.xml`
+  are gone. The desktop is emphatically light-only and the point was to match.
+- `AppAccents` kept as a compatibility shim (43 call sites, mostly
+  `.textSecondary`) — remapped to desktop values, `@Composable get()` →
+  plain `val` since nothing branches on theme any more. `.pink`/`.cyan` alias
+  to the desktop accent cast (coral / sky-wash).
+- **`ui/Atmosphere.kt`** — `AtmosphereBackground`, the Compose counterpart of
+  the desktop `body::before/::after`: four drifting radial blooms (34 s
+  `rememberInfiniteTransition`, sine-wave centres) over the paper base, frozen
+  when the OS `ANIMATOR_DURATION_SCALE` is 0. Wraps the whole app in
+  `MainActivity` (around the auth `when`, so login/discovery get it too).
+- Glass chrome: `AppTopBar` + `ModalDrawerSheet` use `surface.copy(alpha=...)`
+  — no real backdrop blur (Compose can't do it cheaply pre-12), but the
+  gradient shows through. `Scaffold` container + `ScreenScaffold` +
+  conversation screen made transparent so the wash reaches the content.
+- Floating: `AppCard` keeps its shadow; the Board panel and both chat composers
+  gained shadow + hairline border + white fill (were `surfaceVariant`).
+- Springy `NavHost` enter/exit transitions (small horizontal slide + fade).
+- Active drawer item: `accent-soft` background + `accent` text/icon (was a
+  filled indigo pill).
+
+`res/font/nunito_variable.ttf` is left in place (unreferenced) in case the
+Playful direction is ever revisited.
+
+Verified on the emulator: login, Chat, Messages, drawer, Board, Events (Month),
+Settings — all show the warm canvas + animated gradient + glass + floating
+cards, consistent with the desktop. `compileDebugKotlin` +
+`testDebugUnitTest` + `assembleDebug` green.

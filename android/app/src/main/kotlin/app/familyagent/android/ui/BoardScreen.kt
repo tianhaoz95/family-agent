@@ -1,5 +1,6 @@
 package app.familyagent.android.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -96,12 +97,18 @@ fun BoardScreen(
 
         Spacer(Modifier.height(12.dp))
 
+        Surface(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 4.dp,
+        ) {
         Box(
             Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFFEFE7D6))
+                .fillMaxSize()
                 .cork()
                 .onSizeChanged { boardSize = it },
         ) {
@@ -109,7 +116,7 @@ fun BoardScreen(
                 Text(
                     "Nothing pinned up yet. Tap \"Add note\".",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0x800F172A),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
                 )
             }
@@ -125,6 +132,7 @@ fun BoardScreen(
                     )
                 }
             }
+        }
         }
     }
 
@@ -156,7 +164,7 @@ private fun Modifier.cork(): Modifier = drawBehind {
     while (y < size.height) {
         var x = step / 2
         while (x < size.width) {
-            drawCircle(Color(0x24785836), radius = dot, center = Offset(x, y))
+            drawCircle(Color(0x0F000000), radius = dot, center = Offset(x, y))
             x += step
         }
         y += step

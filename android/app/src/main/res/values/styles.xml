@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Non-DayNight parent (android:Theme.Material.DayNight needs API 29;
-         minSdk is 26). The window background is a day/night color resource,
-         so it still tracks the system theme on every API level. -->
+    <!-- Light only, matching the desktop app — the "Notion warm paper" system
+         has no dark mode. Warm #f6f5f4 window background so there's no flash
+         before Compose draws. -->
     <style name="Theme.FamilyAgent" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/window_background</item>
     </style>

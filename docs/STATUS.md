@@ -723,3 +723,15 @@ Later changes (not part of the original autonomous session):
     `padding-left: var(--rail-space)`. `setRailState()` in `main.ts` persists to
     `localStorage`. Verified in-browser: all three states, cycling, and reload
     persistence.
+  - **Follow-up — Android converged onto the desktop look.** The Android app's
+    standalone "Playful Color" system (indigo/pink/cyan, Nunito, light + dark)
+    is retired. `Theme.kt` rewritten to mirror the desktop tokens (`#f6f5f4`
+    canvas, `#0075de` accent, Inter + Source Serif, shapes 12/16/20/26);
+    **dark mode dropped** (light only, no `values-night/`); `ui/Atmosphere.kt`
+    adds the animated gradient canvas (the Compose counterpart of
+    `body::before`); glass top bar + drawer; springy `NavHost` transitions;
+    floating Board panel + chat composers; active drawer item → `accent-soft`.
+    `AppAccents` kept as a compat shim (remapped). Verified on the emulator
+    across login, Chat, Messages, drawer, Board, Events, Settings —
+    `compileDebugKotlin` + `testDebugUnitTest` + `assembleDebug` green.
+    `android/DESIGN.md` rewritten; `CLAUDE.md` / `docs/DECISIONS.md` updated.

@@ -4,6 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -54,6 +59,7 @@ import app.familyagent.android.data.FamilyAgentApi
 import app.familyagent.android.data.ServerDiscovery
 import app.familyagent.android.data.SettingsStore
 import app.familyagent.android.ui.ActivityScreen
+import app.familyagent.android.ui.AtmosphereBackground
 import app.familyagent.android.ui.BoardScreen
 import app.familyagent.android.ui.ChatScreen
 import app.familyagent.android.ui.ChatSessionsScreen
@@ -106,21 +112,25 @@ class MainActivity : ComponentActivity() {
                     factory = AppViewModelFactory(FamilyAgentApi(""), settingsStore),
                 )
                 val state by viewModel.state.collectAsState()
-                when (val auth = state.auth) {
-                    is AuthState.Unknown -> Surface(Modifier.fillMaxSize()) {}
-                    is AuthState.PickServer ->
-                        DiscoveryScreen(
-                            discovery = discovery,
-                            onPick = viewModel::pickServer,
-                        )
-                    is AuthState.NeedLogin ->
-                        LoginScreen(
-                            serverName = auth.serverName,
-                            error = auth.error,
-                            onSignIn = viewModel::login,
-                            onBack = viewModel::backToServerPick,
-                        )
-                    is AuthState.Authenticated -> FamilyAgentApp(viewModel)
+                // The animated gradient canvas sits behind every screen — the
+                // Android counterpart of the desktop's body::before bloom layers.
+                AtmosphereBackground {
+                    when (val auth = state.auth) {
+                        is AuthState.Unknown -> Box(Modifier.fillMaxSize())
+                        is AuthState.PickServer ->
+                            DiscoveryScreen(
+                                discovery = discovery,
+                                onPick = viewModel::pickServer,
+                            )
+                        is AuthState.NeedLogin ->
+                            LoginScreen(
+                                serverName = auth.serverName,
+                                error = auth.error,
+                                onSignIn = viewModel::login,
+                                onBack = viewModel::backToServerPick,
+                            )
+                        is AuthState.Authenticated -> FamilyAgentApp(viewModel)
+                    }
                 }
             }
         }
@@ -196,7 +206,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
         },
     ) {
         Scaffold(
-            containerColor = MaterialTheme.colorScheme.background,
+            containerColor = Color.Transparent,
             topBar = {
                 if (!onToolView) {
                     AppTopBar(onMenuClick = { scope.launch { drawerState.open() } })
@@ -207,6 +217,16 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                 navController = navController,
                 startDestination = Destination.Chat.route,
                 modifier = Modifier.padding(padding),
+                enterTransition = {
+                    slideInHorizontally(tween(280)) { it / 12 } + fadeIn(tween(220))
+                },
+                exitTransition = { fadeOut(tween(140)) },
+                popEnterTransition = {
+                    slideInHorizontally(tween(280)) { -it / 12 } + fadeIn(tween(220))
+                },
+                popExitTransition = {
+                    slideOutHorizontally(tween(200)) { it / 10 } + fadeOut(tween(160))
+                },
             ) {
                 composable(Destination.Chat.route) {
                     ChatScreen(
@@ -401,13 +421,12 @@ private fun BrandMark(size: Int = 30) {
 }
 
 /**
- * Top chrome: the menu toggle, the brand mark and wordmark. Sits on the page
- * canvas with a hairline divider under it (DESIGN.md §7 — a colored header is
- * allowed; this one stays calm so the content leads).
+ * Top chrome: the menu toggle, the brand mark and wordmark. Translucent glass
+ * over the animated canvas, with a hairline divider under it.
  */
 @Composable
 private fun AppTopBar(onMenuClick: () -> Unit) {
-    Column(Modifier.background(MaterialTheme.colorScheme.background)) {
+    Column(Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f))) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -417,7 +436,7 @@ private fun AppTopBar(onMenuClick: () -> Unit) {
         ) {
             FilledIconButton(
                 onClick = onMenuClick,
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(13.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -454,8 +473,8 @@ private fun AppDrawer(
     onSelect: (Destination) -> Unit,
 ) {
     ModalDrawerSheet(
-        drawerContainerColor = MaterialTheme.colorScheme.background,
-        drawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
+        drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+        drawerShape = RoundedCornerShape(topEnd = 26.dp, bottomEnd = 26.dp),
         modifier = Modifier.fillMaxWidth(0.84f),
     ) {
         Column(
@@ -497,16 +516,16 @@ private fun AppDrawer(
                     icon = { Icon(dest.icon, contentDescription = null, modifier = Modifier.size(22.dp)) },
                     selected = selected,
                     onClick = { onSelect(dest) },
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(14.dp),
                     colors = NavigationDrawerItemDefaults.colors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                         unselectedContainerColor = Color.Transparent,
-                        selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                        selectedIconColor = MaterialTheme.colorScheme.primary,
                         unselectedIconColor = AppAccents.textSecondary,
-                        selectedTextColor = MaterialTheme.colorScheme.onPrimary,
+                        selectedTextColor = MaterialTheme.colorScheme.primary,
                         unselectedTextColor = MaterialTheme.colorScheme.onBackground,
                     ),
-                    modifier = Modifier.padding(vertical = 3.dp),
+                    modifier = Modifier.padding(vertical = 2.dp),
                 )
             }
 
