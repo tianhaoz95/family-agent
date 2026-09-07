@@ -1227,6 +1227,7 @@ summary:focus-visible {
 
 .inline-form input[type="text"],
 .inline-form input[type="url"],
+.inline-form input[type="password"],
 .inline-form input[type="date"],
 .inline-form textarea,
 .inline-form select,
@@ -1255,6 +1256,7 @@ summary:focus-visible {
 
 .inline-form input[type="text"],
 .inline-form input[type="url"],
+.inline-form input[type="password"],
 .inline-form select {
   flex: 1;
 }
