@@ -625,3 +625,38 @@ Later changes (not part of the original autonomous session):
     26 API tests + APK. Live (`gemma4:e2b`): `/calc split a $128.40 bill 4 ways
     with 20% tip` → "$38.52"; the plain planner picked `run_code` unprompted for
     "days between today and 2026-12-25" → 109.
+- **Desktop composer polish + Messages parity.**
+  - **Chat input**: the placeholder is a single line again ("Ask anything, or
+    type / for a command"); the textarea starts one line and auto-grows to
+    **three**, then holds that height and scrolls; an **expand button** appears
+    once there's more than three lines and toggles a ~48vh view. Shared helper
+    `wireAutoGrow` in `main.ts` (`.chat-form textarea { max-height: calc(1.5em*3
+    + 14px) }`, `.chat-form.is-expanded` bumps it). The Send/Stop buttons no
+    longer stretch to the full composer height.
+  - **Slash-command chip**: once a "/command" is chosen from the "/" menu
+    (or you type "/name " with a trailing space) it becomes a small pill
+    (`.composer-chip`) at the start of the composer, so the command and the
+    message text read as two separate things. The textarea then holds only the
+    message; Backspace at the very start removes the whole chip (never a
+    partial "/comman"). On send the wire form is rebuilt as `/cmd text`. Same
+    in Chat and Messages via the shared `wireSlashMenu` helper.
+  - **Board**: the corkboard surface is now **white** (`var(--surface)`) with a
+    faint neutral dot grid, instead of the warm cream — matches the
+    white-hairline-card design system.
+  - **Messages composer** now has the SAME plumbing as Chat: voice input (mic
+    button, gated on `/health.asrEnabled`), `/` command autocomplete
+    (`#message-slash-menu`), the one→three-line auto-grow + expand button, and a
+    `?` slash-help button in the conversation head. All via the shared
+    `wireMic` / `wireSlashMenu` / `wireAutoGrow` helpers.
+  - **Server**: `POST /channels/:id/messages` now invokes the assistant on a
+    leading `/` command too (not only `@agent`), routing to the matching
+    specialist via the shared `runForcedAgentTurn()` — so the agent works the
+    same in a 1:1 chat or `@`-mentioned in a conversation. The user's own
+    message keeps the `/` (honest transcript).
+  - Verified: agent-core fast suite 346 pass / 1 skip (+3 route tests: `/`
+    command in a channel invokes the assistant; a plain message does not);
+    desktop typecheck + build + 35 tests. **Live**: chat input 1→3-line cap +
+    scroll + expand toggle (measured via DOM); the board renders white; the
+    Messages composer shows the mic + `/` autocomplete, and `/calc 15% of 80`
+    sent in a DM got an "Assistant: 15% of 80 is 12." reply with a
+    `compute.run` activity line (the calc specialist, not the planner).

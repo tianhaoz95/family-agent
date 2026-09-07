@@ -173,11 +173,18 @@
                 <button type="button" id="chat-mic-btn" class="chat-attach-btn" title="Voice input" aria-label="Record a voice message" aria-pressed="false" hidden>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
                 </button>
-                <textarea
-                  id="chat-input"
-                  placeholder="Ask a question, attach a photo, or type / to use a tool"
-                  rows="1"
-                ></textarea>
+                <button type="button" id="chat-expand-btn" class="chat-attach-btn chat-expand-btn" title="Expand the input" aria-label="Expand the input" aria-pressed="false" hidden>
+                  <svg class="icon-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                  <svg class="icon-collapse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+                </button>
+                <div class="composer-field">
+                  <span id="chat-slash-chip" class="composer-chip" hidden></span>
+                  <textarea
+                    id="chat-input"
+                    placeholder="Ask anything, or type / for a command"
+                    rows="1"
+                  ></textarea>
+                </div>
                 <button type="submit" id="chat-send-btn">Send</button>
                 <button type="button" id="chat-stop-btn" class="chat-stop-btn" title="Stop generating" hidden>
                   <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
@@ -263,19 +270,34 @@
                     <h2 id="conversation-title"></h2>
                     <span id="conversation-members" class="view-sub"></span>
                   </div>
+                  <button type="button" id="message-help-btn" class="btn-ghost btn-icon-only" title="Slash commands">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4.9.8c0 1.7-2.4 1.7-2.4 3.5"/><line x1="12" y1="17" x2="12" y2="17.01"/></svg>
+                    <span class="sr-only">Slash commands</span>
+                  </button>
                   <button type="button" id="conversation-delete" class="btn-ghost conversation-delete" title="Delete this conversation for everyone">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                     <span>Delete</span>
                   </button>
                 </div>
                 <div id="message-log" class="message-log" role="log" aria-live="polite"></div>
+                <ul id="message-slash-menu" class="slash-menu" hidden></ul>
                 <div id="message-attachments" class="chat-attachments" hidden></div>
                 <form id="message-form" class="chat-form">
                   <input id="message-image-input" type="file" accept="image/*" multiple hidden />
                   <button type="button" id="message-attach-btn" class="chat-attach-btn" title="Attach image" aria-label="Attach image">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
                   </button>
-                  <textarea id="message-input" placeholder="Message… (@agent to ask the assistant)" rows="1"></textarea>
+                  <button type="button" id="message-mic-btn" class="chat-attach-btn" title="Voice input" aria-label="Record a voice message" aria-pressed="false" hidden>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+                  </button>
+                  <button type="button" id="message-expand-btn" class="chat-attach-btn chat-expand-btn" title="Expand the input" aria-label="Expand the input" aria-pressed="false" hidden>
+                    <svg class="icon-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                    <svg class="icon-collapse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+                  </button>
+                  <div class="composer-field">
+                    <span id="message-slash-chip" class="composer-chip" hidden></span>
+                    <textarea id="message-input" placeholder="Message… (@agent or / for a command)" rows="1"></textarea>
+                  </div>
                   <button type="submit" id="message-send-btn">Send</button>
                 </form>
               </div>

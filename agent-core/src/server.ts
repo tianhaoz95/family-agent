@@ -493,6 +493,55 @@ export function buildServer(
     return askFamilyAgent(agent, instruction);
   };
 
+  // ---- forced "/" agent turns (shared by 1:1 chat and family channels) ----
+  // A leading "/" skips the planner's own (unreliable, on a small model)
+  // delegation decision and runs one specialist directly. Used by POST /chat
+  // and POST /channels/:id/messages so the assistant behaves the same whether
+  // you talk to it privately or @-mention it in a conversation.
+  const forcedAgentFor: Record<ForcedAgentKind, (userId: string) => InvokableAgent> = {
+    tools: toolsAgentFor,
+    task: taskAgentFor,
+    document: documentAgentFor,
+    builder: builderAgentFor,
+    notes: notesAgentFor,
+    routine: routineAgentFor,
+    research: researchAgentFor,
+    workshop: workshopAgentFor,
+    calc: calcAgentFor,
+  };
+  const forcedFallback: Record<ForcedAgentKind, string> = {
+    tools: "What can you do?",
+    task: "List my tasks.",
+    document: "What documents do I have?",
+    builder: "What tools do we have, and what can be built?",
+    notes: "What's on the sticky notes?",
+    routine: "List my scheduled routines.",
+    research: "What can you look up for me?",
+    workshop: "What files can you help me process?",
+    calc: "What can you calculate for me?",
+  };
+  const forcedKindOffReason = (kind: ForcedAgentKind): string | null => {
+    if (kind === "tools" && !config.toolsEnabled) return "Tools aren't turned on for this server.";
+    if (kind === "research" && !webEnabled()) return "Web access isn't turned on for this server.";
+    if (kind === "workshop" && !shellReady) return "File processing isn't turned on for this server.";
+    if (kind === "calc" && !config.computeEnabled) return "The calculator is turned off on this server.";
+    return null;
+  };
+
+  /** Run a "/" forced command. `message` is the raw text (already known to
+   *  start with "/"); returns the assistant's reply. */
+  const runForcedAgentTurn = async (
+    userId: string,
+    forced: { kind: ForcedAgentKind; text: string },
+    images: string[],
+    history: { role: "user" | "assistant"; content: string }[]
+  ): Promise<string> => {
+    const off = forcedKindOffReason(forced.kind);
+    if (off) return off;
+    const agent = forcedAgentFor[forced.kind](userId);
+    return askFamilyAgent(agent, forced.text || forcedFallback[forced.kind], images, history);
+  };
+
   const routineScheduler = new RoutineScheduler(store, {
     runAction: runRoutineAction,
     tickMs: config.routineTickMs,
@@ -758,46 +807,10 @@ export function buildServer(
       // A leading "/" (typed by hand, or via the client's command/tool
       // autocomplete) skips the planner's own delegation decision — unreliable
       // on a small model — and runs one specialist agent directly.
-      let responseText: string;
       const forced = parseForcedAgentCommand(message);
-      if (forced) {
-        const offByKind: Partial<Record<ForcedAgentKind, string>> = {
-          tools: config.toolsEnabled ? "" : "Tools aren't turned on for this server.",
-          research: webEnabled() ? "" : "Web access isn't turned on for this server.",
-          workshop: shellReady ? "" : "File processing isn't turned on for this server.",
-          calc: config.computeEnabled ? "" : "The calculator is turned off on this server.",
-        };
-        if (offByKind[forced.kind]) {
-          responseText = offByKind[forced.kind]!;
-        } else {
-          const agentByKind: Record<ForcedAgentKind, (userId: string) => InvokableAgent> = {
-            tools: toolsAgentFor,
-            task: taskAgentFor,
-            document: documentAgentFor,
-            builder: builderAgentFor,
-            notes: notesAgentFor,
-            routine: routineAgentFor,
-            research: researchAgentFor,
-            workshop: workshopAgentFor,
-            calc: calcAgentFor,
-          };
-          const fallbackByKind: Record<ForcedAgentKind, string> = {
-            tools: "What can you do?",
-            task: "List my tasks.",
-            document: "What documents do I have?",
-            builder: "What tools do we have, and what can be built?",
-            notes: "What's on the sticky notes?",
-            routine: "List my scheduled routines.",
-            research: "What can you look up for me?",
-            workshop: "What files can you help me process?",
-            calc: "What can you calculate for me?",
-          };
-          const agent = agentByKind[forced.kind](req.authUser.id);
-          responseText = await askFamilyAgent(agent, forced.text || fallbackByKind[forced.kind], images, history);
-        }
-      } else {
-        responseText = await askFamilyAgent(agentFor(req.authUser.id), message, images, history);
-      }
+      const responseText = forced
+        ? await runForcedAgentTurn(req.authUser.id, forced, images, history)
+        : await askFamilyAgent(agentFor(req.authUser.id), message, images, history);
       const references = resolveReferences(req.userStore, req.authUser.id);
       req.userStore.addChatMessage(session.id, "assistant", responseText, [], references);
       req.userStore.logActivity("family-planner", "chat.reply", responseText);
@@ -1178,21 +1191,30 @@ export function buildServer(
     const message = store.postMessage(id, req.authUser.id, body, images);
     req.userStore.logActivity("user", "chat.message", `${req.authUser.displayName} in a family chat: ${body}`);
 
-    if (parsed.data.mentionAgent || mentionsAgent(body)) {
+    // The assistant chimes in on an @agent mention OR a leading "/" command —
+    // same triggers as the 1:1 chat, so it behaves the same wherever you talk
+    // to it. A "/" command runs one specialist directly (no planner routing).
+    const forced = parseForcedAgentCommand(body);
+    if (parsed.data.mentionAgent || mentionsAgent(body) || forced) {
       const pending = store.insertPendingAgentMessage(id);
       // Fire-and-forget: the client polls for the pending row to fill in.
       void (async () => {
         try {
-          const recent = store.listMessages(id, req.authUser.id, { limit: 20 });
-          const nameFor = (senderId: string) =>
-            senderId === AGENT_SENDER_ID
-              ? "Assistant"
-              : store.getUser(senderId)?.displayName ?? "Someone";
-          const transcript = recent
-            .filter((m) => !m.pending)
-            .map((m) => `${nameFor(m.senderId)}: ${m.body}`)
-            .join("\n");
-          const replyText = await askFamilyAgentInChannel(agentFor(req.authUser.id), transcript, body, images);
+          let replyText: string;
+          if (forced) {
+            replyText = await runForcedAgentTurn(req.authUser.id, forced, images, []);
+          } else {
+            const recent = store.listMessages(id, req.authUser.id, { limit: 20 });
+            const nameFor = (senderId: string) =>
+              senderId === AGENT_SENDER_ID
+                ? "Assistant"
+                : store.getUser(senderId)?.displayName ?? "Someone";
+            const transcript = recent
+              .filter((m) => !m.pending)
+              .map((m) => `${nameFor(m.senderId)}: ${m.body}`)
+              .join("\n");
+            replyText = await askFamilyAgentInChannel(agentFor(req.authUser.id), transcript, body, images);
+          }
           store.resolvePendingAgentMessage(pending.id, replyText);
           store.scoped(req.authUser.id).logActivity("family-planner", "chat.reply", replyText);
         } catch (err) {

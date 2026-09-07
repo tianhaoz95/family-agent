@@ -131,6 +131,7 @@ async function refreshStatus() {
     if (health.toolsEnabled) toolsEnabled = health.toolsEnabled;
     voiceEnabled = health.asrEnabled === true;
     chatMicBtn.hidden = !voiceEnabled;
+    messageMicBtn.hidden = !voiceEnabled;
     semanticSearchOff = health.semanticSearch === "off";
     routinesEnabled = health.routinesEnabled !== false;
     navRoutines.hidden = !routinesEnabled;
@@ -196,8 +197,6 @@ const SLASH_COMMANDS: SlashEntry[] = [
 // static (display-only) tool has no operations to call via the tools API at
 // all (see familyToolCatalog server-side), so it would be a dead end here.
 let slashTools: Tool[] = [];
-let slashMatches: SlashEntry[] = [];
-let slashHighlight = -1;
 
 // The empty-state block, kept so "New chat" can put it back after it's removed.
 const chatEmptyEl = document.getElementById("chat-empty")!;
@@ -390,51 +389,285 @@ chatImageInput.addEventListener("change", () => {
 });
 wireImagePasteAndDrop(chatTray, chatInput, chatLog);
 
-// ---------- voice input ----------
+// ---------- composer plumbing (shared by Chat and Messages) ----------
+// The chat and the family-chat composers behave the same: a textarea that
+// starts one line and grows to three (then scrolls, with an expand button for
+// a bigger view), a "/" command autocomplete, voice input, and image attach.
+// Only how the message is delivered differs.
+
+// -- voice --
 // Tap once to start recording, tap again to stop; the transcript is dropped
 // into the input for the user to review and send (never auto-sent).
-let activeRecording: Recording | null = null;
-
-function setMicRecording(on: boolean) {
-  chatMicBtn.classList.toggle("is-recording", on);
-  chatMicBtn.setAttribute("aria-pressed", String(on));
-  chatMicBtn.title = on ? "Stop recording" : "Voice input";
+function wireMic(
+  micBtn: HTMLButtonElement,
+  target: HTMLTextAreaElement,
+  report: (msg: string) => void,
+  afterInsert: () => void
+) {
+  let recording: Recording | null = null;
+  const setRecording = (on: boolean) => {
+    micBtn.classList.toggle("is-recording", on);
+    micBtn.setAttribute("aria-pressed", String(on));
+    micBtn.title = on ? "Stop recording" : "Voice input";
+  };
+  micBtn.addEventListener("click", async () => {
+    if (recording) {
+      const rec = recording;
+      recording = null;
+      setRecording(false);
+      micBtn.disabled = true;
+      try {
+        const wav = await rec.stop();
+        const { text } = await api.transcribe(wav);
+        if (text) {
+          const existing = target.value.trim();
+          target.value = existing ? `${existing} ${text}` : text;
+          target.focus();
+          afterInsert();
+        } else {
+          report("Didn't catch any speech — try again, a bit closer to the mic.");
+        }
+      } catch (err) {
+        report(`Voice input failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        micBtn.disabled = false;
+      }
+      return;
+    }
+    try {
+      recording = await startRecording();
+      setRecording(true);
+    } catch (err) {
+      report(
+        `Couldn't start recording: ${err instanceof Error ? err.message : String(err)}. ` +
+          "Check that a microphone is connected and this app has permission to use it."
+      );
+    }
+  });
 }
 
-chatMicBtn.addEventListener("click", async () => {
-  if (activeRecording) {
-    const rec = activeRecording;
-    activeRecording = null;
-    setMicRecording(false);
-    chatMicBtn.disabled = true;
-    try {
-      const wav = await rec.stop();
-      const { text } = await api.transcribe(wav);
-      if (text) {
-        const existing = chatInput.value.trim();
-        chatInput.value = existing ? `${existing} ${text}` : text;
-        chatInput.focus();
-      } else {
-        appendBubble("system", "Didn't catch any speech — try again, a bit closer to the mic.");
-      }
-    } catch (err) {
-      appendBubble("system", `Voice input failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      chatMicBtn.disabled = false;
+// -- auto-grow: one line → three, then scroll; an expand button toggles a
+//    taller view when there's more than three lines of content. --
+interface GrowController {
+  refresh: () => void;
+  reset: () => void;
+}
+function wireAutoGrow(
+  ta: HTMLTextAreaElement,
+  form: HTMLFormElement,
+  expandBtn: HTMLButtonElement
+): GrowController {
+  let expanded = false;
+  const threeLineCap = () => {
+    const cs = getComputedStyle(ta);
+    const line = parseFloat(cs.lineHeight) || 21.6;
+    const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    return line * 3 + pad;
+  };
+  const setExpanded = (on: boolean) => {
+    expanded = on;
+    form.classList.toggle("is-expanded", on);
+    expandBtn.setAttribute("aria-pressed", String(on));
+    expandBtn.title = on ? "Collapse the input" : "Expand the input";
+    refresh();
+    ta.focus();
+  };
+  function refresh() {
+    ta.style.height = "auto";
+    // CSS max-height (3 lines collapsed / ~48vh expanded) does the clamping;
+    // scrollHeight is always the full content height, so this is the natural
+    // size the field wants.
+    ta.style.height = `${ta.scrollHeight}px`;
+    const overflowing = ta.scrollHeight > threeLineCap() + 1;
+    expandBtn.hidden = !(overflowing || expanded);
+    if (!overflowing && expanded) setExpanded(false);
+  }
+  function reset() {
+    if (expanded) {
+      expanded = false;
+      form.classList.remove("is-expanded");
+      expandBtn.setAttribute("aria-pressed", "false");
+      expandBtn.title = "Expand the input";
     }
-    return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+    expandBtn.hidden = true;
   }
-  try {
-    activeRecording = await startRecording();
-    setMicRecording(true);
-  } catch (err) {
-    appendBubble(
-      "system",
-      `Couldn't start recording: ${err instanceof Error ? err.message : String(err)}. ` +
-        "Check that a microphone is connected and this app has permission to use it."
+  expandBtn.addEventListener("click", () => setExpanded(!expanded));
+  ta.addEventListener("input", refresh);
+  return { refresh, reset };
+}
+
+// -- "/" command autocomplete + committed-command chip --
+// Once a command is chosen (from the menu, or by typing "/name " with a
+// trailing space), it's lifted out of the textarea into a chip so the command
+// and the message text read as separate things. The textarea then holds only
+// the message. Backspace at the very start of the textarea deletes the whole
+// chip at once — you can never end up with half a "/command".
+interface SlashController {
+  hide: () => void;
+  /** Remove the chip and hide the menu (a full reset on send / switch). */
+  clear: () => void;
+  /** The committed command name (e.g. "calc"), or null. */
+  getCommand: () => string | null;
+}
+function wireSlashMenu(
+  input: HTMLTextAreaElement,
+  menu: HTMLElement,
+  chip: HTMLElement,
+  form: HTMLFormElement,
+  onChange: () => void
+): SlashController {
+  let matches: SlashEntry[] = [];
+  let highlight = -1;
+  let command: string | null = null;
+
+  const enabledCommands = () =>
+    SLASH_COMMANDS.filter(
+      (c) =>
+        (c.name !== "web" || webEnabled) &&
+        (c.name !== "run" || shellEnabled) &&
+        (c.name !== "calc" || computeEnabled)
     );
-  }
-});
+  const knownName = (name: string) =>
+    enabledCommands().some((c) => c.name === name) ||
+    slashTools.some((t) => t.kind === "server" && t.status === "ready" && t.name === name);
+
+  const hide = () => {
+    menu.hidden = true;
+    menu.innerHTML = "";
+    matches = [];
+    highlight = -1;
+  };
+  const renderChip = () => {
+    if (!command) {
+      chip.hidden = true;
+      chip.innerHTML = "";
+      return;
+    }
+    chip.innerHTML = `<code>/${escapeHtml(command)}</code><button type="button" class="composer-chip-x" aria-label="Remove the /${escapeHtml(command)} command" tabindex="-1">×</button>`;
+    chip.hidden = false;
+    chip.querySelector(".composer-chip-x")!.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      removeCommand();
+    });
+  };
+  const setCommand = (name: string) => {
+    command = name;
+    renderChip();
+    hide();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    onChange();
+  };
+  const removeCommand = () => {
+    command = null;
+    renderChip();
+    input.focus();
+    onChange();
+  };
+
+  const render = () => {
+    menu.innerHTML = "";
+    if (matches.length === 0) {
+      menu.innerHTML = `<li class="slash-menu-empty">No matching commands or tools.</li>`;
+    } else {
+      matches.forEach((t, i) => {
+        const li = document.createElement("li");
+        li.className = "slash-menu-row" + (i === highlight ? " is-active" : "");
+        li.innerHTML = `<span class="slash-menu-row-name">${escapeHtml(t.name)}</span><span class="slash-menu-row-desc">${escapeHtml(t.description)}</span>`;
+        li.addEventListener("mousedown", (e) => {
+          // mousedown (not click) so this fires before the textarea blurs.
+          e.preventDefault();
+          input.value = "";
+          setCommand(t.name);
+        });
+        menu.appendChild(li);
+      });
+    }
+    menu.hidden = false;
+  };
+  const update = () => {
+    // Typed "/name " (with a space) while no command is committed → commit it,
+    // move the rest of the text into the field.
+    if (!command) {
+      const typed = /^\/(\S+)[ \t]([\s\S]*)$/.exec(input.value);
+      if (typed && knownName(typed[1].toLowerCase())) {
+        input.value = typed[2];
+        setCommand(typed[1].toLowerCase());
+        return;
+      }
+    }
+    // A live autocomplete only while the whole field is "/" + a partial word
+    // and nothing is committed yet.
+    const m = command ? null : /^\/([^\s]*)$/.exec(input.value);
+    if (!m) {
+      hide();
+      return;
+    }
+    const query = m[1].toLowerCase();
+    const toolEntries: SlashEntry[] = slashTools
+      .filter((t) => t.kind === "server" && t.status === "ready")
+      .map((t) => ({ name: t.name, description: t.description }));
+    matches = [...enabledCommands(), ...toolEntries].filter((e) => e.name.toLowerCase().includes(query));
+    highlight = matches.length ? 0 : -1;
+    render();
+  };
+  input.addEventListener("input", update);
+  input.addEventListener("keydown", (e) => {
+    // Backspace at the very start of an otherwise-untouched caret drops the
+    // whole command chip — never a partial "/comman".
+    if (
+      e.key === "Backspace" &&
+      command &&
+      input.selectionStart === 0 &&
+      input.selectionEnd === 0
+    ) {
+      e.preventDefault();
+      removeCommand();
+      return;
+    }
+    if (!menu.hidden && matches.length) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        highlight = (highlight + 1) % matches.length;
+        render();
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        highlight = (highlight - 1 + matches.length) % matches.length;
+        render();
+        return;
+      }
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault();
+        input.value = "";
+        setCommand(matches[highlight].name);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        hide();
+        return;
+      }
+    }
+    // Enter sends; Shift+Enter (or Enter mid-IME-composition) newlines.
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  return {
+    hide,
+    clear: () => {
+      command = null;
+      renderChip();
+      hide();
+    },
+    getCommand: () => command,
+  };
+}
 
 function appendTypingIndicator() {
   const el = document.createElement("div");
@@ -457,107 +690,11 @@ function emptyState(kind: keyof typeof EMPTY_ICONS, text: string) {
   return `<li class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${EMPTY_ICONS[kind]}</svg><span>${text}</span></li>`;
 }
 
-// Grow the composer with its content, up to the CSS max-height.
-function autoGrowChatInput() {
-  chatInput.style.height = "auto";
-  chatInput.style.height = `${chatInput.scrollHeight}px`;
-}
-chatInput.addEventListener("input", autoGrowChatInput);
-
-function hideSlashMenu() {
-  chatSlashMenu.hidden = true;
-  chatSlashMenu.innerHTML = "";
-  slashMatches = [];
-  slashHighlight = -1;
-}
-
-function renderSlashMenu() {
-  chatSlashMenu.innerHTML = "";
-  if (slashMatches.length === 0) {
-    chatSlashMenu.innerHTML = `<li class="slash-menu-empty">No matching commands or tools.</li>`;
-  } else {
-    slashMatches.forEach((t, i) => {
-      const li = document.createElement("li");
-      li.className = "slash-menu-row" + (i === slashHighlight ? " is-active" : "");
-      li.innerHTML = `<span class="slash-menu-row-name">${escapeHtml(t.name)}</span><span class="slash-menu-row-desc">${escapeHtml(t.description)}</span>`;
-      li.addEventListener("mousedown", (e) => {
-        // mousedown (not click) so this fires before the textarea loses focus.
-        e.preventDefault();
-        selectSlashEntry(t);
-      });
-      chatSlashMenu.appendChild(li);
-    });
-  }
-  chatSlashMenu.hidden = false;
-}
-
-function selectSlashEntry(entry: SlashEntry) {
-  chatInput.value = `/${entry.name} `;
-  hideSlashMenu();
-  chatInput.focus();
-  chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
-  autoGrowChatInput();
-}
-
-// Only a "/" with nothing after it but the current query is a live
-// autocomplete — once the user has typed past the command/tool name (a
-// space) the text is the request itself, not still picking one.
-function updateSlashMenu() {
-  const value = chatInput.value;
-  const m = /^\s*\/([^\s]*)$/.exec(value);
-  if (!m) {
-    hideSlashMenu();
-    return;
-  }
-  const query = m[1].toLowerCase();
-  const toolEntries: SlashEntry[] = slashTools
-    .filter((t) => t.kind === "server" && t.status === "ready")
-    .map((t) => ({ name: t.name, description: t.description }));
-  const commands = SLASH_COMMANDS.filter(
-    (c) =>
-      (c.name !== "web" || webEnabled) &&
-      (c.name !== "run" || shellEnabled) &&
-      (c.name !== "calc" || computeEnabled)
-  );
-  slashMatches = [...commands, ...toolEntries].filter((e) => e.name.toLowerCase().includes(query));
-  slashHighlight = slashMatches.length ? 0 : -1;
-  renderSlashMenu();
-}
-chatInput.addEventListener("input", updateSlashMenu);
-
-// Enter sends; Shift+Enter (or Enter mid-composition, e.g. an IME) inserts a
-// newline. Matches every other chat app. When the "/" menu is open, arrow
-// keys move the highlight and Enter/Escape act on the menu instead.
-chatInput.addEventListener("keydown", (e) => {
-  if (!chatSlashMenu.hidden && slashMatches.length) {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      slashHighlight = (slashHighlight + 1) % slashMatches.length;
-      renderSlashMenu();
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      slashHighlight = (slashHighlight - 1 + slashMatches.length) % slashMatches.length;
-      renderSlashMenu();
-      return;
-    }
-    if (e.key === "Enter" && !e.isComposing) {
-      e.preventDefault();
-      selectSlashEntry(slashMatches[slashHighlight]);
-      return;
-    }
-    if (e.key === "Escape") {
-      e.preventDefault();
-      hideSlashMenu();
-      return;
-    }
-  }
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-    e.preventDefault();
-    chatForm.requestSubmit();
-  }
-});
+const chatExpandBtn = document.getElementById("chat-expand-btn") as HTMLButtonElement;
+const chatSlashChip = document.getElementById("chat-slash-chip")!;
+const chatGrow = wireAutoGrow(chatInput, chatForm, chatExpandBtn);
+const chatSlash = wireSlashMenu(chatInput, chatSlashMenu, chatSlashChip, chatForm, chatGrow.refresh);
+wireMic(chatMicBtn, chatInput, (m) => appendBubble("system", m), chatGrow.refresh);
 
 // Toggle the composer between "ready to send" and "reply in flight" (Stop).
 function setChatPending(pending: boolean) {
@@ -619,9 +756,9 @@ async function openChatSession(id: string) {
   activeChatSessionId = id;
   chatTray.clear();
   chatInput.value = "";
-  autoGrowChatInput();
+  chatGrow.reset();
   setChatPending(false);
-  hideSlashMenu();
+  chatSlash.clear();
   chatLog.innerHTML = "";
   chatLog.appendChild(chatEmptyEl);
   for (const m of messages) {
@@ -657,9 +794,9 @@ function startNewChat() {
   chatLog.appendChild(chatEmptyEl);
   chatTray.clear();
   chatInput.value = "";
-  autoGrowChatInput();
+  chatGrow.reset();
   setChatPending(false);
-  hideSlashMenu();
+  chatSlash.clear();
   chatInput.focus();
   renderChatSessionList();
 }
@@ -689,15 +826,20 @@ chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (chatAbort) return; // a reply is already in flight
   const typed = chatInput.value.trim();
+  const cmd = chatSlash.getCommand();
   const images = chatTray.images.slice();
-  if (!typed && !images.length) return;
-  // The model needs a prompt; supply a default when the user only attached an image.
-  const message = typed || "What's in this image?";
+  if (!typed && !images.length && !cmd) return;
+  // Rebuild the wire form: "/cmd rest", or the plain text (with an image-only
+  // default), and show the same in the transcript bubble.
+  const message = cmd
+    ? `/${cmd} ${typed}`.trimEnd()
+    : typed || "What's in this image?";
+  const shown = cmd ? `/${cmd} ${typed}`.trimEnd() : typed;
   chatInput.value = "";
-  autoGrowChatInput();
-  hideSlashMenu();
+  chatGrow.reset();
+  chatSlash.clear();
   chatTray.clear();
-  appendUserMessage(typed, images);
+  appendUserMessage(shown, images);
   const pending = appendTypingIndicator();
   chatAbort = new AbortController();
   setChatPending(true);
@@ -3178,6 +3320,12 @@ const messageInput = document.getElementById("message-input") as HTMLTextAreaEle
 const messageAttachmentsEl = document.getElementById("message-attachments")!;
 const messageAttachBtn = document.getElementById("message-attach-btn") as HTMLButtonElement;
 const messageImageInput = document.getElementById("message-image-input") as HTMLInputElement;
+const messageMicBtn = document.getElementById("message-mic-btn") as HTMLButtonElement;
+const messageExpandBtn = document.getElementById("message-expand-btn") as HTMLButtonElement;
+const messageSlashMenu = document.getElementById("message-slash-menu")!;
+const messageSlashChip = document.getElementById("message-slash-chip")!;
+const messageHelpBtn = document.getElementById("message-help-btn") as HTMLButtonElement;
+messageHelpBtn.addEventListener("click", () => openSidePanel("Slash commands", slashHelpHtml()));
 
 const messageTray = makeImageTray(messageAttachmentsEl, appendMessageError);
 messageAttachBtn.addEventListener("click", () => messageImageInput.click());
@@ -3186,6 +3334,18 @@ messageImageInput.addEventListener("change", () => {
   messageImageInput.value = "";
 });
 wireImagePasteAndDrop(messageTray, messageInput, messageLog);
+
+// Same composer plumbing as the 1:1 chat: 1→3-line auto-grow with an expand
+// button, "/" command autocomplete, and voice input.
+const messageGrow = wireAutoGrow(messageInput, messageForm, messageExpandBtn);
+const messageSlash = wireSlashMenu(
+  messageInput,
+  messageSlashMenu,
+  messageSlashChip,
+  messageForm,
+  messageGrow.refresh
+);
+wireMic(messageMicBtn, messageInput, appendMessageError, messageGrow.refresh);
 
 let familyMembers: FamilyMember[] = [];
 let channels: Channel[] = [];
@@ -3288,6 +3448,9 @@ async function openChannel(id: string) {
   lastMessageTs = null;
   renderedMessageIds = new Set();
   messageTray.clear();
+  messageInput.value = "";
+  messageGrow.reset();
+  messageSlash.clear();
   messageLog.innerHTML = "";
   conversationEmpty.hidden = true;
   conversationEl.hidden = false;
@@ -3333,6 +3496,10 @@ async function enterMessages() {
   channelNewForm.hidden = true;
   conversationEl.hidden = true;
   conversationEmpty.hidden = false;
+  // The "/" autocomplete in the message composer shares slashTools with Chat.
+  void refreshTools().then((tools) => {
+    slashTools = tools;
+  });
   try {
     familyMembers = (await api.listFamilyMembers()).members;
   } catch {
@@ -3411,16 +3578,20 @@ channelNewForm.addEventListener("submit", async (e) => {
   }
 });
 
-autoGrow(messageInput);
 messageForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const typed = messageInput.value.trim();
+  const cmd = messageSlash.getCommand();
   const images = messageTray.images.slice();
-  if ((!typed && !images.length) || !activeChannelId) return;
-  // The server requires a non-empty body; stand in for an image-only message.
-  const body = typed || (images.length > 1 ? "(shared images)" : "(shared an image)");
+  if ((!typed && !images.length && !cmd) || !activeChannelId) return;
+  // The server requires a non-empty body; "/cmd rest", or the text, or an
+  // image-only stand-in.
+  const body = cmd
+    ? `/${cmd} ${typed}`.trimEnd()
+    : typed || (images.length > 1 ? "(shared images)" : "(shared an image)");
   messageInput.value = "";
-  messageInput.style.height = "auto";
+  messageGrow.reset();
+  messageSlash.clear();
   messageTray.clear();
   const mentionAgent = /(^|[^\w@])@(agent|ai|assistant)\b/i.test(body);
   try {
@@ -3456,18 +3627,6 @@ function appendMessageError(text: string) {
   messageLog.appendChild(el);
 }
 
-function autoGrow(ta: HTMLTextAreaElement) {
-  ta.addEventListener("input", () => {
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
-  });
-  ta.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      ta.form?.requestSubmit();
-    }
-  });
-}
 
 // ---------- Board (physical corkboard of sticky notes) ----------
 const NOTE_COLORS = ["butter", "mint", "sky", "blush", "lilac"] as const;

@@ -1157,6 +1157,34 @@ describe("HTTP API", () => {
     expect(pending.pending).toBe(true); // model call is fire-and-forget; no live model in this suite
   });
 
+  it("a leading \"/\" command in a channel invokes the assistant, like in 1:1 chat", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const channelId = (
+      await inject({ method: "POST", url: "/channels", payload: { kind: "dm", memberIds: [kid.user.id] } })
+    ).json().channel.id;
+
+    // No @agent, but "/calc …" should still pull in the assistant.
+    await inject({
+      method: "POST",
+      url: `/channels/${channelId}/messages`,
+      payload: { body: "/calc 15% of 80" },
+    });
+    const msgs = (await inject({ method: "GET", url: `/channels/${channelId}/messages` })).json().messages;
+    expect(msgs.some((m: any) => m.senderId === "_agent_")).toBe(true);
+    // the user's own message keeps the leading "/" (honest transcript)
+    expect(msgs.find((m: any) => m.senderId !== "_agent_").body).toBe("/calc 15% of 80");
+  });
+
+  it("a plain channel message with no @agent and no \"/\" does NOT invoke the assistant", async () => {
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const channelId = (
+      await inject({ method: "POST", url: "/channels", payload: { kind: "dm", memberIds: [kid.user.id] } })
+    ).json().channel.id;
+    await inject({ method: "POST", url: `/channels/${channelId}/messages`, payload: { body: "picking up milk" } });
+    const msgs = (await inject({ method: "GET", url: `/channels/${channelId}/messages` })).json().messages;
+    expect(msgs.some((m: any) => m.senderId === "_agent_")).toBe(false);
+  });
+
   it("GET /channels shows unread counts and is scoped to the caller", async () => {
     const kid = seedUser(store, { username: "kid", role: "member" });
     const created = await inject({

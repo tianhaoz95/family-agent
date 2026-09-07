@@ -331,15 +331,19 @@ The first data that isn't per-account. Both added narrowly rather than by loosen
   /channels/:id`, `DELETE /channels/:id` (any member — removes it for everyone),
   `GET/POST /channels/:id/messages`, `POST /channels/:id/members`,
   `POST /channels/:id/read`, `GET /family/members` (any authed user, name + username
-  only — *not* the admin `/users`). `@agent`/`@ai` in a message (`mentionsAgent()`)
-  → `askFamilyAgentInChannel()` runs the mentioner's planner and
-  `resolvePendingAgentMessage()` fills in the `_agent_` placeholder row. Clients
-  poll. A message can carry image attachments (`messages.images`, JSON array of
-  data URIs) exactly like `POST /chat` — both composers reuse the 1:1-chat attach
-  flow, and an `@agent` turn passes the images to the multimodal planner. Desktop:
-  `#view-messages` in `main.ts` (`makeImageTray` is shared by both composers).
-  Android: `Destination.Messages` +
-  nested `conversation/{id}` route, `MessagesScreen.kt`, poll loop in `AppViewModel`.
+  only — *not* the admin `/users`). The assistant chimes in on **`@agent`/`@ai`**
+  (`mentionsAgent()` → `askFamilyAgentInChannel()`, planner + transcript context)
+  **or a leading `/` command** (`parseForcedAgentCommand()` → `runForcedAgentTurn()`,
+  one specialist directly, no planner) — the same two triggers as the 1:1 `/chat`,
+  so the agent behaves the same wherever you talk to it. `runForcedAgentTurn()` (in
+  `server.ts`) is the shared dispatch both routes use. `resolvePendingAgentMessage()`
+  fills in the `_agent_` placeholder row; clients poll. A message can carry image
+  attachments (`messages.images`, JSON array of data URIs) exactly like `POST /chat`.
+  Desktop: `#view-messages` in `main.ts` — the composer is wired with the SAME
+  `wireAutoGrow` / `wireSlashMenu` / `wireMic` / `makeImageTray` helpers as the
+  Chat composer (one-line→three auto-grow + expand button, `/` autocomplete, voice
+  input). Android: `Destination.Messages` + nested `conversation/{id}` route,
+  `MessagesScreen.kt`, poll loop in `AppViewModel`.
 - **Sticky board** — `sticky_notes` on `ScopedStore`: `scope='private'` is
   `AND user_id = ?`, `scope='shared'` is open to every member (author tracked in
   `user_id`). Routes `GET/POST /notes`, `PATCH/DELETE /notes/:id`. Subagent
@@ -403,12 +407,14 @@ including the planner — the five original subagents plus `routine`, `research`
 `workshop`) instead of hand-rolled `Map`s; `dropAgents(userId)`/
 `dropAllAgents()` touch all of them in lockstep at every call site that changes
 what an agent can do (a tool build/improve/delete, or a model-client
-rebuild). `POST /chat` looks up `parseForcedAgentCommand(message)`; a `kind:
-"tools"` command additionally checks `config.toolsEnabled` (no model call,
-a plain "Tools aren't turned on for this server." reply, if off — the other
-kinds work regardless of that flag). The stored chat message always
-keeps the leading `/` (an honest transcript); only the model-facing text is
-stripped. An empty `text` (just `/build` with nothing after) gets a
+rebuild). Both `POST /chat` AND `POST /channels/:id/messages` run a `/` command
+through the shared `runForcedAgentTurn()` helper (in `server.ts`), so the
+assistant behaves the same in a private chat or `@`-mentioned in a
+conversation. A `kind: "tools"` command additionally checks `config.toolsEnabled`
+(no model call, a plain "Tools aren't turned on for this server." reply, if off
+— the other kinds check their own capability flag, e.g. `calc` needs
+`config.computeEnabled`). The stored chat message always keeps the leading `/`
+(an honest transcript); only the model-facing text is stripped. An empty `text` (just `/build` with nothing after) gets a
 per-kind fallback prompt (e.g. "List my tasks.") rather than an empty
 message.
 
@@ -419,11 +425,18 @@ a small fixed list of the four command keywords (kept in sync by hand with
 filtered to `kind === "server" && status === "ready"` (a `kind === "static"`
 tool has no operations to call via this path at all — see
 `familyToolCatalog` in `server.ts` — so it's excluded; no new endpoint
-needed). Picking a row inserts `/name ` into the composer for the user to
-finish typing. Desktop: `#chat-slash-menu` in `main.ts`, keyboard nav
-(arrows/Enter/Escape) layered onto the composer's `keydown` handler; a
-"?" button next to "+ New" opens the existing reference-preview side panel
-(`openSidePanel()`) with the same list, explained. Android: `ChatScreen.kt`
+needed). Desktop: `#chat-slash-menu` / `#message-slash-menu` in `main.ts`,
+keyboard nav (arrows/Enter/Escape). **Picking a row — or typing `/name ` with a
+trailing space — lifts the command out of the textarea into a chip**
+(`.composer-chip`, `#{chat,message}-slash-chip` inside a `.composer-field`
+wrapper); the textarea then holds only the message. Backspace at caret 0
+deletes the whole chip at once (never a half "/comman"). On submit the wire
+form is rebuilt as `/${cmd} ${text}` (and shown that way in the transcript
+bubble, keeping the wrench flag). All of this lives in the shared
+`wireSlashMenu(input, menu, chip, form, onChange)` helper — Chat and Messages
+call it the same way. A "?" button (next to "+ New" in Chat, in the
+conversation head in Messages) opens the reference-preview side panel
+(`openSidePanel()`) with the same list explained. Android: `ChatScreen.kt`
 renders matches as a card above the composer (the `input` state is a
 `TextFieldValue`, not a plain `String`, specifically so a programmatic
 insert — this, and the voice-transcript fill — can place the cursor at the

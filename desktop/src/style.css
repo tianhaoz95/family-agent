@@ -688,8 +688,8 @@ textarea {
 }
 
 /* Voice-input button while a recording is in progress. */
-#chat-mic-btn.is-recording,
-#chat-mic-btn.is-recording:hover {
+.chat-attach-btn.is-recording,
+.chat-attach-btn.is-recording:hover {
   color: var(--accent-contrast);
   background: var(--danger);
   animation: mic-recording 1.4s var(--ease) infinite;
@@ -703,16 +703,89 @@ textarea {
     box-shadow: 0 0 0 5px transparent;
   }
 }
-#chat-mic-btn:disabled {
+.chat-attach-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Expand / collapse toggle — only shown when the input has more than 3 lines
+   of content (main.ts). Swap the icon on aria-pressed. */
+.chat-expand-btn .icon-collapse {
+  display: none;
+}
+.chat-expand-btn[aria-pressed="true"] .icon-expand {
+  display: none;
+}
+.chat-expand-btn[aria-pressed="true"] .icon-collapse {
+  display: block;
+}
+.chat-expand-btn[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 /* No focus ring on the composer — the caret in the field is enough, and the
    blue glow read as noisy against the warm-paper canvas. */
 
+/* Holds the committed-command chip + the textarea on one baseline; wraps only
+   when the row is really tight. */
+.composer-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  column-gap: 6px;
+  row-gap: 2px;
+}
+.composer-field textarea {
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+
+/* The "/command" chip lifted out of the textarea — command and message text
+   read as two separate things. */
+.composer-chip {
+  flex: none;
+  margin-top: 5px; /* line up with the first line of the textarea */
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 3px 2px 9px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  user-select: none;
+}
+.composer-chip code {
+  font: inherit;
+  letter-spacing: 0.01em;
+}
+.composer-chip-x {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 0.95rem;
+  line-height: 1;
+  color: var(--accent);
+  opacity: 0.65;
+  cursor: pointer;
+}
+.composer-chip-x:hover {
+  opacity: 1;
+  background: var(--accent-ring);
+}
+
 .chat-form textarea {
   flex: 1;
+  min-width: 0;
   resize: none;
   border: none;
   background: none;
@@ -720,7 +793,14 @@ textarea {
   font-size: 0.9rem;
   line-height: 1.5;
   padding: 7px 0;
-  max-height: 7rem;
+  /* Starts at one line; JS (autoGrow) grows it to at most this — three text
+     lines (1.5em each) plus the vertical padding. Past three lines the field
+     stays this tall and scrolls; the expand button offers a bigger view. */
+  max-height: calc(1.5em * 3 + 14px);
+  overflow-y: auto;
+}
+.chat-form.is-expanded textarea {
+  max-height: min(48vh, 22rem);
 }
 .chat-form textarea:focus,
 .chat-form textarea:focus-visible {
@@ -730,12 +810,19 @@ textarea {
 .chat-form textarea::placeholder {
   color: var(--text-faint);
 }
+/* Keep a long placeholder on a single line — it must never make the composer
+   two lines tall on its own. Once the user types, normal wrapping resumes. */
+.chat-form textarea:placeholder-shown {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* "Stop" — replaces Send while a reply is streaming in. Danger-tinted so it
    reads as an interrupt, not a primary action. */
 .chat-stop-btn {
   all: unset;
-  align-self: stretch;
+  align-self: flex-end;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -789,7 +876,7 @@ button[type="submit"]:disabled {
 .chat-form button[type="submit"] {
   border-radius: var(--r-md);
   padding: 9px 18px;
-  align-self: stretch;
+  align-self: flex-end;
 }
 
 :focus-visible {
@@ -2858,7 +2945,7 @@ input[type="file"]::file-selector-button:hover {
   white-space: nowrap;
 }
 
-/* The board surface: a warm panel with a faint pin-board speckle. Notes are
+/* The board surface: a plain white panel with a faint dot grid. Notes are
    absolutely positioned within it and dragged around. */
 .note-board {
   position: relative;
@@ -2867,8 +2954,8 @@ input[type="file"]::file-selector-button:hover {
   margin-top: 6px;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  background-color: #f0ead9;
-  background-image: radial-gradient(rgba(120, 96, 54, 0.14) 1px, transparent 1.4px);
+  background-color: var(--surface);
+  background-image: radial-gradient(rgba(0, 0, 0, 0.06) 1px, transparent 1.4px);
   background-size: 18px 18px;
   overflow: hidden;
   touch-action: none;
