@@ -2294,18 +2294,23 @@ input[type="file"]::file-selector-button:hover {
 /* ---------- Tool viewer (iframe, fills the content area) -------- */
 .tool-viewer {
   position: absolute;
-  /* `.content` has padding-left: var(--rail-space) to clear the floating rail,
-     but an absolutely-positioned child is placed against the padding box, so
-     `inset: 0` would slide the viewer back under the rail. Offset it explicitly. */
-  top: 0;
-  right: 0;
-  bottom: 0;
+  /* Float as a rounded card in the content area, matching the rail's own 14px
+     inset from the window edge. `.content` has padding-left: var(--rail-space)
+     to clear the floating rail, but an absolutely-positioned child is placed
+     against the padding box, so the left offset must be set explicitly. */
+  top: 14px;
+  right: 16px;
+  bottom: 16px;
   left: var(--rail-space);
   transition: left var(--dur-lg) var(--ease-out);
   z-index: 20;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-pop);
   animation: view-in 200ms var(--ease);
 }
 
@@ -2316,7 +2321,7 @@ input[type="file"]::file-selector-button:hover {
   gap: 12px;
   padding: 8px 14px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: transparent;
 }
 
 .tool-viewer-back {
@@ -2362,11 +2367,20 @@ input[type="file"]::file-selector-button:hover {
 /* ---- tool database inspector ---- */
 .db-inspector {
   position: absolute;
-  inset: 0;
+  /* Same floating rounded card as .tool-viewer (see note there). */
+  top: 14px;
+  right: 16px;
+  bottom: 16px;
+  left: var(--rail-space);
+  transition: left var(--dur-lg) var(--ease-out);
   z-index: 20;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-pop);
   animation: view-in 200ms var(--ease);
 }
 

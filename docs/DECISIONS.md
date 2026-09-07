@@ -1933,3 +1933,20 @@ Verified on the emulator and in the browser against real model replies,
 including a Markdown bullet list (which rendered as bullets — an earlier
 screenshot that showed literal `*` was a hand-rolled test mock that bypassed
 `renderMarkdown`, not a real bug).
+
+## Generated tools inherit the app's visual style
+
+A generated tool renders in an `<iframe>` that fills the desktop content area
+(next to the rail), so a plain-`system-ui` page looked like a foreign object
+dropped into the app. The builder now hands the model a `HOUSE_STYLE` block
+(`agent-core/src/tools/builder.ts`) appended to both `HTML_SYSTEM` and
+`HTML_WITH_OPS_SYSTEM`: a paste-verbatim `:root` + base-element CSS carrying the
+DESIGN.md tokens (warm `#f6f5f4` canvas, white `.card` with the hairline border +
+`--shadow-sm`, single `#0075de` accent, `.secondary`/`.ghost` button variants,
+6/11/16px radii, 200ms ease) plus a short list of design rules. Given verbatim
+CSS rather than a description because a 2B model doesn't reproduce a palette from
+prose — same reasoning as the worked examples elsewhere in the builder prompts.
+No webfont (offline, no external URLs) — `Inter` in the stack degrades to
+`system-ui`. The `wrapFragment` fallback page got the canvas + ink colours too.
+`iterateTool`'s "smallest edit, keep everything else" instruction means an
+existing pre-`HOUSE_STYLE` tool isn't force-restyled on an improve.

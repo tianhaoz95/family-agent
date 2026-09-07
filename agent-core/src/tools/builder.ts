@@ -73,10 +73,52 @@ function nameFromHtml(html: string, prompt: string): string {
   );
 }
 
+// The tool renders in an <iframe> inside the desktop app, so it must look like it
+// belongs there — the "Notion warm paper notebook" system from the repo's
+// DESIGN.md (warm #f6f5f4 canvas, white cards with hairline borders + soft
+// floating shadows, a single #0075de blue accent, system sans, 11-16px rounded
+// corners, 200ms ease motion). Small models don't reproduce this from a
+// description, so hand them a ready-to-paste base and tell them to build on it.
+// No webfonts allowed (offline, no external URLs) — Inter degrades to system-ui.
+const HOUSE_STYLE = `Match the host app's visual style — it is the "warm paper notebook" look. Start your <style> block with this base VERBATIM, then add only tool-specific rules on top of it:
+
+:root{
+  --bg:#f6f5f4; --surface:#fff; --border:rgba(0,0,0,.08); --border-strong:rgba(0,0,0,.16);
+  --text:#000; --text-muted:rgba(0,0,0,.6); --text-body:#615d59;
+  --accent:#0075de; --accent-hover:#0068c4; --accent-soft:#e6f3fe; --danger:#e32d14;
+  --r-sm:6px; --r-md:11px; --r-lg:16px; --r-pill:9999px;
+  --shadow-sm:0 1px 2px rgba(38,32,26,.04),0 10px 30px -14px rgba(38,32,26,.16);
+  --font-sans:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:28px 32px;background:var(--bg);color:var(--text-body);
+  font:15px/1.5 var(--font-sans);-webkit-font-smoothing:antialiased}
+h1,h2,h3{color:var(--text);letter-spacing:-.014em;margin:0 0 .5em}
+h1{font-size:1.35rem;font-weight:600}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
+  box-shadow:var(--shadow-sm);padding:18px}
+button{font:inherit;font-weight:500;cursor:pointer;border-radius:var(--r-md);
+  padding:8px 14px;border:1px solid transparent;background:var(--accent);color:#fff;
+  transition:background .2s ease}
+button:hover{background:var(--accent-hover)}
+button.secondary{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+button.ghost{background:transparent;color:var(--text-muted);border-color:var(--border)}
+input,select,textarea{font:inherit;color:var(--text);background:var(--surface);
+  border:1px solid var(--border-strong);border-radius:var(--r-md);padding:8px 11px;width:100%}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-ring,rgba(0,117,222,.25))}
+label{display:block;font-size:.82rem;color:var(--text-muted);margin-bottom:4px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
+th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
+
+Design rules: warm canvas, white cards floated with the hairline border + soft shadow, ONE blue accent used only for the primary action (secondary actions use .secondary/.ghost), plenty of whitespace, rounded corners, 200ms ease transitions. No dark mode, no heavy borders, no gradients, no drop shadows on text. Keep it calm and uncluttered.`;
+
 const HTML_SYSTEM = `You write one complete, self-contained HTML document for a small single-purpose web tool. Rules:
 - Output ONLY the HTML, starting with <!doctype html>. No explanation, no markdown fences.
 - Everything inline: one <style> block, one <script> block. NO external URLs, CDNs, frameworks, fonts, or images.
 - Clean, modern, legible. Works offline.
+- ${HOUSE_STYLE}
 - Persist the user's data with the built-in state API. Use the RELATIVE path "__state" (no leading slash):
   load with fetch('__state').then(r=>r.json()) (treat a null response as "no data yet") and save with
   fetch('__state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(data)}).
@@ -91,6 +133,7 @@ const HTML_WITH_OPS_SYSTEM = `You write one complete, self-contained HTML docume
 - Output ONLY the HTML, starting with <!doctype html>. No explanation, no markdown fences.
 - Everything inline: one <style> block, one <script> block. NO external URLs, CDNs, frameworks, fonts, or images.
 - Clean, modern, legible.
+- ${HOUSE_STYLE}
 - This tool has a backend. Its operations are listed below. Call them with:
     fetch('api/<operation_name>', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(input) })
       .then(r => r.json())
@@ -291,7 +334,7 @@ function wrapFragment(name: string, body: string): string {
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${name.replace(/[<>&]/g, "")}</title>
-<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:680px;margin:2rem auto;padding:0 1rem;line-height:1.5}</style>
+<style>body{font-family:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;max-width:680px;margin:2rem auto;padding:0 1rem;line-height:1.5;background:#f6f5f4;color:#615d59}h1,h2,h3{color:#000;letter-spacing:-.014em}a{color:#0075de}</style>
 </head>
 <body>
 ${body}
