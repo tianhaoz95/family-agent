@@ -2294,7 +2294,14 @@ input[type="file"]::file-selector-button:hover {
 /* ---------- Tool viewer (iframe, fills the content area) -------- */
 .tool-viewer {
   position: absolute;
-  inset: 0;
+  /* `.content` has padding-left: var(--rail-space) to clear the floating rail,
+     but an absolutely-positioned child is placed against the padding box, so
+     `inset: 0` would slide the viewer back under the rail. Offset it explicitly. */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--rail-space);
+  transition: left var(--dur-lg) var(--ease-out);
   z-index: 20;
   display: flex;
   flex-direction: column;
