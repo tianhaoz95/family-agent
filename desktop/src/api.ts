@@ -191,9 +191,74 @@ export interface ActivityEntry {
   detail: string;
 }
 
-/** A task/document/tool the assistant used while answering — rendered as a clickable chip. */
+// ---- scheduled routines ----
+export type RoutineTrigger =
+  | { kind: "cron"; expr: string }
+  | { kind: "once"; at: string }
+  | { kind: "every"; minutes: number };
+
+export type RoutineAgentKind = "planner" | "task" | "document" | "notes" | "tools";
+
+export interface RoutineAction {
+  agent: RoutineAgentKind;
+  instruction: string;
+}
+
+/** Friendly schedule fields sent to POST/PATCH /routines — exactly one is set. */
+export interface RoutineTriggerInput {
+  cron?: string;
+  dailyAt?: string;
+  weeklyOn?: string;
+  weeklyAt?: string;
+  monthlyDay?: number;
+  monthlyAt?: string;
+  onceAt?: string;
+  everyMinutes?: number;
+}
+
+export type RoutineRunStatus = "running" | "ok" | "error" | "skipped";
+
+export interface Routine {
+  id: string;
+  name: string;
+  enabled: boolean;
+  trigger: RoutineTrigger;
+  /** Human sentence for the schedule, e.g. "every day at 7:00 AM". */
+  triggerText: string;
+  action: RoutineAction;
+  deliverChannelId: string | null;
+  catchUp: "skip" | "run";
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastStatus: RoutineRunStatus | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoutineRun {
+  id: string;
+  routineId: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: RoutineRunStatus;
+  trigger: "schedule" | "manual" | "catchup";
+  output: string | null;
+  error: string | null;
+}
+
+export interface RoutineInput {
+  name: string;
+  trigger: RoutineTriggerInput;
+  action: RoutineAction;
+  deliverChannelId?: string | null;
+  catchUp?: "skip" | "run";
+  enabled?: boolean;
+}
+
+/** Something the assistant used while answering — rendered as a clickable chip.
+ *  "link" is a web page the research agent opened (`id` is the URL). */
 export interface ChatReference {
-  type: "document" | "task" | "tool";
+  type: "document" | "task" | "tool" | "link";
   id: string;
   label: string;
 }
@@ -282,6 +347,12 @@ export interface Health {
   asrEnabled: boolean;
   /** "on" when an embedding model is configured for semantic document search. */
   semanticSearch?: "on" | "off";
+  /** Whether scheduled routines are available — the Routines nav item hides when false. */
+  routinesEnabled?: boolean;
+  /** "on" when an admin has configured a web search provider (research agent). */
+  web?: "on" | "off";
+  /** "on" when file processing works here; "unavailable" if requested but the sandbox is missing. */
+  shell?: "on" | "off" | "unavailable";
 }
 
 /** Document search strategy — see agent-core embeddings.ts. */
@@ -492,6 +563,25 @@ export const api = {
       method: "POST",
     }),
   listActivity: () => request<{ activity: ActivityEntry[] }>("/activity"),
+
+  // ---- scheduled routines ----
+  listRoutines: () => request<{ routines: Routine[] }>("/routines"),
+  getRoutine: (id: string) => request<{ routine: Routine; runs: RoutineRun[] }>(`/routines/${id}`),
+  createRoutine: (body: RoutineInput) =>
+    request<{ routine: Routine }>("/routines", { method: "POST", body: JSON.stringify(body) }),
+  updateRoutine: (
+    id: string,
+    patch: Partial<Omit<RoutineInput, "enabled">> & { enabled?: boolean }
+  ) => request<{ routine: Routine }>(`/routines/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteRoutine: (id: string) => request<{ deleted: true }>(`/routines/${id}`, { method: "DELETE" }),
+  listRoutineRuns: (id: string, limit = 20) =>
+    request<{ runs: RoutineRun[] }>(`/routines/${id}/runs?limit=${limit}`),
+  /** Run a routine now. Resolves when the run finishes (can take a while). */
+  runRoutine: (id: string) =>
+    request<{ status: RoutineRunStatus; output: string | null; error: string | null; run: RoutineRun | null }>(
+      `/routines/${id}/run`,
+      { method: "POST" }
+    ),
 
   // ---- family chat ----
   listFamilyMembers: () => request<{ members: FamilyMember[] }>("/family/members"),

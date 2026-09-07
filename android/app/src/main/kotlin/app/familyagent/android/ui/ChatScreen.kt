@@ -67,15 +67,18 @@ private const val MAX_IMAGES = 4
 private fun endOf(text: String) = TextFieldValue(text, TextRange(text.length))
 
 /** "/" autocomplete: a fixed set of forced-agent commands (see
- *  parseForcedAgentCommand, agent-core/src/agents/index.ts — keep these four
- *  in sync with FORCED_AGENT_KEYWORDS there) plus the family's own tool
- *  names. "search" is a hand-typeable alias for "find", not listed
- *  separately, to keep this short. */
+ *  parseForcedAgentCommand, agent-core/src/agents/index.ts — keep these in
+ *  sync with FORCED_AGENT_KEYWORDS there) plus the family's own tool names.
+ *  "search" (→ find) and "remind" (→ schedule) are hand-typeable aliases, not
+ *  listed separately, to keep this short. */
 private val SLASH_COMMANDS = listOf(
     "build" to "Build a new tool, or improve an existing one",
     "task" to "Add, list, or complete a to-do",
     "find" to "Search the family's documents (alias: /search)",
     "note" to "Read or add a sticky note",
+    "schedule" to "Create or manage a scheduled routine (alias: /remind)",
+    "web" to "Search the web and read a page (alias: /lookup)",
+    "run" to "Process a file with command-line tools (alias: /shell)",
 )
 
 @Composable
@@ -526,12 +529,23 @@ private fun ChatBubble(msg: ChatMessage, onReferenceClick: (ChatReference) -> Un
             verticalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier.widthIn(max = 320.dp),
         ) {
+            val ctx = androidx.compose.ui.platform.LocalContext.current
             msg.references.forEach { ref ->
                 AssistChip(
-                    onClick = { onReferenceClick(ref) },
+                    onClick = {
+                        if (ref.type == "link") {
+                            runCatching {
+                                ctx.startActivity(
+                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(ref.id))
+                                )
+                            }
+                        } else {
+                            onReferenceClick(ref)
+                        }
+                    },
                     label = {
                         Text(
-                            ref.label,
+                            if (ref.type == "link") ref.label.removePrefix("https://").removePrefix("http://").removePrefix("www.").take(40) else ref.label,
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.labelMedium,

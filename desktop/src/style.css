@@ -3243,6 +3243,13 @@ input[type="file"]::file-selector-button:hover {
 .ref-chip-tool::before {
   content: "🛠 ";
 }
+.ref-chip-link {
+  display: inline-block;
+  text-decoration: none;
+}
+.ref-chip-link::before {
+  content: "🔗 ";
+}
 
 /* ---- tool improve / revert ---- */
 .tool-improve-form {
@@ -3329,4 +3336,181 @@ input[type="file"]::file-selector-button:hover {
 }
 .tool-op-list li {
   line-height: 1.5;
+}
+
+/* ---------- Routines ------------------------------------------------ */
+.routine-list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 4px 8px 0;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.routine-row {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  padding: 16px 18px;
+  transition: border-color var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+.routine-row:hover {
+  border-color: var(--border-strong);
+}
+.routine-row.is-off {
+  opacity: 0.62;
+}
+
+.routine-row-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.routine-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routine-sched {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+}
+.routine-instruction {
+  font-size: 0.85rem;
+  color: var(--text-body);
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+.routine-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 8px;
+  font-size: 0.76rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.routine-last-ok { color: var(--ok, #2f9e44); }
+.routine-last-error { color: var(--danger); }
+
+.routine-row-foot {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.routine-row-foot button {
+  padding: 6px 12px;
+  font-size: 0.82rem;
+}
+
+/* on/off switch */
+.routine-switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  cursor: pointer;
+  flex: none;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.routine-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform var(--dur) var(--ease);
+}
+.routine-switch[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.routine-switch[aria-checked="true"]::after {
+  transform: translateX(16px);
+}
+
+.routine-runs {
+  margin: 10px 0 0;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.routine-runs summary {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.routine-run {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  padding: 6px 2px;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+.routine-run:last-child { border-bottom: none; }
+.routine-run-ts {
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.routine-run-body {
+  color: var(--text-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* create / edit form */
+.routine-form {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.routine-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 14px;
+  align-items: start;
+}
+.routine-sched-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+.routine-sched-fields .field {
+  flex: 1 1 120px;
+}
+.routine-form-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.routine-form-foot .settings-hint { margin: 0; }
+.routine-form-foot > div {
+  display: flex;
+  gap: 8px;
+  flex: none;
 }

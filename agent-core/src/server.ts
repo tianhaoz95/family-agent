@@ -2,8 +2,18 @@ import Fastify, { type FastifyRequest, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import { z } from "zod";
-import { Store, ScopedStore, AGENT_SENDER_ID, type UserRecord } from "./db.js";
+import { Store, ScopedStore, AGENT_SENDER_ID, type UserRecord, type RoutineRecord } from "./db.js";
 import { config, dbPath, envLocked, userInboxDir } from "./config.js";
+import { webEnabled } from "./web/search.js";
+import { sandboxAvailable } from "./shell/sandbox.js";
+import { installedTools } from "./shell/executor.js";
+import {
+  RoutineScheduler,
+  parseTriggerInput,
+  nextRunAt,
+  describeTrigger,
+  type RoutineAction,
+} from "./routines.js";
 import {
   buildFamilyAgent,
   buildFamilyToolsAgent,
@@ -11,6 +21,9 @@ import {
   buildFamilyDocumentAgent,
   buildFamilyBuilderAgent,
   buildFamilyNotesAgent,
+  buildFamilyRoutineAgent,
+  buildFamilyResearchAgent,
+  buildFamilyWorkshopAgent,
   askFamilyAgent,
   askFamilyAgentInChannel,
   mentionsAgent,
@@ -35,7 +48,7 @@ import { warmModel } from "./warmup.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { persistSettings } from "./settingsFile.js";
 import { verifyPassword, bearerToken } from "./auth.js";
-import { rm, readFile } from "node:fs/promises";
+import { rm, readFile, mkdir, writeFile as writeFileAsync } from "node:fs/promises";
 import { join, extname } from "node:path";
 import {
   storeOriginalUpload,
@@ -61,6 +74,10 @@ declare module "fastify" {
   interface FastifyRequest {
     authUser: UserRecord;
     userStore: ScopedStore;
+  }
+  interface FastifyInstance {
+    /** The scheduled-routines loop. Only .start()ed by main() (opts below). */
+    routineScheduler: RoutineScheduler;
   }
 }
 
@@ -106,7 +123,10 @@ export function buildServer(
   hooks: ServerHooks = {},
   // Shared with main()'s tools HTTP server so both sides talk to the same
   // pool of sandboxed tool backends.
-  supervisor: ToolSupervisor = new ToolSupervisor()
+  supervisor: ToolSupervisor = new ToolSupervisor(),
+  // main() passes { startRoutineScheduler: true } to run the live tick loop;
+  // tests leave it off and drive app.routineScheduler by hand.
+  opts: { startRoutineScheduler?: boolean } = {}
 ) {
   const app = Fastify({ logger: false });
   // Local-only server (see docs/DECISIONS.md). The Tauri webview and the
@@ -234,12 +254,83 @@ export function buildServer(
   // just before each /chat turn and read back after, so the reply can carry
   // clickable task / document references. Declared before the caches below
   // since every builder's onReference closes over it.
-  const chatRefs = new Map<string, { type: "document" | "task" | "tool"; id: string }[]>();
+  const chatRefs = new Map<
+    string,
+    ({ type: "document" | "task" | "tool"; id: string } | { type: "link"; id: string; label: string })[]
+  >();
   const familyToolsDeps = (userId: string) => ({
     getCatalog: () => familyToolCatalog(userId),
     callOperation: (toolId: string, operation: string, args: Record<string, unknown>) =>
       callOperation(toolId, operation, args, supervisor),
   });
+
+  // Web access — one `logActivity` closure per user for the research agent.
+  const webDeps = (userId: string) =>
+    webEnabled()
+      ? { logActivity: (actor: string, action: string, detail: string) => store.scoped(userId).logActivity(actor, action, detail) }
+      : undefined;
+
+  // File-processing — probe the sandbox + installed tools once. Off unless
+  // FAMILY_AGENT_SHELL=1 AND bubblewrap can actually sandbox here.
+  const shellReady =
+    config.shellEnabled &&
+    (() => {
+      const sb = sandboxAvailable();
+      if (!sb.ok) {
+        console.warn(`shell/file-processing requested but ${sb.reason} — the workshop agent is off`);
+        return false;
+      }
+      if (installedTools().length === 0) {
+        console.warn("shell/file-processing on, but no curated CLI tools are installed — the workshop agent is off");
+        return false;
+      }
+      return true;
+    })();
+
+  // Drop a finished workspace file into a user's watched folder (the inbox
+  // watcher then files it as a document).
+  const saveWorkspaceToInbox = async (userId: string, filename: string, bytes: Buffer) => {
+    const user = store.getUser(userId);
+    if (!user) throw new Error("user not found");
+    const dir = userInboxDir(user);
+    await mkdir(dir, { recursive: true });
+    await writeFileAsync(join(dir, filename.replace(/[/\\]/g, "_")), bytes);
+  };
+
+  // Promote a finished workspace file into the document store (same pipeline
+  // as POST /documents/upload).
+  const saveWorkspaceAsDocument = async (userId: string, filename: string, bytes: Buffer) => {
+    const scoped = store.scoped(userId);
+    let rawText = "";
+    try {
+      rawText = await extractText(filename, bytes);
+    } catch {
+      rawText = `(binary file "${filename}" — ${bytes.length} bytes; no text extracted)`;
+    }
+    const doc = scoped.createDocument({ filename, rawText: rawText || `(empty)` });
+    try {
+      const diskName = await storeOriginalUpload(userId, doc.filename, bytes);
+      scoped.setDocumentOriginalDiskName(doc.id, diskName);
+      scoped.setDocumentOriginalMime(doc.id, mimeFromFilename(filename));
+    } catch {
+      /* no preview — the document row is already saved */
+    }
+    void extractDocument(extractionModel, scoped, doc);
+    void embedDocumentSafely(embedder, scoped, doc);
+    return { id: doc.id, filename: doc.filename };
+  };
+
+  const shellDeps = (userId: string) =>
+    shellReady
+      ? {
+          userId,
+          store: store.scoped(userId),
+          logActivity: (actor: string, action: string, detail: string) =>
+            store.scoped(userId).logActivity(actor, action, detail),
+          saveAsDocument: (filename: string, bytes: Buffer) => saveWorkspaceAsDocument(userId, filename, bytes),
+          saveToInbox: (filename: string, bytes: Buffer) => saveWorkspaceToInbox(userId, filename, bytes),
+        }
+      : undefined;
 
   const plannerAgents = makeAgentCache<FamilyAgent>((userId) =>
     buildFamilyAgent(store.scoped(userId), {
@@ -249,6 +340,8 @@ export function buildServer(
       onReference: (ref) => chatRefs.get(userId)?.push(ref),
       getEmbedder: () => embedder,
       familyTools: config.toolsEnabled ? familyToolsDeps(userId) : undefined,
+      web: webDeps(userId),
+      shell: shellDeps(userId),
     })
   );
   // The four "/<keyword>" caches only ever get built when that keyword was
@@ -277,6 +370,16 @@ export function buildServer(
     })
   );
   const notesAgents = makeAgentCache((userId) => buildFamilyNotesAgent(store.scoped(userId)));
+  const routineAgents = makeAgentCache((userId) => buildFamilyRoutineAgent(store.scoped(userId)));
+  const researchAgents = makeAgentCache((userId) =>
+    buildFamilyResearchAgent({
+      logActivity: (a, ac, d) => store.scoped(userId).logActivity(a, ac, d),
+      onReference: (ref) => chatRefs.get(userId)?.push(ref),
+    })
+  );
+  const workshopAgents = makeAgentCache((userId) =>
+    buildFamilyWorkshopAgent({ ...shellDeps(userId)!, onReference: (ref) => chatRefs.get(userId)?.push(ref) })
+  );
 
   // A tool build/improve/delete (or a model-client rebuild) invalidates every
   // one of the caches above in lockstep — miss one and a stale agent lingers.
@@ -287,6 +390,9 @@ export function buildServer(
     documentAgents.delete(userId);
     builderAgents.delete(userId);
     notesAgents.delete(userId);
+    routineAgents.delete(userId);
+    researchAgents.delete(userId);
+    workshopAgents.delete(userId);
   };
   const dropAllAgents = () => {
     plannerAgents.clear();
@@ -295,6 +401,9 @@ export function buildServer(
     documentAgents.clear();
     builderAgents.clear();
     notesAgents.clear();
+    routineAgents.clear();
+    researchAgents.clear();
+    workshopAgents.clear();
   };
   const agentFor = (userId: string) => plannerAgents.get(userId);
   const toolsAgentFor = (userId: string) => toolsAgents.get(userId);
@@ -302,12 +411,15 @@ export function buildServer(
   const documentAgentFor = (userId: string) => documentAgents.get(userId);
   const builderAgentFor = (userId: string) => builderAgents.get(userId);
   const notesAgentFor = (userId: string) => notesAgents.get(userId);
+  const routineAgentFor = (userId: string) => routineAgents.get(userId);
+  const researchAgentFor = (userId: string) => researchAgents.get(userId);
+  const workshopAgentFor = (userId: string) => workshopAgents.get(userId);
   // Resolve collected hints to {type, id, label}, deduped and capped.
   const resolveReferences = (userStore: ScopedStore, userId: string) => {
     const collected = chatRefs.get(userId) ?? [];
     chatRefs.delete(userId);
     const seen = new Set<string>();
-    const out: { type: "document" | "task" | "tool"; id: string; label: string }[] = [];
+    const out: { type: "document" | "task" | "tool" | "link"; id: string; label: string }[] = [];
     for (const r of collected) {
       const key = `${r.type}:${r.id}`;
       if (seen.has(key)) continue;
@@ -318,6 +430,9 @@ export function buildServer(
       } else if (r.type === "tool") {
         const t = userStore.getTool(r.id);
         if (t) out.push({ type: "tool", id: r.id, label: t.name });
+      } else if (r.type === "link") {
+        // A web page the research agent opened — id is the URL, label the title.
+        out.push({ type: "link", id: r.id, label: r.label || r.id });
       } else {
         const t = userStore.getTask(r.id);
         if (t) out.push({ type: "task", id: r.id, label: t.title });
@@ -337,11 +452,75 @@ export function buildServer(
     embedder = createEmbedder();
   };
 
+  // ---- scheduled routines ----
+  // The scheduler runs a routine's instruction through the same per-user agent
+  // caches a chat turn uses. "planner" is the full assistant; the others are
+  // one scoped-down specialist. "builder" is not reachable — a routine never
+  // generates or rewrites code unattended.
+  const runRoutineAction = async (userId: string, action: RoutineAction): Promise<string> => {
+    let agent: InvokableAgent;
+    switch (action.agent) {
+      case "task":
+        agent = taskAgentFor(userId);
+        break;
+      case "document":
+        agent = documentAgentFor(userId);
+        break;
+      case "notes":
+        agent = notesAgentFor(userId);
+        break;
+      case "tools":
+        if (!config.toolsEnabled) return "The Tools feature is turned off on this server.";
+        agent = toolsAgentFor(userId);
+        break;
+      case "research":
+        if (!webEnabled()) return "Web access is turned off on this server.";
+        agent = researchAgentFor(userId);
+        break;
+      default:
+        agent = agentFor(userId);
+    }
+    const instruction =
+      action.agent === "planner"
+        ? `${action.instruction}\n\n(This is an automated scheduled run with no one to answer follow-up questions — carry out the task and report the result concisely.)`
+        : action.instruction;
+    return askFamilyAgent(agent, instruction);
+  };
+
+  const routineScheduler = new RoutineScheduler(store, {
+    runAction: runRoutineAction,
+    tickMs: config.routineTickMs,
+    catchUpGraceMs: config.routineCatchUpGraceMs,
+  });
+  app.decorate("routineScheduler", routineScheduler);
+  if (opts.startRoutineScheduler && config.routinesEnabled) routineScheduler.start();
+
+  /** 404 body for a routine route when the feature is disabled server-wide. */
+  const routinesOff = (reply: FastifyReply) =>
+    reply.code(404).send({ error: "Scheduled routines are turned off on this server." });
+
+  const routineView = (r: RoutineRecord) => ({
+    id: r.id,
+    name: r.name,
+    enabled: r.enabled,
+    trigger: r.trigger,
+    triggerText: describeTrigger(r.trigger),
+    action: r.action,
+    deliverChannelId: r.deliverChannelId,
+    catchUp: r.catchUp,
+    nextRunAt: r.nextRunAt,
+    lastRunAt: r.lastRunAt,
+    lastStatus: r.lastStatus,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  });
+
   // Rows left mid-flight by a previous run will never finish on their own —
   // mark them failed so the UI offers a retry instead of a stuck spinner.
   store.failStalePendingExtractions();
   store.failStaleBuildingTools();
   store.failStalePendingMessages();
+  store.failStaleRoutineRuns();
   store.purgeExpiredSessions();
 
   // Build the semantic-search vector index for any document that predates the
@@ -381,6 +560,12 @@ export function buildServer(
     // "on" once a model is configured; actual reachability is checked lazily
     // and search falls back to keyword + fuzzy if it's down.
     semanticSearch: embeddingsEnabled() ? "on" : "off",
+    // Both clients hide the Routines screen when this is false.
+    routinesEnabled: config.routinesEnabled,
+    // "on" when an admin has configured a web search provider.
+    web: webEnabled() ? "on" : "off",
+    // "on" when file processing is enabled AND the sandbox works here.
+    shell: shellReady ? "on" : config.shellEnabled ? "unavailable" : "off",
   }));
 
   app.post("/_diag", async (req) => {
@@ -568,8 +753,13 @@ export function buildServer(
       let responseText: string;
       const forced = parseForcedAgentCommand(message);
       if (forced) {
-        if (forced.kind === "tools" && !config.toolsEnabled) {
-          responseText = "Tools aren't turned on for this server.";
+        const offByKind: Partial<Record<ForcedAgentKind, string>> = {
+          tools: config.toolsEnabled ? "" : "Tools aren't turned on for this server.",
+          research: webEnabled() ? "" : "Web access isn't turned on for this server.",
+          workshop: shellReady ? "" : "File processing isn't turned on for this server.",
+        };
+        if (offByKind[forced.kind]) {
+          responseText = offByKind[forced.kind]!;
         } else {
           const agentByKind: Record<ForcedAgentKind, (userId: string) => InvokableAgent> = {
             tools: toolsAgentFor,
@@ -577,6 +767,9 @@ export function buildServer(
             document: documentAgentFor,
             builder: builderAgentFor,
             notes: notesAgentFor,
+            routine: routineAgentFor,
+            research: researchAgentFor,
+            workshop: workshopAgentFor,
           };
           const fallbackByKind: Record<ForcedAgentKind, string> = {
             tools: "What can you do?",
@@ -584,6 +777,9 @@ export function buildServer(
             document: "What documents do I have?",
             builder: "What tools do we have, and what can be built?",
             notes: "What's on the sticky notes?",
+            routine: "List my scheduled routines.",
+            research: "What can you look up for me?",
+            workshop: "What files can you help me process?",
           };
           const agent = agentByKind[forced.kind](req.authUser.id);
           responseText = await askFamilyAgent(agent, forced.text || fallbackByKind[forced.kind], images, history);
@@ -1067,6 +1263,150 @@ export function buildServer(
     return { note };
   });
 
+  // ---- scheduled routines ----
+  const TriggerInputBody = z.object({
+    cron: z.string().trim().max(120).optional(),
+    dailyAt: z.string().trim().max(8).optional(),
+    weeklyOn: z.string().trim().max(12).optional(),
+    weeklyAt: z.string().trim().max(8).optional(),
+    monthlyDay: z.number().int().min(1).max(28).optional(),
+    monthlyAt: z.string().trim().max(8).optional(),
+    onceAt: z.string().trim().max(40).optional(),
+    everyMinutes: z.number().int().min(1).max(60 * 24 * 30).optional(),
+  });
+  const RoutineActionBody = z.object({
+    agent: z.enum(["planner", "task", "document", "notes", "tools", "research"]).default("planner"),
+    instruction: z.string().trim().min(1).max(4000),
+  });
+  const CreateRoutineBody = z.object({
+    name: z.string().trim().min(1).max(120),
+    trigger: TriggerInputBody,
+    action: RoutineActionBody,
+    deliverChannelId: z.string().trim().max(40).nullish(),
+    catchUp: z.enum(["skip", "run"]).optional(),
+    enabled: z.boolean().optional(),
+  });
+  const UpdateRoutineBody = z
+    .object({
+      name: z.string().trim().min(1).max(120).optional(),
+      enabled: z.boolean().optional(),
+      trigger: TriggerInputBody.optional(),
+      action: RoutineActionBody.optional(),
+      deliverChannelId: z.string().trim().max(40).nullish(),
+      catchUp: z.enum(["skip", "run"]).optional(),
+    })
+    .refine((b) => Object.values(b).some((v) => v !== undefined), { message: "Nothing to update." });
+
+  /** Recompute + persist next_run_at right after a create/update, so the client
+   *  shows a real "next run" without waiting for the scheduler's next tick. */
+  const primeSchedule = (userStore: ScopedStore, routine: RoutineRecord) => {
+    if (!routine.enabled) {
+      userStore.setRoutineSchedule(routine.id, { nextRunAt: null });
+      return;
+    }
+    try {
+      const next = nextRunAt(routine.trigger, new Date());
+      userStore.setRoutineSchedule(routine.id, { nextRunAt: next ? next.toISOString() : null });
+    } catch {
+      userStore.setRoutineSchedule(routine.id, { nextRunAt: null });
+    }
+  };
+
+  app.get("/routines", async (req, reply) => {
+    if (!config.routinesEnabled) return routinesOff(reply);
+    return { routines: req.userStore.listRoutines().map(routineView) };
+  });
+
+  app.post("/routines", async (req, reply) => {
+    if (!config.routinesEnabled) return routinesOff(reply);
+    const parsed = CreateRoutineBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    let trigger;
+    try {
+      trigger = parseTriggerInput(parsed.data.trigger);
+    } catch (err) {
+      return reply.code(400).send({ error: `Schedule: ${(err as Error).message}` });
+    }
+    if (trigger.kind === "once" && !nextRunAt(trigger, new Date())) {
+      return reply.code(400).send({ error: "That time is already in the past." });
+    }
+    const routine = req.userStore.createRoutine({
+      name: parsed.data.name,
+      trigger,
+      action: parsed.data.action,
+      deliverChannelId: parsed.data.deliverChannelId ?? null,
+      catchUp: parsed.data.catchUp,
+      enabled: parsed.data.enabled,
+    });
+    primeSchedule(req.userStore, routine);
+    return reply.code(201).send({ routine: routineView(req.userStore.getRoutine(routine.id)!) });
+  });
+
+  app.get("/routines/:id", async (req, reply) => {
+    if (!config.routinesEnabled) return routinesOff(reply);
+    const routine = req.userStore.getRoutine((req.params as { id: string }).id);
+    if (!routine) return reply.code(404).send({ error: "routine not found" });
+    return { routine: routineView(routine), runs: req.userStore.listRoutineRuns(routine.id, 20) };
+  });
+
+  app.patch("/routines/:id", async (req, reply) => {
+    if (!config.routinesEnabled) return routinesOff(reply);
+    const parsed = UpdateRoutineBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const { id } = req.params as { id: string };
+    if (!req.userStore.getRoutine(id)) return reply.code(404).send({ error: "routine not found" });
+    const patch: Parameters<ScopedStore["updateRoutine"]>[1] = {};
+    if (parsed.data.name !== undefined) patch.name = parsed.data.name;
+    if (parsed.data.enabled !== undefined) patch.enabled = parsed.data.enabled;
+    if (parsed.data.action !== undefined) patch.action = parsed.data.action;
+    if (parsed.data.deliverChannelId !== undefined) patch.deliverChannelId = parsed.data.deliverChannelId ?? null;
+    if (parsed.data.catchUp !== undefined) patch.catchUp = parsed.data.catchUp;
+    if (parsed.data.trigger !== undefined) {
+      try {
+        patch.trigger = parseTriggerInput(parsed.data.trigger);
+      } catch (err) {
+        return reply.code(400).send({ error: `Schedule: ${(err as Error).message}` });
+      }
+      if (patch.trigger.kind === "once" && !nextRunAt(patch.trigger, new Date())) {
+        return reply.code(400).send({ error: "That time is already in the past." });
+      }
+    }
+    const routine = req.userStore.updateRoutine(id, patch)!;
+    primeSchedule(req.userStore, routine);
+    return { routine: routineView(req.userStore.getRoutine(id)!) };
+  });
+
+  app.delete("/routines/:id", async (req, reply) => {
+    if (!config.routinesEnabled) return routinesOff(reply);
+    const routine = req.userStore.deleteRoutine((req.params as { id: string }).id);
+    if (!routine) return reply.code(404).send({ error: "routine not found" });
+    return { deleted: true };
+  });
+
+  app.get("/routines/:id/runs", async (req, reply) => {
+    if (!config.routinesEnabled) return routinesOff(reply);
+    const { id } = req.params as { id: string };
+    if (!req.userStore.getRoutine(id)) return reply.code(404).send({ error: "routine not found" });
+    const limit = Number((req.query as any)?.limit) || 20;
+    return { runs: req.userStore.listRoutineRuns(id, limit) };
+  });
+
+  // Run a routine right now. Serialized through the scheduler's queue (the model
+  // is single-threaded and slow), so this awaits until the run finishes — the
+  // same synchronous shape as POST /chat.
+  app.post("/routines/:id/run", async (req, reply) => {
+    if (!config.routinesEnabled) return routinesOff(reply);
+    const { id } = req.params as { id: string };
+    if (!req.userStore.getRoutine(id)) return reply.code(404).send({ error: "routine not found" });
+    const result = await app.routineScheduler.runNow(req.authUser.id, id);
+    return {
+      status: result.status,
+      output: result.output ?? null,
+      error: result.error ?? null,
+      run: req.userStore.listRoutineRuns(id, 1)[0] ?? null,
+    };
+  });
+
   // ---- builder tools ----
   const toolView = (t: ReturnType<ScopedStore["getTool"]>) =>
     t && {
@@ -1478,7 +1818,7 @@ async function main() {
     },
   };
 
-  const app = buildServer(store, hooks, supervisor);
+  const app = buildServer(store, hooks, supervisor, { startRoutineScheduler: true });
   const listenDeadline = Date.now() + 8000;
   let listenWarned = false;
   for (;;) {
@@ -1522,6 +1862,7 @@ async function main() {
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, async () => {
       mdns?.destroy();
+      app.routineScheduler.stop();
       supervisor.stopAll();
       toolsServer?.close();
       for (const w of watchers.values()) await w.close();

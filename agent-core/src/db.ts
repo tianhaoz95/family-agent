@@ -3,6 +3,13 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID, randomBytes } from "node:crypto";
 import { hashPassword, newSessionToken, sha256Hex } from "./auth.js";
+import type {
+  RoutineTrigger,
+  RoutineAction,
+  CatchUpPolicy,
+  RoutineRunTrigger,
+  RoutineRunStatus,
+} from "./routines.js";
 
 // Short, unambiguous ids (Crockford base32, no 0/O/1/I/L confusion) — small
 // local models reliably garble long UUIDs when copying them into tool
@@ -296,7 +303,8 @@ export interface ChatSessionSummary extends ChatSessionRecord {
 }
 
 export interface ChatReference {
-  type: "document" | "task" | "tool";
+  /** "link" is a web page the research agent opened — `id` is the URL. */
+  type: "document" | "task" | "tool" | "link";
   id: string;
   label: string;
 }
@@ -328,6 +336,41 @@ export interface StickyNoteRecord {
   y: number;
   createdAt: string;
   updatedAt: string;
+}
+
+// ---- scheduled routines ----
+// Per-user, like tasks/documents: a `user_id` column, scoped through
+// ScopedStore. `trigger` and `action` are JSON (RoutineTrigger / RoutineAction
+// from routines.ts). `next_run_at` is the one field the scheduler polls.
+export interface RoutineRecord {
+  id: string;
+  userId: string;
+  name: string;
+  enabled: boolean;
+  trigger: RoutineTrigger;
+  action: RoutineAction;
+  /** Optional family channel the run's output is also posted into (as @agent). */
+  deliverChannelId: string | null;
+  /** What to do with an occurrence missed while the process was down. */
+  catchUp: CatchUpPolicy;
+  /** ISO; null when disabled or a spent one-shot. The scheduler polls this. */
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastStatus: RoutineRunStatus | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoutineRunRecord {
+  id: string;
+  routineId: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: RoutineRunStatus;
+  /** How the run was triggered. */
+  trigger: RoutineRunTrigger;
+  output: string | null;
+  error: string | null;
 }
 
 const SCHEMA = `
@@ -482,6 +525,37 @@ CREATE TABLE IF NOT EXISTS document_embeddings (
   PRIMARY KEY (doc_id, chunk_index)
 );
 CREATE INDEX IF NOT EXISTS idx_document_embeddings_user ON document_embeddings(user_id, model);
+
+CREATE TABLE IF NOT EXISTS routines (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  trigger TEXT NOT NULL,
+  action TEXT NOT NULL,
+  deliver_channel_id TEXT,
+  catch_up TEXT NOT NULL DEFAULT 'skip',
+  next_run_at TEXT,
+  last_run_at TEXT,
+  last_status TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_routines_user ON routines(user_id);
+CREATE INDEX IF NOT EXISTS idx_routines_due ON routines(enabled, next_run_at);
+
+CREATE TABLE IF NOT EXISTS routine_runs (
+  id TEXT PRIMARY KEY,
+  routine_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  status TEXT NOT NULL,
+  trigger_kind TEXT NOT NULL,
+  output TEXT,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_routine_runs_routine ON routine_runs(routine_id, started_at);
 `;
 
 // Columns added after a release. `CREATE TABLE IF NOT EXISTS` is a no-op
@@ -830,6 +904,8 @@ export class Store {
       "sticky_notes",
       "chat_messages",
       "chat_sessions",
+      "routines",
+      "routine_runs",
     ] as const) {
       this.db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).run(id);
     }
@@ -1225,6 +1301,38 @@ export class Store {
         "UPDATE tools SET revision_state = 'The last change was interrupted — try again.' WHERE revision_state = 'revising'"
       )
       .run();
+    return Number(info.changes ?? 0);
+  }
+
+  // ---- scheduled routines (cross-user, for the scheduler) ----
+  // ScopedStore owns per-user routine CRUD; these two let the process-wide
+  // RoutineScheduler find work without knowing users up front.
+
+  /** {id, userId} for every enabled routine — drives startup reconciliation. */
+  allEnabledRoutineIds(): { id: string; userId: string }[] {
+    return (
+      this.db.prepare("SELECT id, user_id FROM routines WHERE enabled = 1").all() as any[]
+    ).map((r) => ({ id: r.id, userId: r.user_id }));
+  }
+
+  /** {id, userId} for every enabled routine whose next_run_at has arrived. */
+  dueRoutineIds(nowIso: string): { id: string; userId: string }[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT id, user_id FROM routines WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?"
+        )
+        .all(nowIso) as any[]
+    ).map((r) => ({ id: r.id, userId: r.user_id }));
+  }
+
+  /** A run left "running" by a killed process will never finish on its own. */
+  failStaleRoutineRuns(): number {
+    const info = this.db
+      .prepare(
+        "UPDATE routine_runs SET status = 'error', error = 'The run was interrupted.', finished_at = ? WHERE status = 'running'"
+      )
+      .run(new Date().toISOString());
     return Number(info.changes ?? 0);
   }
 }
@@ -2179,6 +2287,199 @@ export class ScopedStore {
       .run(now, sessionId, this.userId);
     return rec;
   }
+
+  // ---- scheduled routines ----
+  // next_run_at is left null on create; the RoutineScheduler computes it on its
+  // next reconcile/tick (or the server computes it inline right after create so
+  // a "run tomorrow at 9" routine has a visible next time immediately).
+
+  createRoutine(input: {
+    name: string;
+    trigger: RoutineTrigger;
+    action: RoutineAction;
+    deliverChannelId?: string | null;
+    catchUp?: CatchUpPolicy;
+    enabled?: boolean;
+  }): RoutineRecord {
+    const now = new Date().toISOString();
+    const rec: RoutineRecord = {
+      id: shortId(),
+      userId: this.userId,
+      name: input.name.trim() || "Untitled routine",
+      enabled: input.enabled ?? true,
+      trigger: input.trigger,
+      action: input.action,
+      deliverChannelId: input.deliverChannelId ?? null,
+      catchUp: input.catchUp ?? "skip",
+      nextRunAt: null,
+      lastRunAt: null,
+      lastStatus: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO routines (id, user_id, name, enabled, trigger, action, deliver_channel_id, catch_up, next_run_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`
+      )
+      .run(
+        rec.id,
+        this.userId,
+        rec.name,
+        rec.enabled ? 1 : 0,
+        JSON.stringify(rec.trigger),
+        JSON.stringify(rec.action),
+        rec.deliverChannelId,
+        rec.catchUp,
+        rec.createdAt,
+        rec.updatedAt
+      );
+    this.logActivity("routine", "routine.created", `Created routine "${rec.name}"`);
+    return rec;
+  }
+
+  listRoutines(): RoutineRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM routines WHERE user_id = ? ORDER BY created_at DESC")
+      .all(this.userId) as any[];
+    return rows.map(rowToRoutine);
+  }
+
+  getRoutine(id: string): RoutineRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM routines WHERE id = ? AND user_id = ?").get(id, this.userId) as any;
+    return row ? rowToRoutine(row) : undefined;
+  }
+
+  updateRoutine(
+    id: string,
+    patch: {
+      name?: string;
+      enabled?: boolean;
+      trigger?: RoutineTrigger;
+      action?: RoutineAction;
+      deliverChannelId?: string | null;
+      catchUp?: CatchUpPolicy;
+    }
+  ): RoutineRecord | undefined {
+    const existing = this.getRoutine(id);
+    if (!existing) return undefined;
+    const sets: string[] = [];
+    const values: (string | number | null)[] = [];
+    if (patch.name !== undefined) {
+      sets.push("name = ?");
+      values.push(patch.name.trim() || "Untitled routine");
+    }
+    if (patch.enabled !== undefined) {
+      sets.push("enabled = ?");
+      values.push(patch.enabled ? 1 : 0);
+    }
+    if (patch.trigger !== undefined) {
+      sets.push("trigger = ?");
+      values.push(JSON.stringify(patch.trigger));
+    }
+    if (patch.action !== undefined) {
+      sets.push("action = ?");
+      values.push(JSON.stringify(patch.action));
+    }
+    if (patch.deliverChannelId !== undefined) {
+      sets.push("deliver_channel_id = ?");
+      values.push(patch.deliverChannelId);
+    }
+    if (patch.catchUp !== undefined) {
+      sets.push("catch_up = ?");
+      values.push(patch.catchUp);
+    }
+    // Any change to the trigger, or re-enabling, invalidates the stored next
+    // time — clear it so the scheduler recomputes on its next pass.
+    if (patch.trigger !== undefined || patch.enabled === true) {
+      sets.push("next_run_at = NULL");
+    }
+    if (sets.length === 0) return existing;
+    sets.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    this.db
+      .prepare(`UPDATE routines SET ${sets.join(", ")} WHERE id = ? AND user_id = ?`)
+      .run(...values, id, this.userId);
+    return this.getRoutine(id);
+  }
+
+  /** Scheduler-only: persist a recomputed schedule / last-run outcome. */
+  setRoutineSchedule(
+    id: string,
+    patch: {
+      nextRunAt?: string | null;
+      lastRunAt?: string;
+      lastStatus?: RoutineRunStatus;
+      enabled?: boolean;
+    }
+  ): void {
+    const sets: string[] = [];
+    const values: (string | number | null)[] = [];
+    if ("nextRunAt" in patch) {
+      sets.push("next_run_at = ?");
+      values.push(patch.nextRunAt ?? null);
+    }
+    if (patch.lastRunAt !== undefined) {
+      sets.push("last_run_at = ?");
+      values.push(patch.lastRunAt);
+    }
+    if (patch.lastStatus !== undefined) {
+      sets.push("last_status = ?");
+      values.push(patch.lastStatus);
+    }
+    if (patch.enabled !== undefined) {
+      sets.push("enabled = ?");
+      values.push(patch.enabled ? 1 : 0);
+    }
+    if (sets.length === 0) return;
+    this.db.prepare(`UPDATE routines SET ${sets.join(", ")} WHERE id = ? AND user_id = ?`).run(...values, id, this.userId);
+  }
+
+  deleteRoutine(id: string): RoutineRecord | undefined {
+    const routine = this.getRoutine(id);
+    if (!routine) return undefined;
+    this.db.prepare("DELETE FROM routine_runs WHERE routine_id = ? AND user_id = ?").run(id, this.userId);
+    this.db.prepare("DELETE FROM routines WHERE id = ? AND user_id = ?").run(id, this.userId);
+    this.logActivity("routine", "routine.deleted", `Deleted routine "${routine.name}"`);
+    return routine;
+  }
+
+  startRoutineRun(routineId: string, trigger: RoutineRunTrigger): string {
+    const id = shortId();
+    this.db
+      .prepare(
+        "INSERT INTO routine_runs (id, routine_id, user_id, started_at, status, trigger_kind) VALUES (?, ?, ?, ?, 'running', ?)"
+      )
+      .run(id, routineId, this.userId, new Date().toISOString(), trigger);
+    return id;
+  }
+
+  finishRoutineRun(
+    runId: string,
+    outcome: { status: RoutineRunStatus; output?: string; error?: string }
+  ): void {
+    this.db
+      .prepare(
+        "UPDATE routine_runs SET status = ?, output = ?, error = ?, finished_at = ? WHERE id = ? AND user_id = ?"
+      )
+      .run(
+        outcome.status,
+        outcome.output ?? null,
+        outcome.error ?? null,
+        new Date().toISOString(),
+        runId,
+        this.userId
+      );
+  }
+
+  listRoutineRuns(routineId: string, limit = 20): RoutineRunRecord[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM routine_runs WHERE routine_id = ? AND user_id = ? ORDER BY started_at DESC LIMIT ?"
+      )
+      .all(routineId, this.userId, Math.min(Math.max(limit, 1), 100)) as any[];
+    return rows.map(rowToRoutineRun);
+  }
 }
 
 /** First ~60 chars of a message, single line, trimmed — the session's default
@@ -2319,6 +2620,46 @@ function parseRefs(raw: unknown): ChatReference[] {
   } catch {
     return [];
   }
+}
+
+function safeJson<T>(raw: unknown, fallback: T): T {
+  if (typeof raw !== "string" || raw.length === 0) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function rowToRoutine(r: any): RoutineRecord {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    name: r.name,
+    enabled: !!r.enabled,
+    trigger: safeJson<RoutineTrigger>(r.trigger, { kind: "every", minutes: 1440 }),
+    action: safeJson<RoutineAction>(r.action, { agent: "planner", instruction: "" }),
+    deliverChannelId: r.deliver_channel_id ?? null,
+    catchUp: (r.catch_up as CatchUpPolicy) ?? "skip",
+    nextRunAt: r.next_run_at ?? null,
+    lastRunAt: r.last_run_at ?? null,
+    lastStatus: (r.last_status as RoutineRunStatus) ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function rowToRoutineRun(r: any): RoutineRunRecord {
+  return {
+    id: r.id,
+    routineId: r.routine_id,
+    startedAt: r.started_at,
+    finishedAt: r.finished_at ?? null,
+    status: (r.status as RoutineRunStatus) ?? "error",
+    trigger: (r.trigger_kind as RoutineRunTrigger) ?? "schedule",
+    output: r.output ?? null,
+    error: r.error ?? null,
+  };
 }
 
 function rowToTool_(r: any): ToolRecord {

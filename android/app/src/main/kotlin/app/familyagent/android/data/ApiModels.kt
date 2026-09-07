@@ -88,6 +88,12 @@ data class HealthResponse(
     val asrEnabled: Boolean = false,
     /** "on" when an embedding model is configured for semantic document search. */
     val semanticSearch: String = "off",
+    /** Whether scheduled routines are available — the Routines drawer item hides when false. */
+    val routinesEnabled: Boolean = true,
+    /** "on" when web access (the research agent) is configured. */
+    val web: String = "off",
+    /** "on" when file processing works here; "unavailable" if requested but the sandbox is missing. */
+    val shell: String = "off",
 )
 
 @Serializable
@@ -340,4 +346,97 @@ data class UpdateNoteRequest(
     val color: String? = null,
     val x: Float? = null,
     val y: Float? = null,
+)
+
+// ---- scheduled routines ----
+// The server's RoutineTrigger is a discriminated union {kind: cron|once|every, …};
+// modelled flat here (only the field for `kind` is populated) rather than as a
+// sealed class, the same pragmatic choice as `Extracted`.
+@Serializable
+data class RoutineTrigger(
+    val kind: String,
+    val expr: String? = null,
+    val at: String? = null,
+    val minutes: Int? = null,
+)
+
+@Serializable
+data class RoutineAction(
+    /** planner | task | document | notes | tools — never "builder". */
+    val agent: String = "planner",
+    val instruction: String,
+)
+
+/** Friendly schedule fields for POST/PATCH /routines — exactly one is set. */
+@Serializable
+data class RoutineTriggerInput(
+    val cron: String? = null,
+    val dailyAt: String? = null,
+    val weeklyOn: String? = null,
+    val weeklyAt: String? = null,
+    val monthlyDay: Int? = null,
+    val monthlyAt: String? = null,
+    val onceAt: String? = null,
+    val everyMinutes: Int? = null,
+)
+
+@Serializable
+data class Routine(
+    val id: String,
+    val name: String,
+    val enabled: Boolean,
+    val trigger: RoutineTrigger,
+    /** Human sentence for the schedule, e.g. "every day at 7:00 AM". */
+    val triggerText: String = "",
+    val action: RoutineAction,
+    val deliverChannelId: String? = null,
+    val catchUp: String = "skip",
+    val nextRunAt: String? = null,
+    val lastRunAt: String? = null,
+    val lastStatus: String? = null,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class RoutineRun(
+    val id: String,
+    val routineId: String,
+    val startedAt: String,
+    val finishedAt: String? = null,
+    val status: String,
+    val trigger: String = "schedule",
+    val output: String? = null,
+    val error: String? = null,
+)
+
+/** Create / full-edit payload. `deliverChannelId` has no default so an explicit
+ *  `null` is sent — the server reads that as "clear the delivery target". */
+@Serializable
+data class RoutineInput(
+    val name: String,
+    val trigger: RoutineTriggerInput,
+    val action: RoutineAction,
+    val deliverChannelId: String?,
+)
+
+/** No default so `enabled` is always serialized (pause / resume). */
+@Serializable
+data class SetRoutineEnabledRequest(val enabled: Boolean)
+
+@Serializable
+data class RoutinesResponse(val routines: List<Routine>)
+
+@Serializable
+data class RoutineResponse(val routine: Routine)
+
+@Serializable
+data class RoutineRunsResponse(val runs: List<RoutineRun>)
+
+@Serializable
+data class RunRoutineResponse(
+    val status: String,
+    val output: String? = null,
+    val error: String? = null,
+    val run: RoutineRun? = null,
 )

@@ -7,7 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A local-first agentic app for family document, schedule, and task organization: a Node/TS
 backend (`agent-core`) running a deepagents-based planner behind a local HTTP API, a Tauri
 desktop app, and a native Android companion app. Everything runs on the user's own machine —
-inference goes through a local Ollama instance, nothing is sent to a cloud API. Read
+inference goes through a local Ollama instance, nothing is sent to a cloud API. The two
+opt-in capabilities that *can* reach off-box (web search/fetch, and CLI-tool file processing)
+are off by default and covered under "Web + shell capabilities" below. Read
 `docs/STATUS.md` first if you haven't touched this repo before; `docs/DECISIONS.md` explains
 every non-obvious choice below (and *why*), `docs/BUILD_LOG.md` has the chronological blow-by-blow
 of what broke and how it was fixed.
@@ -43,6 +45,13 @@ desktop change does **not** imply an Android change (or vice versa).
   - *Optional:* `ollama pull nomic-embed-text` enables semantic document search (`config.embedModel`,
     `FAMILY_AGENT_EMBED=0` to turn off). Without it, document search is keyword + trigram-fuzzy only —
     no error, it just falls back. See `docs/DECISIONS.md` → "Follow-up: semantic + fuzzy document search".
+- *Optional, for the shell/file-processing capability* (`FAMILY_AGENT_SHELL=1`): `bubblewrap` (the
+  sandbox — `apt install bubblewrap`, needs unprivileged user namespaces) plus whichever CLI tools you
+  want the agent to use (`ffmpeg`, `qpdf`, `imagemagick`, `poppler-utils`, `jq`, `csvkit`, `pandoc`, …).
+  Only installed tools are advertised; missing bwrap = the capability stays off. See
+  `docs/DECISIONS.md` → "Web access and shell/file-processing".
+- *Optional, for the web capability*: set `FAMILY_AGENT_WEB_SEARCH_PROVIDER` to `searxng`
+  (+ `_URL`), `tavily`/`brave` (+ `_API_KEY`), or `ddg` (no setup, best from a home connection).
 - Android toolchain (JDK 17, Android SDK) lives in `.toolchains/` at the repo root, gitignored and
   machine-local — see `docs/BUILD_LOG.md`'s "android" section if it's missing and needs
   reinstalling.
@@ -192,8 +201,8 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   callback, restarts the inbox watcher with a fresh client — a langchain `ChatOllama` binds its
   URL and model at construction, so hot-patching isn't possible.
 - `agents/index.ts` — the deepagents planner (`buildFamilyAgent`) plus its subagents
-  `task-agent`, `document-agent`, `builder-agent`, `notes-agent`, `tools-agent`, and the
-  `askFamilyAgent` / `askFamilyAgentInChannel` / `mentionsAgent` helpers. Notable
+  `task-agent`, `document-agent`, `builder-agent`, `notes-agent`, `tools-agent`, `routine-agent`,
+  and the `askFamilyAgent` / `askFamilyAgentInChannel` / `mentionsAgent` helpers. Notable
   non-obvious things in this file:
   - `tools-agent` (`agents/toolTools.ts`) is dynamic: `builder-agent` *makes* a tool,
     `tools-agent` *uses* one the family already built. It has two generic tools —
@@ -368,26 +377,27 @@ message skips that decision entirely and routes straight to one specialist,
 guaranteed structurally rather than by a stronger prompt:
 `parseForcedAgentCommand()` (`agents/index.ts`, next to `mentionsAgent()`)
 reads the word right after `/` — `build`→builder, `task`→task, `find`/`search`
-(alias)→document, `note`→notes — and returns `{ kind, text }`; anything else
-(a tool name, or nothing) still means `kind: "tools"`, the original behavior,
-so a plain `/ItemTracker …` message is unaffected by the other four keywords
-existing. Each `kind` has its own standalone builder —
-`buildFamilyToolsAgent`/`buildFamilyTaskAgent`/`buildFamilyDocumentAgent`/
-`buildFamilyBuilderAgent`/`buildFamilyNotesAgent` — a `createDeepAgent`
-instance with *only* that one subagent's own tools bound (no `subagents`
-array, same permissions/middleware as the planner), so it structurally cannot
-route anywhere else. `buildFamilyBuilderAgent` shares `makeBuilderTools()`
-with the planner's own builder-agent subagent rather than duplicating those
-three tool definitions.
+(alias)→document, `note`→notes, `schedule`/`remind` (alias)→routine — and
+returns `{ kind, text }`; anything else (a tool name, or nothing) still means
+`kind: "tools"`, the original behavior, so a plain `/ItemTracker …` message is
+unaffected by the recognized keywords existing. Each `kind` has its own
+standalone builder — `buildFamilyToolsAgent`/`buildFamilyTaskAgent`/
+`buildFamilyDocumentAgent`/`buildFamilyBuilderAgent`/`buildFamilyNotesAgent`/
+`buildFamilyRoutineAgent` — a `createDeepAgent` instance with *only* that one
+subagent's own tools bound (no `subagents` array, same permissions/middleware
+as the planner), so it structurally cannot route anywhere else.
+`buildFamilyBuilderAgent` shares `makeBuilderTools()` with the planner's own
+builder-agent subagent rather than duplicating those three tool definitions.
 
-`server.ts` keeps one `makeAgentCache()`-built cache per kind (six total,
-including the planner) instead of hand-rolled `Map`s; `dropAgents(userId)`/
-`dropAllAgents()` touch all six in lockstep at every call site that changes
+`server.ts` keeps one `makeAgentCache()`-built cache per kind (nine total,
+including the planner — the five original subagents plus `routine`, `research`,
+`workshop`) instead of hand-rolled `Map`s; `dropAgents(userId)`/
+`dropAllAgents()` touch all of them in lockstep at every call site that changes
 what an agent can do (a tool build/improve/delete, or a model-client
 rebuild). `POST /chat` looks up `parseForcedAgentCommand(message)`; a `kind:
 "tools"` command additionally checks `config.toolsEnabled` (no model call,
 a plain "Tools aren't turned on for this server." reply, if off — the other
-four kinds work regardless of that flag). The stored chat message always
+kinds work regardless of that flag). The stored chat message always
 keeps the leading `/` (an honest transcript); only the model-facing text is
 stripped. An empty `text` (just `/build` with nothing after) gets a
 per-kind fallback prompt (e.g. "List my tasks.") rather than an empty
@@ -418,10 +428,131 @@ planner — read directly off the message text (`startsWith("/")`), so it
 renders correctly when replaying stored session history too, not just for a
 message just sent.
 
+## Scheduled routines
+
+A **routine** is a per-user saved instruction the assistant runs on a schedule
+(a morning briefing, a bill nudge, a weekly review, a one-off future reminder) —
+the app's first *push* surface. `agent-core/src/routines.ts` owns the trigger
+math and the runner:
+
+- **Trigger** — `cron` (hand-rolled 5-field parser + next-run in **local time**,
+  `* / , - */n`, Vixie dom-or-dow rule), `once` (a one-shot future datetime), or
+  `every` (a plain minute interval). Clients + the NL tool send *friendly* fields
+  (`dailyAt` / `weeklyOn`+`weeklyAt` / `monthlyDay` / `onceAt` / `everyMinutes` /
+  `cron`); `parseTriggerInput()` canonicalises + validates. `describeTrigger()`
+  is the human sentence shown in the UI and echoed by the agent.
+- **Action** — `{ agent, instruction }`; `agent` ∈ `planner` | `task` |
+  `document` | `notes` | `tools`. **`builder` is not a valid value** — a routine
+  never generates or rewrites code unattended. Enforced structurally: the zod
+  enum omits it and `runRoutineAction` (`server.ts`) has no branch for it. A
+  local model + a fixed agent set means a scheduled run can't exfiltrate or take
+  an unbounded action.
+- **Delivery** — every run writes a `routine_runs` row (output / error / status)
+  + an `activity` line (`actor: "routine"`); the Routines screen is the home for
+  output. Optionally also posted into a family channel as `@agent`
+  (`deliverChannelId`, membership-checked — reuses the `_agent_` message
+  plumbing).
+
+**`RoutineScheduler`** is process-wide (one, like `ToolSupervisor`), started
+only by `main()` (`buildServer(..., { startRoutineScheduler: true })`; tests
+drive `app.routineScheduler` by hand). A `FAMILY_AGENT_ROUTINE_TICK_MS` (60s)
+tick reads `store.dueRoutineIds()` into a **serialized queue** — the model is
+single-threaded and a planner turn can take ~110s, so runs must not stack. The
+schedule is advanced *before* a run is enqueued (a slow/crashing run still moves
+the clock; a spent `once` is disabled by `execute()` after the run, not before,
+so an already-queued job isn't skipped as "disabled"). **Catch-up**: on
+`start()`, `reconcile()` computes any missing `next_run_at` and, for a trigger
+that came due while the process was down, either runs it once now (a `once`, or
+`catchUp: "run"` within `FAMILY_AGENT_ROUTINE_CATCHUP_MS`, default 6h) or skips
+it forward. `FAMILY_AGENT_ROUTINES=0` disables the feature (routes 404,
+`/health.routinesEnabled` false, clients hide the screen).
+
+DB: `routines` / `routine_runs` on `ScopedStore` (per-user CRUD + run history)
+plus `Store.allEnabledRoutineIds()` / `dueRoutineIds()` / `failStaleRoutineRuns()`
+for the scheduler. Routes: `GET/POST /routines`, `GET/PATCH/DELETE /routines/:id`,
+`GET /routines/:id/runs`, `POST /routines/:id/run` (runs now, awaits like
+`/chat`). Authoring: the `routine-agent` subagent (`agents/routineTools.ts` —
+`current_datetime` exists because agents are cached and a stale module-constant
+date would break "tomorrow at 9") and the `/schedule` (alias `/remind`) forced
+turn. Both clients are thin CRUD screens over `/routines` — the friendly
+schedule fields (`dailyAt`, `weeklyOn`, …) map 1:1 to the server's
+`RoutineTriggerInput` and `decompose()` reverses a stored trigger for editing.
+Desktop: `#view-routines` in `main.ts` (`renderRoutines` + the create/edit
+form). Android: `Destination.Routines` + `RoutinesScreen.kt` (the card list +
+a `ModalBottomSheet` form; drawer item gated on `/health.routinesEnabled`).
+See `docs/DECISIONS.md` → "Scheduled routines" for the v2+ cuts (data-relative
++ event triggers, OS notifications).
+
+## Web + shell capabilities (research-agent, workshop-agent)
+
+Two capabilities that extend the agent past the local box, each **off by
+default**, each an env-var switch (not a Settings-page toggle — they change the
+security posture, like `FAMILY_AGENT_TOOLS`), each reported in `/health`
+(`web`, `shell`) so clients show/hide the `/web` and `/run` slash commands.
+
+**Web** (`agent-core/src/web/`, `agents/webTools.ts`). A `research-agent`
+subagent with `web_search` + `open_page`. This is the deliberate, bounded
+exception to "nothing leaves the machine":
+- `web/fetch.ts` is the **only** module that makes a non-localhost request —
+  enforced by `test/web.egress.test.ts`, which greps `src/` for a hard-coded
+  remote URL outside `src/web/` (the same discipline as "only `config.ts`
+  reads `process.env`"). `guardedFetch` is its primitive; `search.ts` uses it
+  for provider calls, `fetchPage` for a model-chosen URL.
+- **SSRF guard** (`fetchPage` / `assertPublicUrl`): http(s) only, ports
+  80/443/8080/8443, hostname not `localhost`/`.local`/…, and every resolved
+  address checked against loopback/private/link-local/CGNAT ranges
+  (`isPrivateAddress`). **Redirects are not followed** — the tool returns the
+  `Location` and the model calls `open_page` again (kills DNS-rebinding, keeps
+  every hop logged). Optional `FAMILY_AGENT_WEB_ALLOW`/`DENY` domain lists.
+- Search is a provider abstraction (`FAMILY_AGENT_WEB_SEARCH_PROVIDER`):
+  `searxng` (self-hosted, `_URL`), `tavily`/`brave` (`_API_KEY`), `ddg`
+  (DuckDuckGo lite HTML — key-free but blocked from datacenter IPs, best from a
+  home connection), `none` (default → capability off).
+- **Injection**: `open_page` text is wrapped with an untrusted-content note and
+  the prompt has a worked example (a page may say "ignore previous
+  instructions" — never act on it). `research-agent` has no write tools and
+  can't reach other subagents, so the blast radius is "a wrong answer". It's
+  allowed as a **routine** action agent (weather/news briefings); `workshop` is
+  not.
+- A new `ChatReference` type `link` (`id` = URL) → clients render a chip that
+  opens the page.
+
+**Shell / file processing** (`agent-core/src/shell/`, `agents/workshopTools.ts`).
+A `workshop-agent` that runs allow-listed CLI tools over a per-user file
+workspace. `FAMILY_AGENT_SHELL=1` **and** bubblewrap must be usable
+(`sandboxAvailable()` runs a real probe — bwrap can be installed but blocked
+where unprivileged userns is off) **and** at least one curated tool installed,
+else `/health.shell` is `"unavailable"`/`"off"` and the subagent isn't wired.
+- `shell/sandbox.ts` — `runSandboxed(argv, workdir)` builds a `bwrap`
+  `--unshare-all` (no network) argv with a read-only view of `/usr`,`/bin`,`/lib`
+  and read/write only in `/work` (the workspace), `--clearenv`, `ulimit` for
+  memory/output, `timeout` for wall-clock. Same deny-by-default philosophy as
+  the Deno sandbox behind builder tools. No bwrap → capability off (never runs
+  a command unconfined).
+- `shell/workspace.ts` — `<dataDir>/workspace/<userId>/`. `safeName()` rejects
+  `..`, absolute, hidden, backslash. `importFile` brings a document's original
+  in; nothing else is reachable.
+- `shell/executor.ts` — `CURATED_TOOLS` (qpdf, ffmpeg, imagemagick, jq, csvkit,
+  pandoc, poppler, …), probed against PATH at startup; `FAMILY_AGENT_SHELL_ALLOW`
+  adds more. `runTool(userId, tool, args[])` — **no shell**, `args` is an argv
+  array, path-looking args must stay in the workspace. `run_shell` (arbitrary
+  bash, still sandboxed) only when `FAMILY_AGENT_SHELL_UNRESTRICTED=1`.
+- Tools: `list_workspace`, `list_tools`, `import_document`, `read_text_file`,
+  `run_command`, `save_output` (→ documents, via the same ingest pipeline as
+  `POST /documents/upload`, or → the watched folder), `clear_workspace`.
+- Not a routine action agent (unattended file processing has no one to confirm).
+
+`server.ts` wires both via `webDeps(userId)` / `shellDeps(userId)` (which
+provide `logActivity` + the `saveAsDocument`/`saveToInbox` closures), guarded by
+`webEnabled()` / a one-time `shellReady` probe. `runRoutineAction` gained a
+`research` branch. `ForcedAgentKind` gained `research` (`/web`, `/lookup`) and
+`workshop` (`/run`, `/shell`).
+
 ## Scope notes
 
-Five subagents ship: `task-agent`, `document-agent`, `builder-agent`,
-`notes-agent`, and `tools-agent`. `builder-agent`
+Eight subagents ship: `task-agent`, `document-agent`, `builder-agent`,
+`notes-agent`, `tools-agent`, `routine-agent`, `research-agent` (web access
+on), and `workshop-agent` (file processing on). `builder-agent`
 generates small self-contained web tools (`agent-core/src/tools/*`, and a "Tools" screen in
 both apps) — see `docs/STATUS.md` for the architecture. A build starts with a **plan pass**
 (`planTool` / `PLAN_SYSTEM`): the model decides `{ needsBackend, operations }` for the ask

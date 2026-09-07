@@ -301,6 +301,36 @@ class FamilyAgentApi(
         sendNoBody("DELETE", "/notes/$id")
     }
 
+    // ---- scheduled routines ----
+    suspend fun listRoutines(): List<Routine> =
+        json.decodeFromString<RoutinesResponse>(get("/routines")).routines
+
+    suspend fun createRoutine(input: RoutineInput): Routine =
+        json.decodeFromString<RoutineResponse>(
+            send("POST", "/routines", json.encodeToString(input))
+        ).routine
+
+    suspend fun updateRoutine(id: String, input: RoutineInput): Routine =
+        json.decodeFromString<RoutineResponse>(
+            send("PATCH", "/routines/$id", json.encodeToString(input))
+        ).routine
+
+    suspend fun setRoutineEnabled(id: String, enabled: Boolean): Routine =
+        json.decodeFromString<RoutineResponse>(
+            send("PATCH", "/routines/$id", json.encodeToString(SetRoutineEnabledRequest(enabled)))
+        ).routine
+
+    suspend fun deleteRoutine(id: String) {
+        sendNoBody("DELETE", "/routines/$id")
+    }
+
+    suspend fun listRoutineRuns(id: String, limit: Int = 20): List<RoutineRun> =
+        json.decodeFromString<RoutineRunsResponse>(get("/routines/$id/runs?limit=$limit")).runs
+
+    /** Run a routine now. The call blocks until the run finishes (can be slow). */
+    suspend fun runRoutine(id: String): RunRoutineResponse =
+        json.decodeFromString(sendNoBody("POST", "/routines/$id/run"))
+
     suspend fun listTools(): List<Tool> = json.decodeFromString<ToolsResponse>(get("/tools")).tools
 
     suspend fun buildTool(prompt: String) {

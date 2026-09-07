@@ -10,6 +10,9 @@ import app.familyagent.android.data.DocumentSearchHit
 import app.familyagent.android.data.FamilyAgentApi
 import app.familyagent.android.data.FamilyMember
 import app.familyagent.android.data.Message
+import app.familyagent.android.data.Routine
+import app.familyagent.android.data.RoutineInput
+import app.familyagent.android.data.RoutineRun
 import app.familyagent.android.data.SettingsStore
 import app.familyagent.android.data.StickyNote
 import app.familyagent.android.data.Task
@@ -102,6 +105,14 @@ data class AppUiState(
     val channelSending: Boolean = false,
     val notes: List<StickyNote> = emptyList(),
     val noteScope: String = "shared",
+    // ---- scheduled routines ----
+    /** Server has routines enabled (from /health) — hides the Routines drawer item. */
+    val routinesEnabled: Boolean = true,
+    val routines: List<Routine> = emptyList(),
+    /** Transient one-liner under the header ("Running…", "Failed: …"). */
+    val routineStatus: String? = null,
+    /** Recent runs, loaded on demand when a routine card is expanded. */
+    val routineRuns: Map<String, List<RoutineRun>> = emptyMap(),
     /** Non-null while the detail bottom-sheet is open. */
     val detail: DetailContent? = null,
 ) {
@@ -235,6 +246,7 @@ class AppViewModel(
                         toolsBaseUrl = toolsBaseUrl(_state.value.serverUrl, h.toolsPort),
                         voiceEnabled = h.asrEnabled,
                         semanticSearchEnabled = h.semanticSearch == "on",
+                        routinesEnabled = h.routinesEnabled,
                     )
                 }
                 .onFailure {
@@ -738,6 +750,68 @@ class AppViewModel(
         _state.value = _state.value.copy(notes = _state.value.notes.filterNot { it.id == id })
         viewModelScope.launch {
             apiCall { api.deleteNote(id) }.onSuccess { refreshNotes() }
+        }
+    }
+
+    // ---- scheduled routines ----
+
+    fun refreshRoutines() {
+        viewModelScope.launch {
+            apiCall { api.listRoutines() }
+                .onSuccess { _state.value = _state.value.copy(routines = it) }
+                .onFailure { _state.value = _state.value.copy(routineStatus = it.message) }
+        }
+    }
+
+    /** Create or (when [id] is non-null) edit a routine. [onDone] closes the sheet;
+     *  [onError] shows the server's validation message inside it. */
+    fun saveRoutine(id: String?, input: RoutineInput, onDone: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            val call = if (id == null) apiCall { api.createRoutine(input) } else apiCall { api.updateRoutine(id, input) }
+            call
+                .onSuccess {
+                    onDone()
+                    refreshRoutines()
+                }
+                .onFailure { onError(it.message ?: "Could not save the routine.") }
+        }
+    }
+
+    fun setRoutineEnabled(id: String, enabled: Boolean) {
+        _state.value = _state.value.copy(
+            routines = _state.value.routines.map { if (it.id == id) it.copy(enabled = enabled) else it },
+        )
+        viewModelScope.launch {
+            apiCall { api.setRoutineEnabled(id, enabled) }.onSuccess { refreshRoutines() }
+        }
+    }
+
+    fun deleteRoutine(id: String) {
+        _state.value = _state.value.copy(routines = _state.value.routines.filterNot { it.id == id })
+        viewModelScope.launch { apiCall { api.deleteRoutine(id) }.onSuccess { refreshRoutines() } }
+    }
+
+    fun runRoutineNow(id: String) {
+        val name = _state.value.routines.find { it.id == id }?.name ?: "routine"
+        _state.value = _state.value.copy(routineStatus = "Running \"$name\"…")
+        viewModelScope.launch {
+            apiCall { api.runRoutine(id) }
+                .onSuccess { r ->
+                    _state.value = _state.value.copy(
+                        routineStatus = if (r.status == "ok") "\"$name\" ran." else "\"$name\" failed: ${r.error ?: "unknown error"}",
+                    )
+                    loadRoutineRuns(id)
+                    refreshRoutines()
+                }
+                .onFailure { _state.value = _state.value.copy(routineStatus = it.message ?: "Run failed.") }
+        }
+    }
+
+    fun loadRoutineRuns(id: String) {
+        viewModelScope.launch {
+            apiCall { api.listRoutineRuns(id, 10) }.onSuccess { runs ->
+                _state.value = _state.value.copy(routineRuns = _state.value.routineRuns + (id to runs))
+            }
         }
     }
 

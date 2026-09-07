@@ -120,6 +120,58 @@ export const config = {
   // A generated tool's backend process is killed if it runs longer than this
   // without being opened, and always capped at this since last activity.
   toolIdleTimeoutMs: Number(process.env.FAMILY_AGENT_TOOL_IDLE_MS ?? 30 * 60_000),
+
+  // ---- Scheduled routines (routines.ts) ----
+  // A routine fires an agent turn on a schedule (a morning briefing, a bill
+  // nudge, a weekly review). Off = no scheduler loop, the /routines endpoints
+  // 404, and both clients hide the Routines screen.
+  routinesEnabled: process.env.FAMILY_AGENT_ROUTINES !== "0",
+  // How often the scheduler checks for due routines. The host is a laptop, not
+  // a cron server — minute granularity is plenty.
+  routineTickMs: Number(process.env.FAMILY_AGENT_ROUTINE_TICK_MS ?? 60_000),
+  // A routine that came due more than this long ago (laptop was asleep) is too
+  // stale to catch up on — it's skipped forward to its next occurrence instead.
+  routineCatchUpGraceMs: Number(process.env.FAMILY_AGENT_ROUTINE_CATCHUP_MS ?? 6 * 60 * 60_000),
+
+  // ---- Web access (web/*, agents/webTools.ts) ----
+  // The deliberate, bounded exception to "nothing leaves the machine" (see
+  // docs/DECISIONS.md → "Web access"): a `research-agent` that can search the
+  // web and read a page. OFF unless an admin picks a search provider. Every
+  // request is funnelled through src/web/fetch.ts (SSRF-guarded) and logged.
+  //   searxng — self-hosted metasearch (set FAMILY_AGENT_WEB_SEARCH_URL)
+  //   tavily | brave — an API (set FAMILY_AGENT_WEB_SEARCH_API_KEY)
+  //   ddg — DuckDuckGo lite HTML, no key, best-effort
+  //   none (default) — the whole capability is off
+  webSearchProvider: (process.env.FAMILY_AGENT_WEB_SEARCH_PROVIDER ?? "none") as
+    | "searxng"
+    | "tavily"
+    | "brave"
+    | "ddg"
+    | "none",
+  webSearchUrl: process.env.FAMILY_AGENT_WEB_SEARCH_URL ?? "",
+  webSearchApiKey: process.env.FAMILY_AGENT_WEB_SEARCH_API_KEY ?? "",
+  // Optional domain guard rails for open_page (comma-separated, e.g.
+  // "wikipedia.org,*.gov"). An allow-list, when non-empty, is exclusive.
+  webAllowDomains: (process.env.FAMILY_AGENT_WEB_ALLOW ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+  webDenyDomains: (process.env.FAMILY_AGENT_WEB_DENY ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+  webFetchTimeoutMs: Number(process.env.FAMILY_AGENT_WEB_TIMEOUT_MS ?? 15_000),
+  webFetchMaxBytes: Number(process.env.FAMILY_AGENT_WEB_MAX_BYTES ?? 2_000_000),
+  webFetchMaxChars: Number(process.env.FAMILY_AGENT_WEB_MAX_CHARS ?? 12_000),
+
+  // ---- Shell / file-processing access (shell/*, agents/workshopTools.ts) ----
+  // A `workshop-agent` that runs allow-listed CLI tools (ffmpeg, qpdf, jq, …)
+  // over a per-user file workspace, inside a bubblewrap sandbox with NO
+  // network. OFF unless FAMILY_AGENT_SHELL=1 AND bubblewrap is installed.
+  shellEnabled: process.env.FAMILY_AGENT_SHELL === "1",
+  // Adds an unrestricted `run_shell` (arbitrary bash, still no network, still
+  // workspace-scoped, still resource-capped). Admin accounts only.
+  shellUnrestricted: process.env.FAMILY_AGENT_SHELL_UNRESTRICTED === "1",
+  // Extra binaries to allow beyond the built-in curated set (comma-separated).
+  shellAllow: (process.env.FAMILY_AGENT_SHELL_ALLOW ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+  shellTimeoutMs: Number(process.env.FAMILY_AGENT_SHELL_TIMEOUT_MS ?? 60_000),
+  shellMaxOutputBytes: Number(process.env.FAMILY_AGENT_SHELL_MAX_OUTPUT ?? 20_000),
+  workspaceMaxBytes: Number(process.env.FAMILY_AGENT_WORKSPACE_MAX_BYTES ?? 512 * 1024 * 1024),
+  bwrapPath: process.env.FAMILY_AGENT_BWRAP_PATH ?? "",
 };
 
 /** The watched folder for one user — their own override, or the derived default. */
@@ -129,6 +181,11 @@ export function userInboxDir(user: Pick<UserRecord, "id" | "inboxDir">): string 
 
 export function toolsDir(): string {
   return `${config.dataDir}/tools`;
+}
+
+/** Per-user scratch dir the workshop agent's CLI tools read and write. */
+export function workspaceDir(userId: string): string {
+  return `${config.dataDir}/workspace/${userId}`;
 }
 
 /** Where an uploaded document's original file is kept so it can be previewed

@@ -87,6 +87,9 @@ const ACTOR_LABELS: Record<string, string> = {
   "notes-agent": "Board",
   "builder-agent": "Tool builder",
   "tools-agent": "Tools",
+  "research-agent": "Web",
+  "workshop-agent": "Files",
+  routine: "Routines",
 };
 
 /** Internal agent id → a word a family member understands. */

@@ -28,6 +28,10 @@ import {
   type ChatReference,
   type ChatSession,
   type ChatSessionMessage,
+  type Routine,
+  type RoutineRun,
+  type RoutineTriggerInput,
+  type RoutineAgentKind,
 } from "./api.js";
 import { startRecording, type Recording } from "./audio.js";
 import {
@@ -87,6 +91,7 @@ function showView(name: string) {
     });
   }
   if (name === "activity") void refreshActivity();
+  if (name === "routines") void refreshRoutines();
   if (name === "family") void refreshUsers();
   if (name === "settings") void refreshSettings();
 }
@@ -109,6 +114,12 @@ let voiceEnabled = false;
 // True when no embedding model is configured — the Documents "By meaning"
 // search option then annotates that it falls back to keyword + fuzzy.
 let semanticSearchOff = false;
+// Mirrors /health.routinesEnabled — hides the Routines nav item when off.
+let routinesEnabled = true;
+const navRoutines = document.getElementById("nav-routines") as HTMLButtonElement;
+// Mirror /health.web / .shell — gate the /web and /run slash commands.
+let webEnabled = false;
+let shellEnabled = false;
 
 async function refreshStatus() {
   try {
@@ -120,6 +131,10 @@ async function refreshStatus() {
     voiceEnabled = health.asrEnabled === true;
     chatMicBtn.hidden = !voiceEnabled;
     semanticSearchOff = health.semanticSearch === "off";
+    routinesEnabled = health.routinesEnabled !== false;
+    navRoutines.hidden = !routinesEnabled;
+    webEnabled = health.web === "on";
+    shellEnabled = health.shell === "on";
     const meaningOpt = documentSearchMode.querySelector<HTMLOptionElement>('option[value="semantic"]');
     if (meaningOpt) {
       meaningOpt.textContent = semanticSearchOff ? "By meaning (needs a model)" : "By meaning";
@@ -169,6 +184,9 @@ const SLASH_COMMANDS: SlashEntry[] = [
   { name: "task", description: "Add, list, or complete a to-do" },
   { name: "find", description: "Search the family's documents (alias: /search)" },
   { name: "note", description: "Read or add a sticky note" },
+  { name: "schedule", description: "Create or manage a scheduled routine (alias: /remind)" },
+  { name: "web", description: "Search the web and read a page (alias: /lookup)" },
+  { name: "run", description: "Process a file with command-line tools (alias: /shell)" },
 ];
 // Populated (from the same /tools list the Tools view already fetches) when
 // the Chat view is entered; only ready, server-kind tools are offered — a
@@ -492,7 +510,10 @@ function updateSlashMenu() {
   const toolEntries: SlashEntry[] = slashTools
     .filter((t) => t.kind === "server" && t.status === "ready")
     .map((t) => ({ name: t.name, description: t.description }));
-  slashMatches = [...SLASH_COMMANDS, ...toolEntries].filter((e) => e.name.toLowerCase().includes(query));
+  const commands = SLASH_COMMANDS.filter(
+    (c) => (c.name !== "web" || webEnabled) && (c.name !== "run" || shellEnabled)
+  );
+  slashMatches = [...commands, ...toolEntries].filter((e) => e.name.toLowerCase().includes(query));
   slashHighlight = slashMatches.length ? 0 : -1;
   renderSlashMenu();
 }
@@ -1581,6 +1602,362 @@ function renderActivity(entries: ActivityEntry[]) {
 async function refreshActivity() {
   const { activity } = await api.listActivity();
   renderActivity(activity);
+}
+
+// ---------- routines ----------
+const routineList = document.getElementById("routine-list")!;
+const routineStatus = document.getElementById("routine-status")!;
+const routineNewBtn = document.getElementById("routine-new-btn") as HTMLButtonElement;
+const routineForm = document.getElementById("routine-form") as HTMLFormElement;
+const routineNameInput = document.getElementById("routine-name") as HTMLInputElement;
+const routineAgentSelect = document.getElementById("routine-agent") as HTMLSelectElement;
+const routineInstructionInput = document.getElementById("routine-instruction") as HTMLTextAreaElement;
+const routineSchedKind = document.getElementById("routine-sched-kind") as HTMLSelectElement;
+const routineSchedFields = document.getElementById("routine-sched-fields")!;
+const routineDeliverSelect = document.getElementById("routine-deliver") as HTMLSelectElement;
+const routineFormStatus = document.getElementById("routine-form-status")!;
+const routineCancelBtn = document.getElementById("routine-cancel-btn") as HTMLButtonElement;
+const routineSaveBtn = document.getElementById("routine-save-btn") as HTMLButtonElement;
+
+let routines: Routine[] = [];
+let editingRoutineId: string | null = null;
+
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function schedFieldsHtml(kind: string): string {
+  switch (kind) {
+    case "dailyAt":
+      return `<label class="field">At<input type="time" id="rs-time" value="07:00" required /></label>`;
+    case "weekly":
+      return (
+        `<label class="field">On<select id="rs-weekday">` +
+        WEEKDAY_NAMES.map((d, i) => `<option value="${i}"${i === 1 ? " selected" : ""}>${d}</option>`).join("") +
+        `</select></label>` +
+        `<label class="field">At<input type="time" id="rs-time" value="18:00" required /></label>`
+      );
+    case "monthly":
+      return (
+        `<label class="field">Day<input type="number" id="rs-day" min="1" max="28" value="1" required /></label>` +
+        `<label class="field">At<input type="time" id="rs-time" value="09:00" required /></label>`
+      );
+    case "everyMinutes":
+      return (
+        `<label class="field">Every<select id="rs-hours">` +
+        [1, 2, 3, 4, 6, 8, 12].map((h) => `<option value="${h}"${h === 3 ? " selected" : ""}>${h} hour${h === 1 ? "" : "s"}</option>`).join("") +
+        `</select></label>`
+      );
+    case "onceAt":
+      return `<label class="field">On<input type="datetime-local" id="rs-datetime" required /></label>`;
+    case "cron":
+      return `<label class="field">Cron<input type="text" id="rs-cron" placeholder="0 7 * * 1-5" spellcheck="false" required /></label>`;
+    default:
+      return "";
+  }
+}
+
+function renderSchedFields() {
+  routineSchedFields.innerHTML = schedFieldsHtml(routineSchedKind.value);
+}
+routineSchedKind.addEventListener("change", renderSchedFields);
+
+/** Read the visible schedule sub-fields into the API's friendly trigger shape. */
+function readTriggerInput(): RoutineTriggerInput {
+  const kind = routineSchedKind.value;
+  const time = () => (document.getElementById("rs-time") as HTMLInputElement | null)?.value || "09:00";
+  if (kind === "dailyAt") return { dailyAt: time() };
+  if (kind === "weekly")
+    return {
+      weeklyOn: WEEKDAY_NAMES[Number((document.getElementById("rs-weekday") as HTMLSelectElement).value)],
+      weeklyAt: time(),
+    };
+  if (kind === "monthly")
+    return {
+      monthlyDay: Number((document.getElementById("rs-day") as HTMLInputElement).value) || 1,
+      monthlyAt: time(),
+    };
+  if (kind === "everyMinutes")
+    return { everyMinutes: Number((document.getElementById("rs-hours") as HTMLSelectElement).value) * 60 };
+  if (kind === "onceAt") return { onceAt: (document.getElementById("rs-datetime") as HTMLInputElement).value };
+  if (kind === "cron") return { cron: (document.getElementById("rs-cron") as HTMLInputElement).value.trim() };
+  return {};
+}
+
+/** Best-effort: turn a stored trigger back into the form's fields (for Edit). */
+function fillFormFromTrigger(t: Routine["trigger"]) {
+  const setTime = (hhmm: string) => {
+    const el = document.getElementById("rs-time") as HTMLInputElement | null;
+    if (el) el.value = hhmm;
+  };
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (t.kind === "once") {
+    routineSchedKind.value = "onceAt";
+    renderSchedFields();
+    const d = new Date(t.at);
+    if (!Number.isNaN(d.getTime())) {
+      (document.getElementById("rs-datetime") as HTMLInputElement).value =
+        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    return;
+  }
+  if (t.kind === "every") {
+    const hours = t.minutes / 60;
+    if (Number.isInteger(hours) && [1, 2, 3, 4, 6, 8, 12].includes(hours)) {
+      routineSchedKind.value = "everyMinutes";
+      renderSchedFields();
+      (document.getElementById("rs-hours") as HTMLSelectElement).value = String(hours);
+    } else {
+      routineSchedKind.value = "cron";
+      renderSchedFields();
+      (document.getElementById("rs-cron") as HTMLInputElement).value = `*/${t.minutes} * * * *`;
+    }
+    return;
+  }
+  // cron: recognise the three shapes the form can produce, else "Advanced".
+  const parts = t.expr.split(/\s+/);
+  const [mi, ho, dom, , dow] = parts;
+  const simpleTime = /^\d+$/.test(mi) && /^\d+$/.test(ho);
+  if (parts.length === 5 && simpleTime && dom === "*" && dow === "*") {
+    routineSchedKind.value = "dailyAt";
+    renderSchedFields();
+    setTime(`${pad(+ho)}:${pad(+mi)}`);
+  } else if (parts.length === 5 && simpleTime && dom === "*" && /^\d$/.test(dow)) {
+    routineSchedKind.value = "weekly";
+    renderSchedFields();
+    (document.getElementById("rs-weekday") as HTMLSelectElement).value = dow;
+    setTime(`${pad(+ho)}:${pad(+mi)}`);
+  } else if (parts.length === 5 && simpleTime && /^\d+$/.test(dom) && dow === "*") {
+    routineSchedKind.value = "monthly";
+    renderSchedFields();
+    (document.getElementById("rs-day") as HTMLInputElement).value = dom;
+    setTime(`${pad(+ho)}:${pad(+mi)}`);
+  } else {
+    routineSchedKind.value = "cron";
+    renderSchedFields();
+    (document.getElementById("rs-cron") as HTMLInputElement).value = t.expr;
+  }
+}
+
+async function openRoutineForm(routine?: Routine) {
+  editingRoutineId = routine?.id ?? null;
+  routineFormStatus.textContent = "";
+  routineForm.hidden = false;
+  routineNewBtn.hidden = true;
+  routineSaveBtn.textContent = routine ? "Save changes" : "Save routine";
+
+  // Populate the "deliver to" channel list (fresh each open).
+  routineDeliverSelect.innerHTML = '<option value="">— nowhere (just here) —</option>';
+  try {
+    const { channels } = await api.listChannels();
+    for (const c of channels) {
+      const opt = document.createElement("option");
+      opt.value = c.id;
+      opt.textContent = c.title;
+      routineDeliverSelect.appendChild(opt);
+    }
+  } catch {
+    /* channels are optional — leave just the default */
+  }
+
+  routineNameInput.value = routine?.name ?? "";
+  routineAgentSelect.value = routine?.action.agent ?? "planner";
+  routineInstructionInput.value = routine?.action.instruction ?? "";
+  routineDeliverSelect.value = routine?.deliverChannelId ?? "";
+  if (routine) {
+    fillFormFromTrigger(routine.trigger);
+  } else {
+    routineSchedKind.value = "dailyAt";
+    renderSchedFields();
+  }
+  routineNameInput.focus();
+}
+
+function closeRoutineForm() {
+  routineForm.hidden = true;
+  routineNewBtn.hidden = false;
+  editingRoutineId = null;
+}
+
+routineNewBtn.addEventListener("click", () => void openRoutineForm());
+routineCancelBtn.addEventListener("click", closeRoutineForm);
+
+routineForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = {
+    name: routineNameInput.value.trim(),
+    trigger: readTriggerInput(),
+    action: {
+      agent: routineAgentSelect.value as RoutineAgentKind,
+      instruction: routineInstructionInput.value.trim(),
+    },
+    deliverChannelId: routineDeliverSelect.value || null,
+  };
+  if (!body.name || !body.action.instruction) {
+    routineFormStatus.textContent = "Give it a name and an instruction.";
+    return;
+  }
+  routineSaveBtn.disabled = true;
+  routineFormStatus.textContent = "Saving…";
+  try {
+    if (editingRoutineId) await api.updateRoutine(editingRoutineId, body);
+    else await api.createRoutine(body);
+    closeRoutineForm();
+    await refreshRoutines();
+  } catch (err) {
+    routineFormStatus.textContent = err instanceof Error ? err.message : "Could not save.";
+  } finally {
+    routineSaveBtn.disabled = false;
+  }
+});
+
+function routineRunRow(run: RoutineRun): string {
+  const when = relativeTime(run.finishedAt ?? run.startedAt);
+  const label =
+    run.status === "ok"
+      ? "✓"
+      : run.status === "error"
+        ? "⚠"
+        : run.status === "running"
+          ? "…"
+          : "–";
+  const text =
+    run.status === "error"
+      ? escapeHtml(run.error ?? "failed")
+      : run.status === "running"
+        ? "running…"
+        : escapeHtml((run.output ?? "").slice(0, 600) || "(no output)");
+  return `<div class="routine-run"><span class="routine-run-ts">${label} ${escapeHtml(when)}</span><span class="routine-run-body">${text}</span></div>`;
+}
+
+function renderRoutines() {
+  routineList.innerHTML = "";
+  if (routines.length === 0) {
+    routineList.innerHTML =
+      '<li class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>No routines yet. Add one, or ask in Chat — "every morning summarise my day".</span></li>';
+    return;
+  }
+  const agentLabel: Record<string, string> = {
+    planner: "the assistant",
+    task: "Events",
+    document: "Documents",
+    notes: "the board",
+    tools: "the family tools",
+  };
+  for (const r of routines) {
+    const li = document.createElement("li");
+    li.className = "routine-row" + (r.enabled ? "" : " is-off");
+
+    const nextWhen = (iso: string) => {
+      const d = new Date(iso);
+      return `${friendlyDate(iso, { weekday: true })} · ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+    };
+    const next = !r.enabled
+      ? "paused"
+      : r.nextRunAt
+        ? `next: ${nextWhen(r.nextRunAt)}`
+        : "next: —";
+    const last =
+      r.lastRunAt && r.lastStatus
+        ? `<span class="${r.lastStatus === "ok" ? "routine-last-ok" : r.lastStatus === "error" ? "routine-last-error" : ""}">last ${r.lastStatus === "ok" ? "ran" : r.lastStatus} ${escapeHtml(relativeTime(r.lastRunAt))}</span>`
+        : "";
+
+    li.innerHTML = `
+      <div class="routine-row-head">
+        <span class="routine-switch" role="switch" tabindex="0" aria-checked="${r.enabled}" aria-label="Enabled"></span>
+        <span class="routine-name">${escapeHtml(r.name)}</span>
+      </div>
+      <p class="routine-sched">${escapeHtml(r.triggerText)} · runs ${escapeHtml(agentLabel[r.action.agent] ?? r.action.agent)}</p>
+      <p class="routine-instruction">${escapeHtml(r.action.instruction)}</p>
+      <div class="routine-sub"><span>${escapeHtml(next)}</span>${last}</div>
+      <div class="routine-row-foot"></div>`;
+
+    const foot = li.querySelector(".routine-row-foot")!;
+    const runBtn = document.createElement("button");
+    runBtn.className = "btn-primary";
+    runBtn.type = "button";
+    runBtn.textContent = "Run now";
+    runBtn.addEventListener("click", async () => {
+      runBtn.disabled = true;
+      runBtn.textContent = "Running…";
+      routineStatus.textContent = `Running "${r.name}"…`;
+      try {
+        const res = await api.runRoutine(r.id);
+        routineStatus.textContent =
+          res.status === "ok" ? `"${r.name}" ran.` : `"${r.name}" failed: ${res.error ?? "unknown error"}`;
+      } catch (err) {
+        routineStatus.textContent = err instanceof Error ? err.message : "Run failed.";
+      } finally {
+        await refreshRoutines();
+      }
+    });
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "btn-ghost";
+    editBtn.type = "button";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => void openRoutineForm(r));
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn-ghost";
+    delBtn.type = "button";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", async () => {
+      if (!confirm(`Delete the routine "${r.name}"?`)) return;
+      await api.deleteRoutine(r.id);
+      await refreshRoutines();
+    });
+
+    foot.append(runBtn, editBtn, delBtn);
+
+    const toggle = li.querySelector(".routine-switch") as HTMLElement;
+    const flip = async () => {
+      try {
+        await api.updateRoutine(r.id, { enabled: !r.enabled });
+        await refreshRoutines();
+      } catch (err) {
+        routineStatus.textContent = err instanceof Error ? err.message : "Could not update.";
+      }
+    };
+    toggle.addEventListener("click", flip);
+    toggle.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        void flip();
+      }
+    });
+
+    // Recent runs, lazily loaded when expanded.
+    const runs = document.createElement("details");
+    runs.className = "routine-runs";
+    runs.innerHTML = "<summary>Recent runs</summary><div class='routine-runs-body'>…</div>";
+    runs.addEventListener(
+      "toggle",
+      async () => {
+        if (!runs.open) return;
+        const bodyEl = runs.querySelector(".routine-runs-body")!;
+        try {
+          const { runs: history } = await api.listRoutineRuns(r.id, 10);
+          bodyEl.innerHTML = history.length ? history.map(routineRunRow).join("") : "<p class='settings-hint'>No runs yet.</p>";
+        } catch {
+          bodyEl.innerHTML = "<p class='settings-hint'>Couldn't load runs.</p>";
+        }
+      },
+      { once: false }
+    );
+    li.appendChild(runs);
+
+    routineList.appendChild(li);
+  }
+}
+
+async function refreshRoutines() {
+  if (!routinesEnabled) return;
+  try {
+    const { routines: list } = await api.listRoutines();
+    routines = list;
+    renderRoutines();
+  } catch (err) {
+    routineStatus.textContent = err instanceof Error ? err.message : "Couldn't load routines.";
+  }
 }
 
 // ---------- tools ----------
@@ -3515,6 +3892,18 @@ function appendReferences(afterEl: HTMLElement, references: ChatReference[]) {
   label.textContent = "References";
   wrap.appendChild(label);
   for (const ref of references) {
+    // A web page the research agent opened — a real link, not a panel.
+    if (ref.type === "link") {
+      const a = document.createElement("a");
+      a.className = "ref-chip ref-chip-link";
+      a.textContent = ref.label.replace(/^https?:\/\/(www\.)?/, "").slice(0, 48);
+      a.href = ref.id;
+      a.target = "_blank";
+      a.rel = "noreferrer noopener";
+      a.title = ref.id;
+      wrap.appendChild(a);
+      continue;
+    }
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = `ref-chip ref-chip-${ref.type}`;

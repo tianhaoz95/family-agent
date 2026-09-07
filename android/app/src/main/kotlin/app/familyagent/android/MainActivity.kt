@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -60,6 +61,7 @@ import app.familyagent.android.ui.DiscoveryScreen
 import app.familyagent.android.ui.DocumentsScreen
 import app.familyagent.android.ui.LoginScreen
 import app.familyagent.android.ui.MessagesScreen
+import app.familyagent.android.ui.RoutinesScreen
 import app.familyagent.android.ui.SettingsScreen
 import app.familyagent.android.ui.StatusDot
 import app.familyagent.android.ui.TasksScreen
@@ -76,6 +78,7 @@ private enum class Destination(val route: String, val label: String, val icon: a
     Board("board", "Board", Icons.Rounded.GridView),
     Documents("documents", "Documents", Icons.Rounded.Description),
     Tools("tools", "Tools", Icons.Rounded.Build),
+    Routines("routines", "Routines", Icons.Rounded.Schedule),
     Activity("activity", "Activity", Icons.Rounded.History),
     Settings("settings", "Settings", Icons.Rounded.Settings),
 }
@@ -157,6 +160,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
             Destination.Board -> viewModel.refreshNotes()
             Destination.Documents -> viewModel.refreshDocuments()
             Destination.Tools -> viewModel.refreshTools()
+            Destination.Routines -> viewModel.refreshRoutines()
             Destination.Activity -> viewModel.refreshActivity()
             else -> {}
         }
@@ -171,6 +175,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                 current = currentDestination,
                 connection = state.connection,
                 unread = state.totalUnread,
+                routinesEnabled = state.routinesEnabled,
                 onSelect = { dest ->
                     scope.launch { drawerState.close() }
                     val alreadyHere = currentDestination?.hierarchy?.any { it.route == dest.route } == true
@@ -311,6 +316,20 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                     val url = android.net.Uri.decode(entry.arguments?.getString("url") ?: "")
                     ToolWebViewScreen(url = url, onClose = { navController.popBackStack() })
                 }
+                composable(Destination.Routines.route) {
+                    RoutinesScreen(
+                        routines = state.routines,
+                        status = state.routineStatus,
+                        runs = state.routineRuns,
+                        channels = state.channels,
+                        onSave = viewModel::saveRoutine,
+                        onSetEnabled = viewModel::setRoutineEnabled,
+                        onRunNow = viewModel::runRoutineNow,
+                        onDelete = viewModel::deleteRoutine,
+                        onLoadRuns = viewModel::loadRoutineRuns,
+                        onRefresh = viewModel::refreshRoutines,
+                    )
+                }
                 composable(Destination.Activity.route) {
                     ActivityScreen(state.activity)
                 }
@@ -393,6 +412,7 @@ private fun AppDrawer(
     current: NavDestination?,
     connection: ConnectionStatus,
     unread: Int,
+    routinesEnabled: Boolean,
     onSelect: (Destination) -> Unit,
 ) {
     ModalDrawerSheet(
@@ -420,6 +440,7 @@ private fun AppDrawer(
             }
 
             Destination.entries.forEach { dest ->
+                if (dest == Destination.Routines && !routinesEnabled) return@forEach
                 val selected = current?.hierarchy?.any { it.route == dest.route } == true
                 NavigationDrawerItem(
                     label = {

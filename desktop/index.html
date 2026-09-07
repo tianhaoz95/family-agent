@@ -105,6 +105,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/></svg>
             <span class="nav-label">Tools</span>
           </button>
+          <button class="nav-item" data-view="routines" type="button" id="nav-routines" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span class="nav-label">Routines</span>
+          </button>
           <button class="nav-item" data-view="family" type="button" id="nav-family" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             <span class="nav-label">Family</span>
@@ -391,6 +395,63 @@
             <span id="user-count" class="family-count"></span>
           </div>
           <ul id="user-list" class="user-list"></ul>
+        </section>
+
+        <section id="view-routines" class="view" aria-label="Routines">
+          <div class="view-header view-header--row">
+            <div>
+              <h1>Routines</h1>
+              <p class="view-sub">A saved instruction the assistant runs on a schedule — a morning briefing, a bill reminder, a weekly review. Results show here, and can be posted to a chat.</p>
+            </div>
+            <button type="button" id="routine-new-btn" class="board-add">+ New routine</button>
+          </div>
+
+          <form id="routine-form" class="routine-form" hidden>
+            <div class="routine-form-grid">
+              <label class="field">Name
+                <input id="routine-name" type="text" placeholder="Morning briefing" required maxlength="120" />
+              </label>
+              <label class="field">Run
+                <select id="routine-agent">
+                  <option value="planner">The assistant (anything)</option>
+                  <option value="task">Events only</option>
+                  <option value="document">Documents only</option>
+                  <option value="notes">The board only</option>
+                  <option value="tools">The family tools only</option>
+                </select>
+              </label>
+            </div>
+            <label class="field">Instruction
+              <textarea id="routine-instruction" rows="3" required maxlength="4000"
+                placeholder="Summarise today's events, anything overdue, and any bills due in the next week."></textarea>
+            </label>
+            <div class="routine-form-grid">
+              <label class="field">Schedule
+                <select id="routine-sched-kind">
+                  <option value="dailyAt">Every day</option>
+                  <option value="weekly">Every week</option>
+                  <option value="monthly">Every month</option>
+                  <option value="everyMinutes">Every few hours</option>
+                  <option value="onceAt">Once</option>
+                  <option value="cron">Advanced (cron)</option>
+                </select>
+              </label>
+              <div id="routine-sched-fields" class="routine-sched-fields"></div>
+            </div>
+            <label class="field routine-deliver-field">Also post the result to
+              <select id="routine-deliver"><option value="">— nowhere (just here) —</option></select>
+            </label>
+            <div class="routine-form-foot">
+              <p id="routine-form-status" class="settings-hint" role="status"></p>
+              <div>
+                <button type="button" id="routine-cancel-btn" class="btn-ghost">Cancel</button>
+                <button type="submit" id="routine-save-btn">Save routine</button>
+              </div>
+            </div>
+          </form>
+
+          <p id="routine-status" class="settings-hint" role="status"></p>
+          <ul id="routine-list" class="routine-list"></ul>
         </section>
 
         <section id="view-activity" class="view" aria-label="Activity">

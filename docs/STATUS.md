@@ -533,3 +533,77 @@ Later changes (not part of the original autonomous session):
   `style.css` were folded into `:root` tokens (`--accent-soft-hover`,
   `--danger-soft-hover`). Activity-log strings in `agent-core` were softened
   too ("Ingested X" → "Added X", dropped "(revision N)").
+- **Scheduled routines — "cron for the family agent".** A **routine** is a
+  saved instruction the assistant runs on a schedule: a morning briefing, a
+  bill nudge, a weekly review, a one-off future reminder. Per-user like
+  tasks/documents. `agent-core/src/routines.ts` owns the trigger math
+  (hand-rolled 5-field cron + next-run in local time; also `once` and plain
+  `every` intervals) and a process-wide `RoutineScheduler` — a 60s tick feeding
+  a **serialized** run queue (the model is slow and single-threaded), with a
+  **catch-up policy** for triggers missed while the laptop slept (run-once if
+  fresh, else skip forward). New tables `routines` / `routine_runs` on
+  `ScopedStore`; routes `GET/POST /routines`, `GET/PATCH/DELETE /routines/:id`,
+  `GET /routines/:id/runs`, `POST /routines/:id/run` (runs now, awaits like
+  `/chat`). Each run always records a `routine_runs` row + an `activity` line;
+  optionally it also posts the output into a family chat channel as `@agent`
+  (`deliverChannelId`). An action runs the full **planner** or one specialist
+  (`task`/`document`/`notes`/`tools`) — **never `builder-agent`** (a routine
+  doesn't write code unattended; enforced structurally, not by prompt).
+  Authoring: a `routine-agent` subagent + a `/schedule` (alias `/remind`)
+  forced-chat turn, both taking friendly schedule fields. `FAMILY_AGENT_ROUTINES=0`
+  disables the whole feature (endpoints 404, both clients hide the screen).
+  - **Both clients shipped.** Desktop: a "Routines" nav item + view — a card per
+    routine (name, schedule sentence, on/off switch, next/last run, Run now /
+    Edit / Delete, expandable run history) and a create/edit form whose schedule
+    picker (Every day / week / month / few hours / Once / cron) round-trips a
+    stored trigger back into its fields (`#view-routines` in `main.ts`).
+    Android: `Destination.Routines` + `RoutinesScreen.kt` — the same card list
+    and a `ModalBottomSheet` create/edit form; drawer item hidden when
+    `/health.routinesEnabled` is false. Both add a `/schedule` slash-command
+    hint.
+  - Verified: agent-core `test/routines.test.ts` + `test/routines.routes.test.ts`
+    (28 new tests); full fast suite 312 pass / 1 skip; desktop typecheck +
+    `vite build` + 35 tests; Android `testDebugUnitTest` 25 pass (+3) +
+    `assembleDebug`. Live: `/schedule` NL authoring produced a correct routine
+    (`gemma4:e2b`), a 1-min `every` routine ran on schedule (~16s/run, output
+    captured), **desktop** drove create/edit/pause/delete and **Android on the
+    emulator** drove the drawer item, list, create, and an edit whose stored
+    cron round-tripped back into the weekly picker.
+  - **Not yet** (v2+): data-relative triggers ("N days before an Event /
+    document date"); event-driven triggers ("when a `medical` document lands");
+    direct tool-operation actions; OS notifications (chat-channel delivery is
+    the v1 stand-in). See `docs/DECISIONS.md` → "Scheduled routines".
+- **Web access + shell/file-processing** — two capabilities that take the agent
+  past its own database, each **off by default**, each an env-var switch, each
+  in `/health` (`web`, `shell`). Full rationale in `docs/DECISIONS.md` → "Web
+  access and shell/file-processing".
+  - **Web** (`agent-core/src/web/`): a `research-agent` subagent with
+    `web_search` + `open_page`. `FAMILY_AGENT_WEB_SEARCH_PROVIDER` picks the
+    backend (`searxng` self-hosted / `tavily` / `brave` / `ddg` / `none`).
+    **`src/web/fetch.ts` is the one and only egress point** — enforced by
+    `test/web.egress.test.ts` — with an SSRF guard (private/loopback/link-local/
+    CGNAT ranges blocked, redirects not followed) so a model-chosen URL can't
+    reach the family's private network. Page text is framed as untrusted; the
+    agent has no write tools. Replies cite sources via a new `link` reference
+    chip. `research` is also a valid **routine** action agent (weather/news
+    briefings).
+  - **Shell** (`agent-core/src/shell/`): a `workshop-agent` that runs
+    allow-listed CLI tools (qpdf, ffmpeg, imagemagick, jq, csvkit, pandoc, …)
+    over a per-user file workspace inside a **bubblewrap sandbox with no
+    network**. `FAMILY_AGENT_SHELL=1` + bubblewrap required (probed at startup;
+    off if the sandbox can't be created). The model gets `run_command({ tool,
+    args })` — an argv array, no shell — plus `import_document` / `save_output`
+    to move files in and out of the family's documents. `run_shell` (arbitrary
+    bash, still sandboxed) behind `FAMILY_AGENT_SHELL_UNRESTRICTED=1`.
+  - Both clients: `/web` and `/run` slash commands (desktop hides them when the
+    capability is off); `web`/`shell` fields on `/health`; link reference chips
+    open the page.
+  - Verified: agent-core fast suite 327 pass / 1 skip (+15: `web.fetch`,
+    `web.egress`, `shell`); desktop typecheck + build + 35 tests; Android
+    compile + `assembleDebug`. Sandbox isolation confirmed by hand (a command
+    can't see `/etc`, `/home`, or the network); `fetchPage` extracts real pages
+    and blocks `169.254.169.254`; `runTool` with `jq` computes a CSV column sum
+    correctly. Small-model (`gemma4:e2b`) multi-step orchestration of these is
+    unreliable — the tooling is ready for a bigger model, same as builder tools.
+  - **Not yet**: an admin "capabilities" screen (env-var only for now); web in
+    a "sources" side panel; OS notifications.

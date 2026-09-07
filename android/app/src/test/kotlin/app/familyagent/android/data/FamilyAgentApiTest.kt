@@ -326,6 +326,57 @@ class FamilyAgentApiTest {
     }
 
     @Test
+    fun `listRoutines decodes the trigger union and action`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"routines":[{"id":"R1","name":"Morning briefing","enabled":true,"trigger":{"kind":"cron","expr":"0 7 * * *"},"triggerText":"every day at 7:00 AM","action":{"agent":"planner","instruction":"Summarise the day."},"deliverChannelId":null,"catchUp":"skip","nextRunAt":"2026-09-08T07:00:00.000Z","lastRunAt":null,"lastStatus":null,"createdAt":"2026-09-01T00:00:00.000Z","updatedAt":"2026-09-01T00:00:00.000Z"}]}"""
+            )
+        )
+        val routines = api.listRoutines()
+        assertEquals(1, routines.size)
+        assertEquals("cron", routines[0].trigger.kind)
+        assertEquals("0 7 * * *", routines[0].trigger.expr)
+        assertEquals("planner", routines[0].action.agent)
+        assertEquals("every day at 7:00 AM", routines[0].triggerText)
+    }
+
+    @Test
+    fun `createRoutine sends only the set schedule field`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(201).setBody(
+                """{"routine":{"id":"R2","name":"Weekly review","enabled":true,"trigger":{"kind":"cron","expr":"0 18 * * 0"},"triggerText":"every Sun at 6:00 PM","action":{"agent":"task","instruction":"List open items."},"catchUp":"skip","createdAt":"2026-09-01T00:00:00.000Z","updatedAt":"2026-09-01T00:00:00.000Z"}}"""
+            )
+        )
+        api.createRoutine(
+            RoutineInput(
+                name = "Weekly review",
+                trigger = RoutineTriggerInput(weeklyOn = "sunday", weeklyAt = "18:00"),
+                action = RoutineAction(agent = "task", instruction = "List open items."),
+                deliverChannelId = null,
+            )
+        )
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"weeklyOn\":\"sunday\""))
+        assertTrue(body.contains("\"weeklyAt\":\"18:00\""))
+        assertTrue(!body.contains("dailyAt"))
+        assertTrue(body.contains("\"deliverChannelId\":null"))
+    }
+
+    @Test
+    fun `setRoutineEnabled PATCHes an explicit enabled flag`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"routine":{"id":"R1","name":"x","enabled":false,"trigger":{"kind":"every","minutes":60},"action":{"agent":"planner","instruction":"x"},"catchUp":"skip","createdAt":"2026-09-01T00:00:00.000Z","updatedAt":"2026-09-01T00:00:00.000Z"}}"""
+            )
+        )
+        api.setRoutineEnabled("R1", false)
+        val recorded = server.takeRequest()
+        assertEquals("PATCH", recorded.method)
+        assertEquals("/routines/R1", recorded.path)
+        assertEquals("""{"enabled":false}""", recorded.body.readUtf8())
+    }
+
+    @Test
     fun `documents response decodes extraction fields`() = runBlocking {
         server.enqueue(
             MockResponse().setBody(
