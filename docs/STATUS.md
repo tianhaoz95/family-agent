@@ -671,9 +671,10 @@ Later changes (not part of the original autonomous session):
     message; Backspace at the very start removes the whole chip (never a
     partial "/comman"). On send the wire form is rebuilt as `/cmd text`. Same
     in Chat and Messages via the shared `wireSlashMenu` helper.
-  - **Board**: the corkboard surface is now **white** (`var(--surface)`) with a
-    faint neutral dot grid, instead of the warm cream — matches the
-    white-hairline-card design system.
+  - **Board**: the corkboard surface is now a plain **white** panel
+    (`var(--surface)`) instead of the warm cream — matches the
+    white-hairline-card design system. (The faint dot grid it briefly carried
+    was later dropped on both clients — it read as noise.)
   - **Messages composer** now has the SAME plumbing as Chat: voice input (mic
     button, gated on `/health.asrEnabled`), `/` command autocomplete
     (`#message-slash-menu`), the one→three-line auto-grow + expand button, and a

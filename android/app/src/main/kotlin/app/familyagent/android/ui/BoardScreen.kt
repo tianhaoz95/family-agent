@@ -15,7 +15,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -109,7 +108,6 @@ fun BoardScreen(
         Box(
             Modifier
                 .fillMaxSize()
-                .cork()
                 .onSizeChanged { boardSize = it },
         ) {
             if (notes.isEmpty()) {
@@ -153,21 +151,6 @@ fun BoardScreen(
                 editing = null
             },
         )
-    }
-}
-
-/** Faint speckle so the panel reads as a pin board. */
-private fun Modifier.cork(): Modifier = drawBehind {
-    val step = 18.dp.toPx()
-    val dot = 1.4.dp.toPx()
-    var y = step / 2
-    while (y < size.height) {
-        var x = step / 2
-        while (x < size.width) {
-            drawCircle(Color(0x0F000000), radius = dot, center = Offset(x, y))
-            x += step
-        }
-        y += step
     }
 }
 

@@ -3279,8 +3279,8 @@ input[type="file"]::file-selector-button:hover {
   white-space: nowrap;
 }
 
-/* The board surface: a plain white panel with a faint dot grid. Notes are
-   absolutely positioned within it and dragged around. */
+/* The board surface: a plain white panel. Notes are absolutely positioned
+   within it and dragged around. */
 .note-board {
   position: relative;
   width: 100%;
@@ -3289,8 +3289,6 @@ input[type="file"]::file-selector-button:hover {
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   background-color: var(--surface);
-  background-image: radial-gradient(rgba(0, 0, 0, 0.06) 1px, transparent 1.4px);
-  background-size: 18px 18px;
   overflow: hidden;
   touch-action: none;
 }
