@@ -3824,6 +3824,21 @@ input[type="file"]::file-selector-button:hover {
   gap: 8px;
 }
 
+/* Skills and Routines: the "New …" form is taller than the viewport (the
+   Skills markdown editor especially), and .view clips its overflow — so the
+   form's Cancel/Save footer was getting cut off with nothing to scroll.
+   Let the whole view scroll as one column; the list then flows with the page
+   instead of being its own flex-grow scroll region. */
+#view-skills,
+#view-routines {
+  overflow-y: auto;
+}
+#view-skills .routine-list,
+#view-routines .routine-list {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
 .routine-row {
   border: 1px solid var(--border);
   background: var(--surface);
