@@ -805,9 +805,19 @@ export function buildServer(
     } catch (err) {
       chatRefs.delete(req.authUser.id);
       req.log?.error?.(err);
+      const detail = err instanceof Error ? err.message : String(err);
+      // Only blame Ollama when the failure actually looks like a connection /
+      // model problem — otherwise the message misdirects (a bug in a tool, a
+      // bad delegation, an out-of-memory in the sandbox, …).
+      const looksLikeModel =
+        /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed|network|ollama|model|not found.*pull|load model|status (?:5\d\d|429)|aborted|timeout/i.test(
+          detail
+        );
       return reply.code(502).send({
-        error: "The local model could not be reached. Is Ollama running with the configured model pulled?",
-        detail: err instanceof Error ? err.message : String(err),
+        error: looksLikeModel
+          ? "The local model could not be reached. Is Ollama running with the configured model pulled?"
+          : "The assistant hit an error on that request. Try rephrasing, or check /activity for what it attempted.",
+        detail,
       });
     }
   });

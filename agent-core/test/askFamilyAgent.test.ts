@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { askFamilyAgent } from "../src/agents/index.js";
+import { askFamilyAgent, buildPlannerPrompt } from "../src/agents/index.js";
 
 // Fast, deterministic coverage of the retry logic itself — the live-model
 // tests in agents.integration.test.ts prove the real thing works, but
@@ -70,6 +70,49 @@ describe("askFamilyAgent retry logic", () => {
     const { agent } = stubAgent(["", ""]);
     const reply = await askFamilyAgent(agent, "hi");
     expect(reply).toContain("didn't return a clean response");
+  });
+
+  it("degrades gracefully when the model delegates to a subagent that isn't wired", async () => {
+    // deepagents' `task` tool throws exactly this when subagent_type is unknown
+    // (web access off → no research-agent, etc). Must NOT propagate as a 502.
+    const invoke = vi.fn(async () => {
+      throw new Error(
+        "Error: invoked agent of type research-agent, the only allowed types are `task-agent`, `document-agent`"
+      );
+    });
+    const reply = await askFamilyAgent({ invoke } as any, "what is the TSLA price?");
+    expect(reply).toMatch(/research-agent.*isn't turned on/i);
+    expect(invoke).toHaveBeenCalledTimes(1); // no pointless retry
+  });
+
+  it("re-throws a genuine model-connection error (so /chat can report it accurately)", async () => {
+    const invoke = vi.fn(async () => {
+      throw new Error("request to http://127.0.0.1:11434/api/chat failed, reason: ECONNREFUSED");
+    });
+    await expect(askFamilyAgent({ invoke } as any, "hi")).rejects.toThrow(/ECONNREFUSED/);
+  });
+});
+
+describe("buildPlannerPrompt — only advertises wired subagents", () => {
+  it("the base prompt names none of the optional subagents", () => {
+    const base = buildPlannerPrompt({});
+    expect(base).not.toMatch(/research-agent/);
+    expect(base).not.toMatch(/workshop-agent/);
+    expect(base).not.toMatch(/tools-agent/);
+    // core ones are always there
+    expect(base).toMatch(/task-agent/);
+    expect(base).toMatch(/document-agent/);
+  });
+
+  it("adds a section only for each capability that's enabled", () => {
+    expect(buildPlannerPrompt({ web: true })).toMatch(/research-agent/);
+    expect(buildPlannerPrompt({ web: true })).not.toMatch(/workshop-agent/);
+    expect(buildPlannerPrompt({ shell: true })).toMatch(/workshop-agent/);
+    expect(buildPlannerPrompt({ tools: true })).toMatch(/tools-agent/);
+    const all = buildPlannerPrompt({ web: true, shell: true, tools: true });
+    expect(all).toMatch(/research-agent/);
+    expect(all).toMatch(/workshop-agent/);
+    expect(all).toMatch(/tools-agent/);
   });
 
   it("passes plain string content when there are no images", async () => {

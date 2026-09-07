@@ -1490,3 +1490,53 @@ oversized result capped, no state leak between calls. Live against `gemma4:e2b`:
 128.40 × 1.20 / 4), and the plain planner picked `run_code` unprompted for
 "how many days between today and 2026-12-25" → 109 (correct). Activity logs a
 `compute | compute.run` line per call. Fast suite 340 pass / 1 skip.
+
+## Planner delegated to a disabled subagent → misleading "model unreachable"
+
+**Symptom.** "What is the current TSLA stock price?" (and any other web-shaped
+question) failed with *"The local model could not be reached. Is Ollama running
+with the configured model pulled?"* — while every other request worked. The
+model was fine.
+
+**Cause.** `PLANNER_PROMPT` unconditionally described `research-agent`,
+`workshop-agent`, and `tools-agent` and listed them as valid `subagent_type`
+values. But those subagents are only added to the deepagents `subagents` array
+when their capability is on (web search provider set / `FAMILY_AGENT_SHELL=1` /
+`FAMILY_AGENT_TOOLS` on). With web off, the model read the prompt, called `task`
+with `subagent_type: "research-agent"`, and deepagents' `task` tool **throws**:
+
+    Error: invoked agent of type research-agent, the only allowed types are …
+
+That exception propagated out of `agent.invoke` → `askFamilyAgent` → the
+`/chat` catch-all, which blames Ollama for *any* thrown error.
+
+**Fix — three layers:**
+
+1. **Root cause.** `PLANNER_PROMPT` is now the always-true base; the
+   `research-agent` / `workshop-agent` / `tools-agent` paragraphs moved to
+   `PLANNER_{RESEARCH,WORKSHOP,TOOLS}_SECTION` constants that
+   `buildPlannerPrompt({ tools, web, shell })` appends only when that subagent
+   is wired. `buildFamilyAgent` passes the caps it actually built with. The
+   base is still what `warmup.ts` primes (it's the shared prefix — most of the
+   tokens; the conditional tails prefill on first use like every subagent
+   prompt already does).
+2. **Defensive.** `askFamilyAgent` wraps `agent.invoke` and, on the
+   "invoked agent of type X" error specifically, returns *"I tried to hand
+   this to the X helper, but it isn't turned on for this server."* rather than
+   re-throwing — so a small model that hallucinates an unavailable subagent
+   despite the clean prompt still degrades gracefully. Genuine connection
+   errors are re-thrown untouched.
+3. **Honest errors.** The `/chat` catch-all only shows the
+   "local model could not be reached" wording when the error text actually
+   matches a connection/model failure (`ECONNREFUSED`, `fetch failed`,
+   `timeout`, `ollama`, a 5xx, …); otherwise it says *"The assistant hit an
+   error on that request — try rephrasing, or check /activity."*
+
+**Note for stock prices specifically:** even with web on, `ddg` (the key-free
+provider) is blocked from datacenter IPs and a generic web page is a poor
+source for a live quote — a real answer needs `searxng` or a `tavily`/`brave`
+key, and ideally a finance-specific source.
+
+Tests: `test/askFamilyAgent.test.ts` — the bad-subagent error degrades (no
+retry, friendly message), a real `ECONNREFUSED` re-throws, and
+`buildPlannerPrompt` names an optional subagent only when its cap is passed.

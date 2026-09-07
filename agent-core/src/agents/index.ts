@@ -46,36 +46,13 @@ something should happen repeatedly or in the future — "every morning…",
 "set up a daily…" — to it. A plain one-off to-do with no timing goes to
 task-agent; anything with a recurring or future trigger goes to routine-agent.
 
-There may also be a "research-agent" subagent (only when the family has turned
-on web access): it searches the public web and reads pages. Route anything that
-needs a current fact the assistant wouldn't know — "what's the weather…", "when
-does … close", "look up …", "what's the phone number for …", "search online for
-…", "how do I …" — to it. If it isn't listed as available, tell the user web
-access is turned off for this server.
-
-There may also be a "workshop-agent" subagent (only when file-processing is
-turned on): it runs command-line tools (convert a photo, merge or split PDFs,
-trim a video, total a CSV column) over the family's documents. Route "combine
-these PDFs", "convert this HEIC to JPG", "compress this scan", "pull the audio
-out of this video", "add up column D in the expenses sheet" — to it.
-
-There is also a "tools-agent" subagent: the family builds their own small
-tools (an item / location tracker, a household inventory, a borrowed-things
-log, a chore-points tally, a bookshelf catalog…), and those tools can be
-queried and updated from chat. When someone wants to look something up in one
-of them or record something into one — "where did we put the…", "who
-borrowed the…", "add… to the inventory", "log that…", "how many points does
-… have" — delegate to tools-agent. If tools-agent reports the matching tool is
-"display-only" or lacks the needed operation, THEN delegate the same request to
-builder-agent to improve that existing tool — do not tell the user there's no
-tool and do not build a duplicate.
-
 To delegate, call the tool named "task" with two arguments: subagent_type set
-to "task-agent", "document-agent", "builder-agent", "notes-agent",
-"tools-agent", "routine-agent", "research-agent", or "workshop-agent", and
-description set to what you need done. These are NOT
-themselves callable tools — calling "task" with the right subagent_type is the
-only way to reach them.
+to one of the subagent names listed above (and any listed in "Extra helpers"
+at the end of these instructions, if present), and description set to what you
+need done. These are NOT themselves callable tools — calling "task" with the
+right subagent_type is the only way to reach them. NEVER pass a subagent_type
+that is not in one of those lists; if no listed subagent fits the request,
+handle it yourself or tell the user it's not something this server can do.
 
 Example — user asks "what documents do I have?": call task with
 subagent_type "document-agent" and description "List all ingested documents
@@ -120,12 +97,6 @@ the sticky notes." And for "add a sticky note that the plumber comes Friday"
 or "note that down for me": call task with subagent_type "notes-agent" and
 description "Add a sticky note: plumber comes Friday."
 
-Example — user asks "where's the good screwdriver?": call task with
-subagent_type "tools-agent" and description "Look up where the good
-screwdriver is stored." And for "we moved the tent to the basement": call
-task with subagent_type "tools-agent" and description "Record that the tent
-is now in the basement."
-
 Example — user asks "every morning at 7 give me a rundown of the day": call
 task with subagent_type "routine-agent" and description "Schedule a routine
 named 'Morning briefing' that runs every day at 07:00 and summarises today's
@@ -133,17 +104,6 @@ events, overdue tasks, and any bills due soon." And for "remind me tomorrow
 at 9 to call the plumber": call task with subagent_type "routine-agent" and
 description "Schedule a one-time routine for tomorrow at 09:00 to remind the
 user to call the plumber."
-
-Example — user asks "what time does the hardware store close today?" or "look
-up the recall status for our stroller": call task with subagent_type
-"research-agent" and description "Search the web for the hardware store's
-hours today and report them" / "Search the web for the stroller's recall
-status and report what you find, with the source."
-
-Example — user asks "merge the two insurance PDFs into one" or "convert that
-HEIC photo to a JPG": call task with subagent_type "workshop-agent" and
-description "Merge the two insurance PDF documents into a single PDF and save
-it as a document" / "Convert the HEIC photo document to JPG and save it."
 
 You also have a "run_code" tool: it runs a short JavaScript snippet and returns
 an exact result. Use it for ANY arithmetic, percentage, tip, loan/interest,
@@ -154,6 +114,63 @@ never do the maths yourself, you get it wrong. Example: "split $84 three ways"
 Keep replies short and concrete. If a request needs no tool at all (a plain
 question with nothing to look up or compute, like "what can you help with?"),
 answer directly.`;
+
+// Capability sections appended to PLANNER_PROMPT only when that capability is
+// actually wired for the user. Keeping them OUT of the base prompt is not
+// cosmetic: if the model is told a subagent exists and delegates to it when
+// it isn't registered, deepagents' `task` tool throws ("invoked agent of type
+// X, the only allowed types are …"), which used to crash the whole chat turn
+// and surface as "the local model could not be reached" (see
+// docs/DECISIONS.md → "Planner delegated to a disabled subagent").
+const PLANNER_TOOLS_SECTION = `
+
+Extra helpers — "tools-agent": the family builds their own small tools (an
+item / location tracker, a household inventory, a borrowed-things log, a
+chore-points tally, a bookshelf catalog…), and those tools can be queried and
+updated from chat. When someone wants to look something up in one of them or
+record something into one — "where did we put the…", "who borrowed the…",
+"add… to the inventory", "log that…", "how many points does … have" —
+delegate to tools-agent (subagent_type "tools-agent"). If tools-agent reports
+the matching tool is "display-only" or lacks the needed operation, THEN
+delegate the same request to builder-agent to improve that existing tool — do
+not tell the user there's no tool and do not build a duplicate.
+
+Example — "where's the good screwdriver?": task with subagent_type
+"tools-agent", description "Look up where the good screwdriver is stored."`;
+
+const PLANNER_RESEARCH_SECTION = `
+
+Extra helpers — "research-agent": it searches the public web and reads pages.
+Route anything that needs a current fact the assistant wouldn't know — "what's
+the weather…", "when does … close", "look up …", "what's the phone number
+for …", "search online for …", "the current price of …", "how do I …" — to it
+(subagent_type "research-agent").
+
+Example — "what time does the hardware store close today?": task with
+subagent_type "research-agent", description "Search the web for the hardware
+store's hours today and report them, with the source."`;
+
+const PLANNER_WORKSHOP_SECTION = `
+
+Extra helpers — "workshop-agent": it runs command-line tools (convert a photo,
+merge or split PDFs, trim a video, total a CSV column) over the family's
+documents. Route "combine these PDFs", "convert this HEIC to JPG", "compress
+this scan", "pull the audio out of this video", "add up column D in the
+expenses sheet" — to it (subagent_type "workshop-agent").`;
+
+/**
+ * The planner system prompt for a user, including ONLY the capability sections
+ * for subagents that are actually wired. `PLANNER_PROMPT` (the base) is what
+ * warmup.ts primes — the shared prefix, which is most of the tokens; the tails
+ * prefill on first use like every subagent prompt already does.
+ */
+export function buildPlannerPrompt(caps: { tools?: boolean; web?: boolean; shell?: boolean }): string {
+  let p = PLANNER_PROMPT;
+  if (caps.tools) p += PLANNER_TOOLS_SECTION;
+  if (caps.web) p += PLANNER_RESEARCH_SECTION;
+  if (caps.shell) p += PLANNER_WORKSHOP_SECTION;
+  return p;
+}
 
 const TASK_AGENT_PROMPT = `You manage the family's task list — you never do
 anything in the real world yourself, only track that it needs doing. Every
@@ -419,7 +436,13 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
   return createDeepAgent({
     name: "family-planner",
     model,
-    systemPrompt: PLANNER_PROMPT,
+    // Only tell the model about subagents it can actually reach — a delegation
+    // to an unregistered one throws inside deepagents and aborts the turn.
+    systemPrompt: buildPlannerPrompt({
+      tools: !!deps.familyTools,
+      web: !!deps.web,
+      shell: !!deps.shell,
+    }),
     tools: computeTools,
     // deepagents bakes in generic ls/read_file/write_file tools for the
     // agent's own "working memory" filesystem. A 3B-class model reliably
@@ -732,7 +755,22 @@ export async function askFamilyAgent(
   const messages = [...history, { role: "user", content }];
   let lastRefusal = "";
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const result = await agent.invoke({ messages });
+    let result: Awaited<ReturnType<InvokableAgent["invoke"]>>;
+    try {
+      result = await agent.invoke({ messages });
+    } catch (err) {
+      // The small model sometimes tries to delegate to a subagent that isn't
+      // wired for this server (web access off, tools off, …). deepagents'
+      // `task` tool throws for that — catch it here so the turn degrades to a
+      // clear message instead of the generic "model unreachable" 502. Genuine
+      // model-connection errors are re-thrown untouched.
+      const message = err instanceof Error ? err.message : String(err);
+      const badAgent = /invoked agent of type ([\w-]+), the only allowed types/.exec(message);
+      if (badAgent) {
+        return `I tried to hand this to the "${badAgent[1]}" helper, but it isn't turned on for this server.`;
+      }
+      throw err;
+    }
     const last = result.messages.at(-1);
     const text = last ? (typeof last.content === "string" ? last.content : JSON.stringify(last.content)) : "";
     if (!text.trim() || LOOKS_MALFORMED.test(text)) continue;

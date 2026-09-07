@@ -229,6 +229,15 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
     "chat history sessions" below.
   - System prompts contain worked examples, not just abstract instructions — abstract phrasing
     alone was proven insufficient to get reliable tool delegation out of small models.
+  - **The planner prompt only advertises subagents that are actually wired.** `PLANNER_PROMPT`
+    is the always-true base (the 5 core subagents); `buildPlannerPrompt({ tools, web, shell })`
+    appends `PLANNER_{TOOLS,RESEARCH,WORKSHOP}_SECTION` per enabled capability. Telling the
+    model about a subagent that isn't in the `subagents` array makes it delegate there, and
+    deepagents' `task` tool *throws* on an unknown `subagent_type` — which used to abort the
+    turn and surface as "the local model could not be reached". `askFamilyAgent` also catches
+    that specific throw defensively (returns "the X helper isn't turned on" instead of 502),
+    and `/chat`'s catch-all only blames Ollama when the error text looks like a connection
+    failure. See `docs/DECISIONS.md` → "Planner delegated to a disabled subagent".
 - `agents/extraction.ts` — document field extraction **deliberately bypasses the planner**. It
   binds a single-purpose tool directly to the model with the document id captured in a closure,
   rather than routing through planner → `task` tool → `document-agent` (which requires the model
