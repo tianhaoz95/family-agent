@@ -1230,8 +1230,7 @@ summary:focus-visible {
 .inline-form input[type="password"],
 .inline-form input[type="date"],
 .inline-form textarea,
-.inline-form select,
-.field {
+.inline-form select {
   font-size: 0.875rem;
   padding: 9px 12px;
   border-radius: var(--r-md);
@@ -2778,14 +2777,18 @@ input[type="file"]::file-selector-button:hover {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   font-family: inherit;
   font-size: 0.9rem;
   color: var(--text);
-  background: var(--bg);
+  background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-md);
   padding: 8px 10px;
+}
+.field textarea {
+  resize: vertical;
 }
 .field select {
   appearance: none;
@@ -2794,11 +2797,13 @@ input[type="file"]::file-selector-button:hover {
   background-position: right 10px center;
   padding-right: 30px;
 }
-.field input::placeholder {
+.field input::placeholder,
+.field textarea::placeholder {
   color: var(--text-faint);
 }
 .field input:focus,
-.field select:focus {
+.field select:focus,
+.field textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-ring);
@@ -4062,7 +4067,6 @@ input[type="file"]::file-selector-button:hover {
 .routine-row,
 .routine-form,
 .user-row,
-.user-form,
 .family-panel,
 .gate-card,
 .channel-new-form,
