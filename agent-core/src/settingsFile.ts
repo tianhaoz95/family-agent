@@ -13,6 +13,8 @@ export interface PersistedSettings {
   ocrModel?: string;
   /** Hugging Face repo id for the speech-to-text (voice input) model. See transcribe.ts. */
   asrModel?: string;
+  /** Kokoro voice id for text-to-speech (voice output). See tts.ts. */
+  ttsVoice?: string;
   /** Ollama embedding model for semantic document search. See embeddings.ts. */
   embedModel?: string;
   /** The chat/planner model name pulled into Ollama. */
@@ -23,7 +25,7 @@ export interface PersistedSettings {
   serverName?: string;
 }
 
-const STRING_KEYS: (keyof PersistedSettings)[] = ["ocrModel", "asrModel", "embedModel", "model", "ollamaBaseUrl", "serverName"];
+const STRING_KEYS: (keyof PersistedSettings)[] = ["ocrModel", "asrModel", "ttsVoice", "embedModel", "model", "ollamaBaseUrl", "serverName"];
 
 function settingsPath(dataDir: string): string {
   return `${dataDir}/settings.json`;

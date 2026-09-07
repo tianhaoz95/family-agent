@@ -1,6 +1,7 @@
 package app.familyagent.android.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -12,6 +13,7 @@ private val AUTH_TOKEN_KEY = stringPreferencesKey("auth_token")
 private val USER_NAME_KEY = stringPreferencesKey("user_display_name")
 private val SERVER_NAME_KEY = stringPreferencesKey("server_name")
 private val TASK_VIEW_KEY = stringPreferencesKey("task_view")
+private val AUTO_READ_KEY = booleanPreferencesKey("auto_read_replies")
 private val TASK_VIEWS = listOf("list", "day", "3day", "week", "month")
 
 // Prefill for the manual-address field only. The normal path is LAN discovery
@@ -53,6 +55,13 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setTaskView(view: String) {
         context.dataStore.edit { it[TASK_VIEW_KEY] = view }
+    }
+
+    /** Read new assistant replies aloud automatically. Survives sign-out. */
+    val autoRead = context.dataStore.data.map { it[AUTO_READ_KEY] ?: false }
+
+    suspend fun setAutoRead(on: Boolean) {
+        context.dataStore.edit { it[AUTO_READ_KEY] = on }
     }
 
     suspend fun saveSession(serverUrl: String, token: String, displayName: String, serverName: String) {

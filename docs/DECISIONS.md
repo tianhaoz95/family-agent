@@ -529,6 +529,51 @@ it pulls in a version-pinned `webkit2gtk` dependency that couldn't be verified
 in the build environment available, and a wrong version breaks the whole
 desktop build. Left as a one-file follow-up; the snippet is in BUILD_LOG.
 
+## Voice output (text-to-speech): Kokoro-82M in-process
+
+**Requested:** a "read the reply aloud" feature — a good on-device model to do it.
+**Shipped:** **Kokoro-82M** (`onnx-community/Kokoro-82M-v1.0-ONNX`, `q8` ~86 MB),
+run in-process via **`kokoro-js`** (`agent-core/src/tts.ts`), behind `POST /speak`
++ `GET /tts/voices`, with a "Read aloud" button on every assistant/agent reply and
+an opt-in "read replies aloud automatically" toggle in both clients' Settings.
+
+This is a **third in-process inference path** with the exact shape of OCR
+(`fileExtract.ts`) and ASR (`transcribe.ts`) — the pattern is now deliberate:
+
+- **Ollama can't serve TTS**, same as ASR, so it's a separate runtime. Kokoro is
+  the smallest model that sounds natural: 82M params, an ONNX graph that runs on
+  plain-Node `onnxruntime-node` (already pulled in by `@huggingface/transformers`,
+  which `kokoro-js` depends on), no native build step, cross-platform. The
+  phonemizer is a **WASM build of espeak-ng** (`phonemizer` npm) — no native
+  espeak binary to install. Model pulled from the HF CDN once, cached under
+  `<dataDir>/tts-models/`. First call ~15–20 s (download + load), then ~2–5 s per
+  reply on this CPU.
+- **Why not Piper.** Piper (VITS ONNX, similar size, very common for local TTS)
+  needs the `piper` C++ binary or a native `onnxruntime` + a separate espeak-ng
+  install; `kokoro-js` is a single `npm install` that runs where the rest of
+  agent-core already runs (Mac/Windows desktop included). Kokoro also scored
+  higher on naturalness in TTS Arena. Piper stays the fallback if Kokoro's
+  footprint ever becomes a problem.
+- **In agent-core, not the webview** — one implementation serves both clients,
+  which just `POST /speak` and play the returned WAV. Same reasoning as ASR.
+- **Off the planner.** Synthesis is a mechanical step; the route calls the model
+  directly. Markdown is stripped to plain text (`plainText()`) before synthesis —
+  code fences become "code block", link/image syntax and heading/list markers are
+  removed — and clamped to 2000 chars.
+- **Output is 16-bit PCM WAV**, re-encoded from Kokoro's native 32-bit float WAV
+  (`encodeWav16`). Android's `MediaPlayer` won't play 32-bit float WAV; 16-bit
+  mono @ 24 kHz plays everywhere with no codec dependency, mirroring the ASR
+  "clients speak WAV" decision in reverse.
+- **28 voices**, exposed via `GET /tts/voices` (read off the loaded model). The
+  default (`af_heart`, `FAMILY_AGENT_TTS_VOICE` / `settings.json` `ttsVoice`,
+  admin-settable) is applied per-call — no client rebuild. Desktop shows a
+  curated shortlist until the model loads, then swaps in the full list.
+- **Auto-read is client-local and off by default** — desktop `localStorage`
+  (`familyAgent.autoRead`), Android DataStore (`auto_read_replies`). It only fires
+  in the private 1:1 Chat flow, never in family channels, and never on an error
+  reply. `FAMILY_AGENT_TTS=0` disables the whole feature (routes 403,
+  `/health.ttsEnabled` false, both clients hide the button + toggle).
+
 ## Document & task search: SQLite FTS5, not an external search engine
 
 **Context.** Until now both subagents "searched" by enumerating everything —

@@ -92,6 +92,10 @@ fun ChatScreen(
     sending: Boolean,
     voiceEnabled: Boolean,
     transcribing: Boolean,
+    ttsEnabled: Boolean = false,
+    speakingText: String? = null,
+    speakLoadingText: String? = null,
+    onSpeak: (String) -> Unit = {},
     onSend: (String, List<String>) -> Unit,
     onTranscribe: (ByteArray, (String) -> Unit) -> Unit,
     onReferenceClick: (ChatReference) -> Unit = {},
@@ -218,7 +222,9 @@ fun ChatScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 contentPadding = PaddingValues(vertical = 4.dp),
             ) {
-                items(messages) { msg -> ChatBubble(msg, onReferenceClick) }
+                items(messages) { msg ->
+                    ChatBubble(msg, onReferenceClick, ttsEnabled, speakingText, speakLoadingText, onSpeak)
+                }
                 if (sending) {
                     item {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
@@ -463,7 +469,14 @@ private fun SlashHelpRow(command: String, description: String) {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun ChatBubble(msg: ChatMessage, onReferenceClick: (ChatReference) -> Unit = {}) {
+private fun ChatBubble(
+    msg: ChatMessage,
+    onReferenceClick: (ChatReference) -> Unit = {},
+    ttsEnabled: Boolean = false,
+    speakingText: String? = null,
+    speakLoadingText: String? = null,
+    onSpeak: (String) -> Unit = {},
+) {
     val isUser = msg.role == "user"
     Column(horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
     Row(
@@ -536,7 +549,12 @@ private fun ChatBubble(msg: ChatMessage, onReferenceClick: (ChatReference) -> Un
         }
     }
     if (!isUser && msg.text.isNotBlank()) {
-        CopyButton(msg.text, Modifier.offset(x = (-4).dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CopyButton(msg.text, Modifier.offset(x = (-4).dp))
+            if (ttsEnabled) {
+                SpeakButton(msg.text, speakingText, speakLoadingText, onSpeak, Modifier.offset(x = (-8).dp))
+            }
+        }
     }
     if (!isUser && msg.references.isNotEmpty()) {
         Spacer(Modifier.height(6.dp))

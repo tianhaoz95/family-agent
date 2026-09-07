@@ -32,6 +32,7 @@ export const envLocked = {
   inboxDir: process.env.FAMILY_AGENT_INBOX_DIR !== undefined,
   ocrModel: process.env.FAMILY_AGENT_OCR_MODEL !== undefined,
   asrModel: process.env.FAMILY_AGENT_ASR_MODEL !== undefined,
+  ttsVoice: process.env.FAMILY_AGENT_TTS_VOICE !== undefined,
   embedModel: process.env.FAMILY_AGENT_EMBED_MODEL !== undefined,
   serverName: process.env.FAMILY_AGENT_SERVER_NAME !== undefined,
 } as const;
@@ -85,6 +86,22 @@ export const config = {
   // ONNX weight precision for the ASR model: fp32 | fp16 | q8 | q4. q8 roughly
   // halves the download and speeds inference for a small accuracy cost.
   asrDtype: process.env.FAMILY_AGENT_ASR_DTYPE ?? "q8",
+
+  // ---- Voice output (text-to-speech) ----
+  // The "read this aloud" button on the assistant's replies (and the optional
+  // "auto-read" toggle, which lives client-side). Kokoro-82M via kokoro-js,
+  // run in-process (Ollama can't serve TTS) — see tts.ts. Off = /speak
+  // returns 403 and both clients hide the play button (read from /health).
+  ttsEnabled: process.env.FAMILY_AGENT_TTS !== "0",
+  // Hugging Face repo id for the TTS model. Kokoro is the sweet spot for
+  // quality-per-megabyte on CPU; this is env-configurable but not in the
+  // Settings UI (the *voice* is the useful knob there).
+  ttsModel: process.env.FAMILY_AGENT_TTS_MODEL || "onnx-community/Kokoro-82M-v1.0-ONNX",
+  // Which Kokoro voice to use. Settable from Settings (PUT /settings) and
+  // persisted. af_* American female, am_* male, bf_*/bm_* British.
+  ttsVoice: process.env.FAMILY_AGENT_TTS_VOICE || persisted.ttsVoice || "af_heart",
+  // ONNX weight precision for the TTS model: fp32 | q8 | q4. q8 is ~86 MB.
+  ttsDtype: process.env.FAMILY_AGENT_TTS_DTYPE ?? "q8",
 
   // ---- Semantic search (document embeddings) ----
   // Optional: an Ollama embedding model used to build a vector index over each

@@ -179,6 +179,10 @@ fun ConversationScreen(
     messages: List<Message>,
     sending: Boolean,
     currentUserId: String,
+    ttsEnabled: Boolean = false,
+    speakingText: String? = null,
+    speakLoadingText: String? = null,
+    onSpeak: (String) -> Unit = {},
     onSend: (String, List<String>) -> Unit,
     onDelete: () -> Unit,
     onBack: () -> Unit,
@@ -258,7 +262,12 @@ fun ConversationScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 10.dp),
         ) {
-            items(messages, key = { it.id }) { m -> MessageBubble(m, own = m.senderId == currentUserId, channel) }
+            items(messages, key = { it.id }) { m ->
+                MessageBubble(
+                    m, own = m.senderId == currentUserId, channel,
+                    ttsEnabled, speakingText, speakLoadingText, onSpeak,
+                )
+            }
         }
 
         if (attached.isNotEmpty()) {
@@ -352,7 +361,15 @@ fun ConversationScreen(
 private const val MAX_MESSAGE_IMAGES = 4
 
 @Composable
-private fun MessageBubble(msg: Message, own: Boolean, channel: Channel?) {
+private fun MessageBubble(
+    msg: Message,
+    own: Boolean,
+    channel: Channel?,
+    ttsEnabled: Boolean = false,
+    speakingText: String? = null,
+    speakLoadingText: String? = null,
+    onSpeak: (String) -> Unit = {},
+) {
     val agent = msg.senderId == AGENT_SENDER_ID
     val senderName = when {
         agent -> "Assistant"
@@ -420,7 +437,12 @@ private fun MessageBubble(msg: Message, own: Boolean, channel: Channel?) {
                 }
             }
             if (agent && !msg.pending && msg.body.isNotBlank()) {
-                CopyButton(msg.body, Modifier.offset(x = (-4).dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CopyButton(msg.body, Modifier.offset(x = (-4).dp))
+                    if (ttsEnabled) {
+                        SpeakButton(msg.body, speakingText, speakLoadingText, onSpeak, Modifier.offset(x = (-8).dp))
+                    }
+                }
             }
         }
     }

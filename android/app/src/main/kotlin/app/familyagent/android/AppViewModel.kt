@@ -1,5 +1,7 @@
 package app.familyagent.android
 
+import android.content.Context
+import android.media.MediaPlayer
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -78,6 +80,14 @@ data class AppUiState(
     val chatSessions: List<app.familyagent.android.data.ChatSession> = emptyList(),
     /** Server offers speech-to-text (from /health) — gates the chat mic button. */
     val voiceEnabled: Boolean = false,
+    /** Server offers text-to-speech (from /health) — gates the "read aloud" button. */
+    val ttsEnabled: Boolean = false,
+    /** Read new assistant replies aloud automatically (persisted in DataStore). */
+    val autoRead: Boolean = false,
+    /** The reply text currently being synthesized (null = none). */
+    val speakLoadingText: String? = null,
+    /** The reply text currently playing aloud (null = none). */
+    val speakingText: String? = null,
     /** A recorded voice clip is being transcribed right now. */
     val chatTranscribing: Boolean = false,
     val tasks: List<Task> = emptyList(),
@@ -138,14 +148,24 @@ data class AppUiState(
 class AppViewModel(
     private val api: FamilyAgentApi,
     private val settings: SettingsStore,
+    private val appContext: Context,
 ) : ViewModel() {
     private val _state = MutableStateFlow(AppUiState())
     val state: StateFlow<AppUiState> = _state.asStateFlow()
+
+    // ---- text-to-speech playback ----
+    private var mediaPlayer: MediaPlayer? = null
+    private val speechCache = HashMap<String, ByteArray>()
 
     init {
         viewModelScope.launch {
             settings.taskView.collect { view ->
                 _state.value = _state.value.copy(taskView = view)
+            }
+        }
+        viewModelScope.launch {
+            settings.autoRead.collect { on ->
+                _state.value = _state.value.copy(autoRead = on)
             }
         }
         viewModelScope.launch {
@@ -260,6 +280,7 @@ class AppViewModel(
                         connection = ConnectionStatus.Connected(h.model),
                         toolsBaseUrl = toolsBaseUrl(_state.value.serverUrl, h.toolsPort),
                         voiceEnabled = h.asrEnabled,
+                        ttsEnabled = h.ttsEnabled,
                         semanticSearchEnabled = h.semanticSearch == "on",
                         routinesEnabled = h.routinesEnabled,
                         skillsMode = h.skills,
@@ -329,9 +350,88 @@ class AppViewModel(
                 chatMessages = withUser + assistant,
                 chatSending = false,
             )
+            if (assistant.role == "assistant" && _state.value.autoRead && _state.value.ttsEnabled &&
+                !assistant.text.startsWith("Error:")
+            ) {
+                speak(assistant.text)
+            }
             refreshActivity()
             refreshChatSessions()
         }
+    }
+
+    // ---- read a reply aloud (TTS) ----
+    // One player at a time; the synthesized WAV is cached per reply so a replay
+    // is instant. The button in the bubble reflects speakLoadingText /
+    // speakingText.
+
+    fun speak(text: String) {
+        val body = text.trim()
+        if (body.isEmpty()) return
+        if (_state.value.speakingText == body || _state.value.speakLoadingText == body) {
+            stopSpeech()
+            return
+        }
+        stopSpeech()
+        val cached = speechCache[body]
+        if (cached != null) {
+            playWav(body, cached)
+            return
+        }
+        _state.value = _state.value.copy(speakLoadingText = body)
+        viewModelScope.launch {
+            apiCall { api.speak(body) }.fold(
+                onSuccess = { bytes ->
+                    speechCache[body] = bytes
+                    // The user may have hit stop / navigated while it loaded.
+                    if (_state.value.speakLoadingText == body) playWav(body, bytes)
+                    else _state.value = _state.value.copy(speakLoadingText = null)
+                },
+                onFailure = {
+                    _state.value = _state.value.copy(
+                        speakLoadingText = null,
+                        chatMessages = _state.value.chatMessages +
+                            ChatMessage("assistant", "Couldn't read that aloud: ${it.message}"),
+                    )
+                },
+            )
+        }
+    }
+
+    private fun playWav(text: String, bytes: ByteArray) {
+        runCatching {
+            val file = java.io.File(appContext.cacheDir, "tts-reply.wav")
+            file.writeBytes(bytes)
+            val mp = MediaPlayer().apply {
+                setDataSource(file.absolutePath)
+                setOnCompletionListener { stopSpeech() }
+                setOnErrorListener { _, _, _ -> stopSpeech(); true }
+                prepare()
+                start()
+            }
+            mediaPlayer = mp
+            _state.value = _state.value.copy(speakLoadingText = null, speakingText = text)
+        }.onFailure {
+            _state.value = _state.value.copy(speakLoadingText = null, speakingText = null)
+        }
+    }
+
+    fun stopSpeech() {
+        mediaPlayer?.let { runCatching { it.stop() }; it.release() }
+        mediaPlayer = null
+        if (_state.value.speakingText != null || _state.value.speakLoadingText != null) {
+            _state.value = _state.value.copy(speakingText = null, speakLoadingText = null)
+        }
+    }
+
+    fun setAutoRead(on: Boolean) {
+        viewModelScope.launch { settings.setAutoRead(on) }
+    }
+
+    override fun onCleared() {
+        mediaPlayer?.release()
+        mediaPlayer = null
+        super.onCleared()
     }
 
     // ---- chat history sessions (private 1:1 assistant chat) ----

@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             FamilyAgentTheme {
                 val viewModel: AppViewModel = viewModel(
-                    factory = AppViewModelFactory(FamilyAgentApi(""), settingsStore),
+                    factory = AppViewModelFactory(FamilyAgentApi(""), settingsStore, applicationContext),
                 )
                 val state by viewModel.state.collectAsState()
                 // The animated gradient canvas sits behind every screen — the
@@ -142,10 +142,11 @@ class MainActivity : ComponentActivity() {
 class AppViewModelFactory(
     private val api: FamilyAgentApi,
     private val settings: SettingsStore,
+    private val appContext: android.content.Context,
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         @Suppress("UNCHECKED_CAST")
-        return AppViewModel(api, settings) as T
+        return AppViewModel(api, settings, appContext) as T
     }
 }
 
@@ -167,6 +168,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
     }
 
     fun navigateTo(dest: Destination) {
+        viewModel.stopSpeech()
         navController.navigate(dest.route) {
             popUpTo(navController.graph.findStartDestination().id) { saveState = true }
             launchSingleTop = true
@@ -236,6 +238,10 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         sending = state.chatSending,
                         voiceEnabled = state.voiceEnabled,
                         transcribing = state.chatTranscribing,
+                        ttsEnabled = state.ttsEnabled,
+                        speakingText = state.speakingText,
+                        speakLoadingText = state.speakLoadingText,
+                        onSpeak = viewModel::speak,
                         onSend = viewModel::sendChat,
                         onTranscribe = viewModel::transcribeVoice,
                         onReferenceClick = viewModel::openReferenceDetail,
@@ -281,6 +287,10 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         messages = state.channelMessages,
                         sending = state.channelSending,
                         currentUserId = (state.auth as? AuthState.Authenticated)?.user?.id ?: "",
+                        ttsEnabled = state.ttsEnabled,
+                        speakingText = state.speakingText,
+                        speakLoadingText = state.speakLoadingText,
+                        onSpeak = viewModel::speak,
                         onSend = viewModel::sendChannelMessage,
                         onDelete = {
                             viewModel.deleteChannel(id) { navController.popBackStack() }
@@ -397,6 +407,9 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         connection = state.connection,
                         userName = (state.auth as? AuthState.Authenticated)?.user?.displayName ?: "",
                         userRole = (state.auth as? AuthState.Authenticated)?.user?.role ?: "",
+                        ttsEnabled = state.ttsEnabled,
+                        autoRead = state.autoRead,
+                        onSetAutoRead = viewModel::setAutoRead,
                         onSave = viewModel::setServerUrl,
                         onSignOut = viewModel::signOut,
                     )

@@ -66,6 +66,7 @@ function showView(name: string) {
   closeToolViewer();
   closeDbInspector();
   closeSidePanel();
+  stopSpeech();
   for (const btn of navButtons) btn.classList.toggle("is-active", btn.dataset.view === name);
   for (const view of views) view.classList.toggle("is-active", view.id === `view-${name}`);
   // Stop any view-scoped polling loops the previous view started.
@@ -196,6 +197,7 @@ async function refreshStatus() {
     voiceEnabled = health.asrEnabled === true;
     chatMicBtn.hidden = !voiceEnabled;
     messageMicBtn.hidden = !voiceEnabled;
+    ttsEnabled = health.ttsEnabled === true;
     semanticSearchOff = health.semanticSearch === "off";
     routinesEnabled = health.routinesEnabled !== false;
     navRoutines.hidden = !routinesEnabled;
@@ -315,6 +317,12 @@ const COPY_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const CHECK_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+const SPEAKER_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 6a9 9 0 0 1 0 12"/></svg>';
+const STOP_ICON =
+  '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+const SPINNER_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" class="bubble-spin" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>';
 
 /** A "Copy" button for an assistant/agent reply — copies the raw text (the
  *  Markdown source, not the rendered HTML). Returns the button so callers can
@@ -342,14 +350,110 @@ function makeCopyButton(rawText: string): HTMLButtonElement {
   return btn;
 }
 
-/** Insert a `.bubble-actions` row (with a Copy button) directly after a chat
- *  bubble. Call after `appendReferences` so the order is bubble → copy → refs. */
-function appendBubbleCopy(bubble: HTMLElement, rawText: string) {
+// ---------- read aloud (TTS) ----------
+// Mirrors /health.ttsEnabled — hides the "read aloud" button when off.
+let ttsEnabled = false;
+// The <audio> element currently playing a reply, so a new play stops the old.
+let currentSpeech: HTMLAudioElement | null = null;
+const AUTO_READ_KEY = "familyAgent.autoRead";
+let autoRead = false;
+try {
+  autoRead = localStorage.getItem(AUTO_READ_KEY) === "1";
+} catch {
+  /* private mode */
+}
+
+function stopSpeech() {
+  if (currentSpeech) {
+    currentSpeech.pause();
+    currentSpeech.src = "";
+    currentSpeech = null;
+  }
+}
+
+/** A "Read aloud" toggle button for an assistant reply. Idle → loading →
+ *  playing → idle. Caches the synthesized audio so replays are instant. */
+function makeSpeakButton(rawText: string): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "bubble-speak";
+  const setIdle = () => {
+    btn.innerHTML = `${SPEAKER_ICON}<span>Read aloud</span>`;
+    btn.classList.remove("is-playing", "is-loading");
+  };
+  setIdle();
+  let objectUrl: string | null = null;
+  let loading = false;
+
+  btn.addEventListener("click", async () => {
+    // Clicking while this one plays = stop it.
+    if (btn.classList.contains("is-playing")) {
+      stopSpeech();
+      setIdle();
+      return;
+    }
+    if (loading) return;
+    stopSpeech();
+
+    const play = (url: string) => {
+      const audio = new Audio(url);
+      currentSpeech = audio;
+      btn.innerHTML = `${STOP_ICON}<span>Stop</span>`;
+      btn.classList.add("is-playing");
+      btn.classList.remove("is-loading");
+      audio.addEventListener("ended", () => {
+        if (currentSpeech === audio) currentSpeech = null;
+        setIdle();
+      });
+      audio.addEventListener("error", () => setIdle());
+      void audio.play().catch(() => setIdle());
+    };
+
+    if (objectUrl) {
+      play(objectUrl);
+      return;
+    }
+    loading = true;
+    btn.innerHTML = `${SPINNER_ICON}<span>Synthesizing…</span>`;
+    btn.classList.add("is-loading");
+    try {
+      const blob = await api.speak(rawText);
+      objectUrl = URL.createObjectURL(blob);
+      play(objectUrl);
+    } catch (err) {
+      setIdle();
+      appendBubble("system", `Couldn't read that aloud: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      loading = false;
+    }
+  });
+  return btn;
+}
+
+/** A Copy (+ Read-aloud, if TTS is on) row for an assistant / agent reply. */
+function msgActionsRow(rawText: string): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "bubble-actions msg-actions";
+  row.appendChild(makeCopyButton(rawText));
+  if (ttsEnabled && rawText.trim()) row.appendChild(makeSpeakButton(rawText));
+  return row;
+}
+
+/** Insert a `.bubble-actions` row (Copy + optionally Read-aloud) directly after
+ *  a chat bubble. Call after `appendReferences` so order is bubble → actions →
+ *  refs. Returns the speak button (or null) so auto-read can trigger it. */
+function appendBubbleActions(bubble: HTMLElement, rawText: string): HTMLButtonElement | null {
   const row = document.createElement("div");
   row.className = "bubble-actions";
   row.appendChild(makeCopyButton(rawText));
+  let speakBtn: HTMLButtonElement | null = null;
+  if (ttsEnabled && rawText.trim()) {
+    speakBtn = makeSpeakButton(rawText);
+    row.appendChild(speakBtn);
+  }
   bubble.insertAdjacentElement("afterend", row);
   chatLog.scrollTop = chatLog.scrollHeight;
+  return speakBtn;
 }
 
 function appendUserMessage(text: string, images: string[]) {
@@ -879,7 +983,7 @@ async function openChatSession(id: string) {
     else {
       const bubble = appendBubble("assistant", m.body);
       if (m.refs.length) appendReferences(bubble, m.refs);
-      appendBubbleCopy(bubble, m.body);
+      appendBubbleActions(bubble, m.body);
     }
   }
   renderChatSessionList();
@@ -967,7 +1071,8 @@ chatForm.addEventListener("submit", async (e) => {
     pending.remove();
     const bubble = appendBubble("assistant", reply);
     if (references?.length) appendReferences(bubble, references);
-    appendBubbleCopy(bubble, reply);
+    const speakBtn = appendBubbleActions(bubble, reply);
+    if (autoRead && speakBtn) speakBtn.click();
     activeChatSessionId = sessionId;
     void refreshChatSessions();
   } catch (err) {
@@ -3233,6 +3338,11 @@ const settingsAsrModelInput = document.getElementById("settings-asr-model-input"
 const settingsAsrForm = document.getElementById("settings-asr-form") as HTMLFormElement;
 const settingsAsrStatusEl = document.getElementById("settings-asr-status")!;
 const settingsAsrHintEl = document.getElementById("settings-asr-hint")!;
+const settingsTtsBlock = document.getElementById("settings-tts-block")!;
+const settingsTtsVoiceSelect = document.getElementById("settings-tts-voice-select") as HTMLSelectElement;
+const settingsTtsForm = document.getElementById("settings-tts-form") as HTMLFormElement;
+const settingsTtsStatusEl = document.getElementById("settings-tts-status")!;
+const settingsAutoReadCheckbox = document.getElementById("settings-auto-read") as HTMLInputElement;
 const settingsServerNameInput = document.getElementById("settings-servername-input") as HTMLInputElement;
 const settingsServerNameForm = document.getElementById("settings-servername-form") as HTMLFormElement;
 const settingsServerNameStatusEl = document.getElementById("settings-servername-status")!;
@@ -3269,6 +3379,51 @@ function fillModelSelect(sel: HTMLSelectElement, models: string[], current: stri
   sel.value = current;
 }
 
+// Kokoro's own voice list only loads once the model has (first /speak); until
+// then, offer a curated shortlist so the dropdown isn't empty. Friendly labels
+// for the common ones; the raw id for anything the model reports that we don't
+// recognise.
+const TTS_VOICE_LABELS: Record<string, string> = {
+  af_heart: "Heart — American, female (default)",
+  af_bella: "Bella — American, female",
+  af_nicole: "Nicole — American, female (soft)",
+  af_sarah: "Sarah — American, female",
+  am_michael: "Michael — American, male",
+  am_puck: "Puck — American, male",
+  am_fenrir: "Fenrir — American, male (deep)",
+  bf_emma: "Emma — British, female",
+  bf_isabella: "Isabella — British, female",
+  bm_george: "George — British, male",
+  bm_lewis: "Lewis — British, male",
+};
+let ttsVoiceList: string[] = Object.keys(TTS_VOICE_LABELS);
+
+function fillVoiceSelect(sel: HTMLSelectElement, current: string) {
+  const values = [...new Set([...ttsVoiceList, current].filter(Boolean))];
+  sel.innerHTML = "";
+  for (const value of values) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = TTS_VOICE_LABELS[value] ?? value;
+    sel.appendChild(opt);
+  }
+  sel.value = current;
+  // Once the model has loaded, replace the shortlist with what it actually has.
+  if (ttsVoiceList.length <= Object.keys(TTS_VOICE_LABELS).length) {
+    void api
+      .listTtsVoices()
+      .then(({ voices }) => {
+        if (voices.length && voices.join() !== ttsVoiceList.join()) {
+          ttsVoiceList = voices;
+          fillVoiceSelect(sel, sel.value || current);
+        }
+      })
+      .catch(() => {
+        /* model not loaded yet — the shortlist is fine */
+      });
+  }
+}
+
 function setEnvLocked(form: HTMLFormElement, statusEl: HTMLElement, locked: boolean) {
   for (const el of form.querySelectorAll<HTMLElement>("input, select, button")) {
     (el as HTMLInputElement).disabled = locked;
@@ -3296,6 +3451,11 @@ async function refreshSettings() {
     if (!settings.asrEnabled) {
       settingsAsrStatusEl.textContent = "Voice input is turned off on this machine (FAMILY_AGENT_ASR=0).";
     }
+    settingsTtsBlock.hidden = !settings.ttsEnabled;
+    if (settings.ttsEnabled && document.activeElement !== settingsTtsVoiceSelect) {
+      fillVoiceSelect(settingsTtsVoiceSelect, settings.ttsVoice);
+    }
+    settingsAutoReadCheckbox.checked = autoRead;
     if (document.activeElement !== settingsOllamaUrlInput) {
       settingsOllamaUrlInput.value = settings.ollamaBaseUrl;
     }
@@ -3321,6 +3481,7 @@ async function refreshSettings() {
     adminLock(settingsOllamaForm, settingsOllamaStatusEl, settings.envLocked.ollamaBaseUrl);
     adminLock(settingsOcrForm, settingsOcrStatusEl, settings.envLocked.ocrModel);
     if (settings.asrEnabled) adminLock(settingsAsrForm, settingsAsrStatusEl, settings.envLocked.asrModel);
+    if (settings.ttsEnabled) adminLock(settingsTtsForm, settingsTtsStatusEl, settings.envLocked.ttsVoice);
     adminLock(settingsServerNameForm, settingsServerNameStatusEl, settings.envLocked.serverName);
     // The watched folder is this user's own — always editable (unless env-pinned).
     setEnvLocked(settingsForm, settingsStatusEl, settings.envLocked.inboxDir);
@@ -3400,6 +3561,23 @@ settingsAsrForm.addEventListener("submit", (e) => {
   // "" is valid — the server falls back to its default model.
   const asrModel = settingsAsrModelInput.value.trim();
   void saveSetting({ asrModel }, settingsAsrStatusEl, (s) => `Saved — voice input now uses ${s.asrModel}`);
+});
+
+settingsTtsForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const ttsVoice = settingsTtsVoiceSelect.value;
+  if (ttsVoice) {
+    void saveSetting({ ttsVoice }, settingsTtsStatusEl, (s) => `Saved — replies read in ${TTS_VOICE_LABELS[s.ttsVoice] ?? s.ttsVoice}`);
+  }
+});
+
+settingsAutoReadCheckbox.addEventListener("change", () => {
+  autoRead = settingsAutoReadCheckbox.checked;
+  try {
+    localStorage.setItem(AUTO_READ_KEY, autoRead ? "1" : "0");
+  } catch {
+    /* private mode */
+  }
 });
 
 settingsServerNameForm.addEventListener("submit", (e) => {
@@ -3890,12 +4068,7 @@ function renderMessage(m: Message) {
     if (existing && !m.pending) {
       existing.classList.remove("is-pending");
       existing.querySelector(".msg-body")!.innerHTML = renderMarkdown(m.body);
-      if (!existing.querySelector(".msg-actions")) {
-        const row = document.createElement("div");
-        row.className = "bubble-actions msg-actions";
-        row.appendChild(makeCopyButton(m.body));
-        existing.appendChild(row);
-      }
+      if (!existing.querySelector(".msg-actions")) existing.appendChild(msgActionsRow(m.body));
     }
     return;
   }
@@ -3923,13 +4096,8 @@ function renderMessage(m: Message) {
     }
     el.querySelector(".msg-body")!.insertAdjacentElement("beforebegin", grid);
   }
-  // Copy button on the assistant's replies (the Markdown-rendered ones).
-  if (agent && !m.pending && m.body.trim()) {
-    const row = document.createElement("div");
-    row.className = "bubble-actions msg-actions";
-    row.appendChild(makeCopyButton(m.body));
-    el.appendChild(row);
-  }
+  // Copy + read-aloud on the assistant's replies (the Markdown-rendered ones).
+  if (agent && !m.pending && m.body.trim()) el.appendChild(msgActionsRow(m.body));
   messageLog.appendChild(el);
   messageLog.scrollTop = messageLog.scrollHeight;
 }

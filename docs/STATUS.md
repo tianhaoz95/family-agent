@@ -251,6 +251,21 @@ Later changes (not part of the original autonomous session):
   prompt and denies by default) — `grant_webview_media_permission()` in
   `desktop/src-tauri/src/main.rs`, added after the first test report; see
   BUILD_LOG. Android uses a native runtime grant (`RECORD_AUDIO`).
+- **Voice output (text-to-speech)**: a "Read aloud" button on every assistant /
+  agent reply (desktop + Android) synthesises the reply and plays it; an opt-in
+  "read replies aloud automatically" toggle in both clients' Settings does it on
+  every new Chat reply. **Kokoro-82M** (`onnx-community/Kokoro-82M-v1.0-ONNX`, q8
+  ~86 MB) runs **in-process in agent-core** via `kokoro-js` / onnxruntime-node
+  (`agent-core/src/tts.ts`) — same shape as ASR/OCR, Ollama can't serve TTS. The
+  phonemizer is a WASM espeak-ng (no native binary). Model cached under
+  `<dataDir>/tts-models/`; first call ~15–20s, then ~2–5s/reply on CPU. `POST
+  /speak` (markdown stripped to plain text, ≤2000 chars, returns 16-bit PCM WAV
+  for Android `MediaPlayer` compatibility) + `GET /tts/voices` (28 voices;
+  default `af_heart`, admin-settable `FAMILY_AGENT_TTS_VOICE`, applied per-call).
+  Auto-read is client-local (desktop `localStorage`, Android DataStore), off by
+  default, private Chat only. `FAMILY_AGENT_TTS=0` disables it (routes 403,
+  `/health.ttsEnabled` false, clients hide the button + toggle). Verified
+  end-to-end on both clients.
 - **Builder tools shipped** (the §03 "sandboxed scratch-tool builder" that the
   original session deferred). The planner has a third subagent, `builder-agent`;
   "build me a…" in chat, or the Tools tab, generates a small self-contained web

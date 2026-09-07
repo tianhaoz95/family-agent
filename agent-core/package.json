@@ -20,6 +20,7 @@
     "chokidar": "^5.0.0",
     "deepagents": "^1.13.2",
     "fastify": "^5.12.1",
+    "kokoro-js": "^1.2.1",
     "ollama": "^0.6.3",
     "pdf-parse": "^2.4.5",
     "quickjs-emscripten": "^0.32.0",

@@ -193,6 +193,21 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   text for the user to review. Clients send a 16 kHz mono WAV so the module is a
   dependency-free header parse (`decodeWav`), not an audio-codec problem. `FAMILY_AGENT_ASR=0`
   disables it (route 403s, `/health.asrEnabled` false, both clients hide the mic button).
+- `tts.ts` — text-to-speech for the "Read aloud" button on every assistant/agent reply (`POST
+  /speak`, JSON `{ text, voice? }` in, `audio/wav` out; `GET /tts/voices` lists the 28 voices).
+  **Kokoro-82M** (`config.ttsModel`, default `onnx-community/Kokoro-82M-v1.0-ONNX`, `q8` ~86MB)
+  via `kokoro-js` (deps `@huggingface/transformers` + a **WASM espeak-ng** phonemizer, no native
+  binary), run **in-process** — Ollama can't serve TTS, same third-inference-path shape as
+  `transcribe.ts`/OCR: heavy import lazy-loaded on first call (~15-20s cold, ~2-5s/reply after),
+  model cached under `<dataDir>/tts-models/`. Off the planner (a mechanical step): `plainText()`
+  strips markdown, text clamped to 2000 chars, `tts.generate()` → `encodeWav16()` re-encodes
+  Kokoro's 32-bit-float WAV to **16-bit PCM** (Android `MediaPlayer` won't play float WAV).
+  Default voice `af_heart` (`config.ttsVoice` / `FAMILY_AGENT_TTS_VOICE` / `settings.json`,
+  admin-settable, applied per-call — no agent rebuild). Auto-read ("read replies aloud
+  automatically") is **client-local** (desktop `localStorage` `familyAgent.autoRead`, Android
+  DataStore `auto_read_replies`), off by default, private 1:1 Chat only (never family channels,
+  never an error reply). `FAMILY_AGENT_TTS=0` disables it (routes 403, `/health.ttsEnabled`
+  false, both clients hide the button + Settings toggle).
 - `embeddings.ts` — semantic document search. A local Ollama embedding model (`config.embedModel`,
   default `nomic-embed-text`; `FAMILY_AGENT_EMBED=0` disables) turns each document's chunks into
   vectors stored by `db.ts` (`document_embeddings`); a query is embedded and matched by
@@ -204,7 +219,7 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
   fusion (`rrfMerge`). `chunkDocumentText()` is paragraph-aware. `backfillEmbeddings()` runs at
   startup and after a `PUT /settings` model change.
 - `settingsFile.ts` — persists the settings the desktop Settings page can change
-  (`inboxDir`, `model`, `ollamaBaseUrl`, `ocrModel`, `asrModel`, `embedModel`) to `<dataDir>/settings.json` as one
+  (`inboxDir`, `model`, `ollamaBaseUrl`, `ocrModel`, `asrModel`, `ttsVoice`, `embedModel`) to `<dataDir>/settings.json` as one
   merged JSON object. Precedence in `config.ts` for each: env var > persisted file > default —
   the env var always wins so an operator's explicit override can't be shadowed by something
   saved from the UI earlier, and when an env var is set that field is `envLocked` (UI shows it

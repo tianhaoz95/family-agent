@@ -148,6 +148,31 @@ class FamilyAgentApi(
         json.decodeFromString(execute(request))
     }
 
+    /** Synthesize an assistant reply to speech — returns WAV bytes to play.
+     *  The first call downloads the Kokoro model (~86 MB) so it can take ~20s. */
+    suspend fun speak(text: String, voice: String? = null): ByteArray = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url("$baseUrl/speak")
+            .post(json.encodeToString(SpeakRequest(text, voice)).toRequestBody(JSON_MEDIA_TYPE))
+            .withAuth()
+            .build()
+        try {
+            client.newCall(req).execute().use { response ->
+                if (response.code == 401) throw UnauthorizedException()
+                if (!response.isSuccessful) {
+                    val detail = runCatching { json.parseToJsonElement(response.body?.string().orEmpty()) }.getOrNull()
+                    throw ApiException("/speak: HTTP ${response.code}${detail?.let { " — $it" } ?: ""}")
+                }
+                response.body?.bytes() ?: ByteArray(0)
+            }
+        } catch (e: IOException) {
+            if (e is ApiException) throw e
+            throw ApiException("Could not reach $baseUrl (${e.message})")
+        }
+    }
+
+    suspend fun ttsVoices(): TtsVoicesResponse = json.decodeFromString(get("/tts/voices"))
+
     suspend fun listTasks(): List<Task> = json.decodeFromString<TasksResponse>(get("/tasks")).tasks
 
     suspend fun getTask(id: String): Task = json.decodeFromString<TaskResponse>(get("/tasks/$id")).task

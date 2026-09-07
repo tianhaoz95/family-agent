@@ -16,6 +16,9 @@ fun SettingsScreen(
     connection: ConnectionStatus,
     userName: String,
     userRole: String,
+    ttsEnabled: Boolean = false,
+    autoRead: Boolean = false,
+    onSetAutoRead: (Boolean) -> Unit = {},
     onSave: (String) -> Unit,
     onSignOut: () -> Unit,
 ) {
@@ -28,6 +31,21 @@ fun SettingsScreen(
     ) {
         AppCard {
             ConnectionStatusRow(connection)
+        }
+
+        if (ttsEnabled) {
+            Spacer(Modifier.height(18.dp))
+            SectionLabel("Voice")
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = autoRead, onCheckedChange = onSetAutoRead)
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "Read replies aloud automatically",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
         }
 
         Spacer(Modifier.height(18.dp))

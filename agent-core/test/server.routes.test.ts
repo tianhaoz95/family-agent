@@ -461,6 +461,35 @@ describe("HTTP API", () => {
     expect((await app.inject({ method: "GET", url: "/health" })).json().asrEnabled).toBe(true);
   });
 
+  // /speak's happy path needs the Kokoro model and is covered in tts.test.ts
+  // (opt-in). Here: the HTTP contract around it.
+  it("POST /speak validates the body (missing text -> 400)", async () => {
+    const res = await inject({ method: "POST", url: "/speak", payload: JSON.stringify({}), headers: { "content-type": "application/json" } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("POST /speak 403s when voice output is disabled, and reports it in /health", async () => {
+    const original = config.ttsEnabled;
+    config.ttsEnabled = false;
+    try {
+      const res = await inject({
+        method: "POST",
+        url: "/speak",
+        payload: JSON.stringify({ text: "hello" }),
+        headers: { "content-type": "application/json" },
+      });
+      expect(res.statusCode).toBe(403);
+      expect((await app.inject({ method: "GET", url: "/health" })).json().ttsEnabled).toBe(false);
+      expect((await inject({ method: "GET", url: "/tts/voices" })).statusCode).toBe(403);
+    } finally {
+      config.ttsEnabled = original;
+    }
+  });
+
+  it("GET /health reports ttsEnabled true by default", async () => {
+    expect((await app.inject({ method: "GET", url: "/health" })).json().ttsEnabled).toBe(true);
+  });
+
   it("answers CORS preflight for the desktop webview origin", async () => {
     const res = await app.inject({
       method: "OPTIONS",

@@ -345,6 +345,8 @@ export interface Health {
   toolsEnabled: "full" | "static-only" | "off";
   /** Whether the server offers speech-to-text — the chat mic button hides when false. */
   asrEnabled: boolean;
+  /** Whether the server offers text-to-speech — the "read aloud" button hides when false. */
+  ttsEnabled?: boolean;
   /** "on" when an embedding model is configured for semantic document search. */
   semanticSearch?: "on" | "off";
   /** Whether scheduled routines are available — the Routines nav item hides when false. */
@@ -449,6 +451,10 @@ export interface Settings {
   asrModel: string;
   /** Whether voice input is enabled at all (env-controlled, not editable here). */
   asrEnabled: boolean;
+  /** Whether voice output is enabled at all (env-controlled, not editable here). */
+  ttsEnabled: boolean;
+  /** The Kokoro voice used for voice output — editable here. */
+  ttsVoice: string;
   serverName: string;
   isAdmin: boolean;
   /** Fields pinned by an env var — read-only in the UI. */
@@ -458,6 +464,7 @@ export interface Settings {
     inboxDir: boolean;
     ocrModel: boolean;
     asrModel: boolean;
+    ttsVoice: boolean;
     serverName: boolean;
   };
 }
@@ -468,6 +475,7 @@ export interface SettingsPatch {
   ollamaBaseUrl?: string;
   ocrModel?: string;
   asrModel?: string;
+  ttsVoice?: string;
   serverName?: string;
 }
 
@@ -540,6 +548,31 @@ export const api = {
   deleteChatSession: (id: string) => request<{ deleted: true }>(`/chat/sessions/${id}`, { method: "DELETE" }),
   /** Transcribe a recorded voice clip (16 kHz mono WAV) for the chat composer. */
   transcribe: (wav: Blob) => upload<{ text: string }>("/transcribe", wav, "audio", "voice.wav"),
+  /** Synthesize an assistant reply to speech — returns a WAV Blob to play.
+   *  The first call downloads the Kokoro model (~86 MB) so it can take ~20s. */
+  speak: async (text: string, voice?: string, signal?: AbortSignal): Promise<Blob> => {
+    const token = getToken();
+    const res = await fetch(`${BASE_URL}/speak`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ text, voice }),
+      signal,
+    });
+    if (res.status === 401) {
+      clearToken();
+      emitSignedOut();
+    }
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null);
+      throw new Error(detail?.error || `${res.status} ${res.statusText}`);
+    }
+    return res.blob();
+  },
+  /** The Kokoro voices the loaded model exposes (empty until it's loaded once). */
+  listTtsVoices: () => request<{ voices: string[]; current: string }>("/tts/voices"),
   listTasks: () => request<{ tasks: Task[] }>("/tasks"),
   getTask: (id: string) => request<{ task: Task }>(`/tasks/${id}`),
   getDocument: (id: string) => request<{ document: Document }>(`/documents/${id}`),

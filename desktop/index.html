@@ -614,6 +614,26 @@
             </form>
             <p id="settings-asr-status" class="settings-hint" role="status"></p>
 
+            <div id="settings-tts-block" hidden>
+              <h3>Voice output</h3>
+              <p class="settings-hint">
+                A "Read aloud" button on the assistant's replies speaks them with a
+                local <a href="https://huggingface.co/hexgrad/Kokoro-82M" target="_blank" rel="noreferrer">Kokoro</a>
+                voice — nothing leaves your machine after the one-time ~86&nbsp;MB model
+                download (the first click takes ~20s while it loads). Turn it off with
+                <code>FAMILY_AGENT_TTS=0</code> on the server.
+              </p>
+              <form id="settings-tts-form" class="inline-form">
+                <select id="settings-tts-voice-select"></select>
+                <button type="submit">Save</button>
+              </form>
+              <p id="settings-tts-status" class="settings-hint" role="status"></p>
+              <label class="settings-checkbox">
+                <input type="checkbox" id="settings-auto-read" />
+                Read replies aloud automatically
+              </label>
+            </div>
+
             <h3>Home name</h3>
             <p class="settings-hint">
               Shown on the sign-in screen and to phones discovering this server on the network.

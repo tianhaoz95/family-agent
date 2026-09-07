@@ -86,6 +86,8 @@ data class HealthResponse(
     val toolsEnabled: String = "off",
     /** Whether the server offers speech-to-text — the chat mic button hides when false. */
     val asrEnabled: Boolean = false,
+    /** Whether the server offers text-to-speech — the "read aloud" button hides when false. */
+    val ttsEnabled: Boolean = false,
     /** "on" when an embedding model is configured for semantic document search. */
     val semanticSearch: String = "off",
     /** Whether scheduled routines are available — the Routines drawer item hides when false. */
@@ -196,6 +198,12 @@ data class RenameChatSessionRequest(val title: String)
 
 @Serializable
 data class TranscribeResponse(val text: String)
+
+@Serializable
+data class SpeakRequest(val text: String, val voice: String? = null)
+
+@Serializable
+data class TtsVoicesResponse(val voices: List<String> = emptyList(), val current: String = "")
 
 @Serializable
 data class TasksResponse(val tasks: List<Task>)

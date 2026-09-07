@@ -3564,7 +3564,8 @@ input[type="file"]::file-selector-button:hover {
 .msg-actions {
   margin: 1px 0 0;
 }
-.bubble-copy {
+.bubble-copy,
+.bubble-speak {
   all: unset;
   cursor: pointer;
   display: inline-flex;
@@ -3577,20 +3578,33 @@ input[type="file"]::file-selector-button:hover {
   color: var(--text-faint);
   transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
-.bubble-copy svg {
+.bubble-copy svg,
+.bubble-speak svg {
   width: 13px;
   height: 13px;
 }
-.bubble-copy:hover {
+.bubble-copy:hover,
+.bubble-speak:hover {
   background: var(--surface-2);
   color: var(--text-strong);
 }
 .bubble-copy.is-copied {
   color: var(--local);
 }
-.bubble-copy:focus-visible {
+.bubble-speak.is-playing {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.bubble-speak.is-loading {
+  cursor: default;
+}
+.bubble-copy:focus-visible,
+.bubble-speak:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent-ring);
+}
+.bubble-spin {
+  animation: spin 0.9s linear infinite;
 }
 
 .chat-references {

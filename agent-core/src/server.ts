@@ -82,6 +82,7 @@ import {
 } from "./documentFiles.js";
 import { extractText, SUPPORTED_EXTENSIONS, UnsupportedFileTypeError } from "./fileExtract.js";
 import { transcribeWav, resetTranscriber } from "./transcribe.js";
+import { synthesizeSpeech, listVoices } from "./tts.js";
 import { listOllamaModels, ollamaListHasModel } from "./ollamaOcr.js";
 import { toolsDir } from "./config.js";
 import { ToolSupervisor } from "./tools/supervisor.js";
@@ -677,6 +678,8 @@ export function buildServer(
     toolsEnabled: config.toolsEnabled && supervisor.denoAvailable() ? "full" : config.toolsEnabled ? "static-only" : "off",
     // Both chat UIs hide the mic button when this is false.
     asrEnabled: config.asrEnabled,
+    // Both chat UIs hide the "read aloud" button when this is false.
+    ttsEnabled: config.ttsEnabled,
     // "on" once a model is configured; actual reachability is checked lazily
     // and search falls back to keyword + fuzzy if it's down.
     semanticSearch: embeddingsEnabled() ? "on" : "off",
@@ -956,6 +959,40 @@ export function buildServer(
         detail: err instanceof Error ? err.message : String(err),
       });
     }
+  });
+
+  // ---- voice output ----
+  // Read an assistant reply aloud. Body { text, voice? } → an audio/wav
+  // response. Kokoro runs in-process (tts.ts) and never touches the planner.
+  // The first call downloads the model (~86 MB) so it can take ~20 s; every
+  // one after is a couple of seconds on CPU.
+  app.post("/speak", async (req, reply) => {
+    if (!config.ttsEnabled) {
+      return reply.code(403).send({ error: "Voice output is turned off on this server." });
+    }
+    const parsed = z
+      .object({ text: z.string().min(1).max(20_000), voice: z.string().trim().max(40).optional() })
+      .safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    try {
+      const wav = await synthesizeSpeech(parsed.data.text, parsed.data.voice);
+      reply.header("content-type", "audio/wav");
+      reply.header("cache-control", "no-store");
+      return reply.send(wav);
+    } catch (err) {
+      req.log?.error?.(err);
+      return reply.code(502).send({
+        error: "Could not synthesize speech.",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // The voice ids the loaded TTS model offers — for the Settings dropdown.
+  // Empty until the model has loaded once (first /speak).
+  app.get("/tts/voices", async (_req, reply) => {
+    if (!config.ttsEnabled) return reply.code(403).send({ error: "Voice output is turned off on this server." });
+    return { voices: await listVoices(), current: config.ttsVoice };
   });
 
   // ---- tasks ----
@@ -1869,6 +1906,8 @@ export function buildServer(
     ocrModel: config.ocrModel,
     asrModel: config.asrModel,
     asrEnabled: config.asrEnabled,
+    ttsEnabled: config.ttsEnabled,
+    ttsVoice: config.ttsVoice,
     embedModel: config.embedModel,
     embedEnabled: config.embedEnabled,
     serverName: config.serverName,
@@ -1888,6 +1927,7 @@ export function buildServer(
       .optional(),
     ocrModel: z.string().optional(),
     asrModel: z.string().trim().max(120).optional(),
+    ttsVoice: z.string().trim().max(40).optional(),
     embedModel: z.string().trim().max(120).optional(),
     serverName: z.string().trim().min(1).max(60).optional(),
   });
@@ -1899,12 +1939,12 @@ export function buildServer(
       return reply.code(400).send({ error: "Nothing to update." });
     }
 
-    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "embedModel", "serverName"] as const;
+    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName"] as const;
     if (req.authUser.role !== "admin" && adminFields.some((f) => patch[f] !== undefined)) {
       return reply.code(403).send({ error: "Only an admin can change machine settings." });
     }
 
-    for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "asrModel", "embedModel", "serverName"] as const) {
+    for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName"] as const) {
       if (patch[key] !== undefined && envLocked[key]) {
         return reply.code(400).send({
           error: `"${key}" is pinned by an environment variable and can't be changed here.`,
@@ -1936,6 +1976,7 @@ export function buildServer(
       ollamaBaseUrl: patch.ollamaBaseUrl,
       ocrModel: patch.ocrModel,
       asrModel: patch.asrModel,
+      ttsVoice: patch.ttsVoice,
       embedModel: patch.embedModel,
       serverName: patch.serverName,
     };
@@ -1955,6 +1996,7 @@ export function buildServer(
       config.asrModel = patch.asrModel || "Xenova/whisper-base";
       resetTranscriber(); // next /transcribe rebuilds the pipeline on the new model
     }
+    if (patch.ttsVoice) config.ttsVoice = patch.ttsVoice; // per-call, no reload
     if (patch.serverName !== undefined) config.serverName = patch.serverName;
 
     if (patch.inboxDir !== undefined) {
@@ -1985,6 +2027,7 @@ export function buildServer(
         patch.ocrModel !== undefined,
       ],
       [`Voice-input model set to "${config.asrModel}"`, patch.asrModel !== undefined],
+      [`Voice-output voice set to "${config.ttsVoice}"`, patch.ttsVoice !== undefined],
       [
         patch.embedModel
           ? `Semantic-search model set to "${patch.embedModel}"`

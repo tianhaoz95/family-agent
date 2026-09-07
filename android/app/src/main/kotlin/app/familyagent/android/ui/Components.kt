@@ -19,6 +19,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -182,6 +185,47 @@ fun CopyButton(text: String, modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.labelMedium,
             color = if (copied) AppAccents.success else AppAccents.textSecondary,
         )
+    }
+}
+
+/** A "Read aloud" toggle for an assistant / agent reply. Idle → synthesizing →
+ *  playing → idle; playback and the synthesized-audio cache live in the
+ *  ViewModel, so this only reflects [speakingText] / [speakLoadingText]. */
+@Composable
+fun SpeakButton(
+    text: String,
+    speakingText: String?,
+    speakLoadingText: String?,
+    onToggle: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val body = text.trim()
+    val playing = speakingText == body
+    val loading = speakLoadingText == body
+    val accent = MaterialTheme.colorScheme.primary
+    val muted = AppAccents.textSecondary
+    TextButton(
+        onClick = { onToggle(body) },
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+        modifier = modifier.heightIn(min = 30.dp),
+    ) {
+        when {
+            loading -> {
+                CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 1.6.dp, color = accent)
+                Spacer(Modifier.width(6.dp))
+                Text("Synthesizing…", style = MaterialTheme.typography.labelMedium, color = muted)
+            }
+            playing -> {
+                Icon(Icons.Rounded.Stop, contentDescription = null, modifier = Modifier.size(15.dp), tint = accent)
+                Spacer(Modifier.width(5.dp))
+                Text("Stop", style = MaterialTheme.typography.labelMedium, color = accent)
+            }
+            else -> {
+                Icon(Icons.AutoMirrored.Rounded.VolumeUp, contentDescription = null, modifier = Modifier.size(15.dp), tint = muted)
+                Spacer(Modifier.width(5.dp))
+                Text("Read aloud", style = MaterialTheme.typography.labelMedium, color = muted)
+            }
+        }
     }
 }
 
