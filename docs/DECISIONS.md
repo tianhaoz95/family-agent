@@ -1814,3 +1814,11 @@ clear the button (and, as a bonus, this finally clears the status bar on the
 pre-auth Login/Discovery screens, which `ScreenScaffold` renders without a
 `Scaffold`). No change to bottom insets — the `Scaffold`'s default
 `contentWindowInsets` still feeds `Modifier.padding(padding)` on the `NavHost`.
+
+Two small follow-ups on the same commit path: (1) the Android chat/messages
+composer was ~2 lines tall on init because its long placeholder wrapped —
+shortened it ("Ask anything, or type /") and gave the placeholder `Text`
+`maxLines = 1` + ellipsis, so the field is one line until the user types
+(it still grows to `maxLines = 4`). (2) the floating menu button and both
+composers went from opaque `surface` to `surface.copy(alpha = 0.74f)` glass,
+so the animated gradient shows through them like the drawer.

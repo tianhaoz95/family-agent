@@ -298,7 +298,7 @@ fun ConversationScreen(
                 .fillMaxWidth()
                 .shadow(5.dp, MaterialTheme.shapes.large, clip = false)
                 .clip(MaterialTheme.shapes.large)
-                .background(MaterialTheme.colorScheme.surface)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.74f))
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large)
                 .padding(6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -320,7 +320,13 @@ fun ConversationScreen(
                 value = input,
                 onValueChange = { input = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Message… (@agent for the assistant)") },
+                placeholder = {
+                    Text(
+                        "Message, or @agent",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 maxLines = 4,
                 keyboardOptions = KeyboardOptions.Default,
                 colors = TextFieldDefaults.colors(

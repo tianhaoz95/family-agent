@@ -737,7 +737,10 @@ Later changes (not part of the original autonomous session):
     `android/DESIGN.md` rewritten; `CLAUDE.md` / `docs/DECISIONS.md` updated.
   - **Follow-up — Android app bar removed.** The `AppTopBar` (menu button +
     wordmark + divider, ~56dp) is gone; a single **floating menu button**
-    (white glass, top-left) opens the drawer, hidden on the tool WebView and
+    (glass, top-left) opens the drawer, hidden on the tool WebView and
     inside a conversation. `ScreenScaffold` top padding 16→58dp to clear it
-    (also fixes the pre-auth screens' status-bar overlap). Verified on the
+    (also fixes the pre-auth screens' status-bar overlap). Also: the chat/
+    messages composer is one line on init (shortened placeholder + `maxLines=1`
+    on it; still grows to 4), and the menu button + composers use
+    `surface@0.74` glass so the gradient shows through. Verified on the
     emulator.

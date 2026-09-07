@@ -411,7 +411,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         .padding(start = 12.dp, top = 6.dp)
                         .shadow(5.dp, RoundedCornerShape(13.dp))
                         .clip(RoundedCornerShape(13.dp))
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.74f))
                         .clickable { scope.launch { drawerState.open() } }
                         .size(42.dp),
                     contentAlignment = Alignment.Center,
