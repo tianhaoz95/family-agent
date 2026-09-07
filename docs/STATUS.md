@@ -747,3 +747,9 @@ Later changes (not part of the original autonomous session):
     just ghosts the content behind it; the drawer, menu button, composers and
     cards are all opaque `surface`, floating over the gradient via shadows
     like the desktop's opaque cards. Verified on the emulator.
+  - **Follow-up — Copy button on replies.** Both apps show a small "Copy"
+    button under every assistant / `@agent` reply that copies the raw Markdown
+    source (desktop `makeCopyButton` / `appendBubbleCopy` in `main.ts`; Android
+    `CopyButton` in `ui/Components.kt`). Wired into Chat and family-chat.
+    Verified against real model replies on both platforms (a Markdown list
+    rendered as bullets — confirming rendering is fine).

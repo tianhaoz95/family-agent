@@ -1827,3 +1827,24 @@ without a backdrop blur it looked muddy/tinted, so all of them — plus the
 drawer (had been `0.88`) — are back to opaque `surface`. They float over the
 gradient via shadows, exactly like the desktop's opaque `#fff` cards; only
 the desktop *rail / side panels* are true glass (they have `backdrop-filter`).
+
+## Copy button on chat / message replies
+
+Both apps now put a small "Copy" button under every assistant / `@agent` reply
+(the Markdown-rendered bubbles) — copies the **raw text** (the Markdown source,
+not the rendered HTML), shows "Copied" for 1.5 s, then reverts.
+
+- **Desktop** (`main.ts`): `makeCopyButton(rawText)` +
+  `appendBubbleCopy(bubble, rawText)` insert a `.bubble-actions` row after the
+  bubble (order: bubble → copy → references). Wired into the live `/chat`
+  reply, chat-session replay, and family-chat `renderMessage` for `agent`
+  messages (incl. the pending→resolved update path). `navigator.clipboard`
+  with a silent no-op if it's unavailable/denied.
+- **Android** (`ui/Components.kt` `CopyButton`): `LocalClipboardManager` +
+  `AnnotatedString`; used in `ChatBubble` (assistant) and `MessageBubble`
+  (`agent`, not pending).
+
+Verified on the emulator and in the browser against real model replies,
+including a Markdown bullet list (which rendered as bullets — an earlier
+screenshot that showed literal `*` was a hand-rolled test mock that bypassed
+`renderMarkdown`, not a real bug).

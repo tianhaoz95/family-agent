@@ -311,6 +311,47 @@ function appendBubble(role: "user" | "assistant" | "system", text: string) {
   return el;
 }
 
+const COPY_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const CHECK_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+
+/** A "Copy" button for an assistant/agent reply — copies the raw text (the
+ *  Markdown source, not the rendered HTML). Returns the button so callers can
+ *  drop it into their own row if they want. */
+function makeCopyButton(rawText: string): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "bubble-copy";
+  btn.innerHTML = `${COPY_ICON}<span>Copy</span>`;
+  let resetTimer: ReturnType<typeof setTimeout> | undefined;
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(rawText);
+    } catch {
+      return; // clipboard unavailable / denied
+    }
+    btn.innerHTML = `${CHECK_ICON}<span>Copied</span>`;
+    btn.classList.add("is-copied");
+    clearTimeout(resetTimer);
+    resetTimer = setTimeout(() => {
+      btn.innerHTML = `${COPY_ICON}<span>Copy</span>`;
+      btn.classList.remove("is-copied");
+    }, 1500);
+  });
+  return btn;
+}
+
+/** Insert a `.bubble-actions` row (with a Copy button) directly after a chat
+ *  bubble. Call after `appendReferences` so the order is bubble → copy → refs. */
+function appendBubbleCopy(bubble: HTMLElement, rawText: string) {
+  const row = document.createElement("div");
+  row.className = "bubble-actions";
+  row.appendChild(makeCopyButton(rawText));
+  bubble.insertAdjacentElement("afterend", row);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
 function appendUserMessage(text: string, images: string[]) {
   hideChatEmpty();
   const el = document.createElement("div");
@@ -838,6 +879,7 @@ async function openChatSession(id: string) {
     else {
       const bubble = appendBubble("assistant", m.body);
       if (m.refs.length) appendReferences(bubble, m.refs);
+      appendBubbleCopy(bubble, m.body);
     }
   }
   renderChatSessionList();
@@ -925,6 +967,7 @@ chatForm.addEventListener("submit", async (e) => {
     pending.remove();
     const bubble = appendBubble("assistant", reply);
     if (references?.length) appendReferences(bubble, references);
+    appendBubbleCopy(bubble, reply);
     activeChatSessionId = sessionId;
     void refreshChatSessions();
   } catch (err) {
@@ -3847,6 +3890,12 @@ function renderMessage(m: Message) {
     if (existing && !m.pending) {
       existing.classList.remove("is-pending");
       existing.querySelector(".msg-body")!.innerHTML = renderMarkdown(m.body);
+      if (!existing.querySelector(".msg-actions")) {
+        const row = document.createElement("div");
+        row.className = "bubble-actions msg-actions";
+        row.appendChild(makeCopyButton(m.body));
+        existing.appendChild(row);
+      }
     }
     return;
   }
@@ -3873,6 +3922,13 @@ function renderMessage(m: Message) {
       grid.appendChild(img);
     }
     el.querySelector(".msg-body")!.insertAdjacentElement("beforebegin", grid);
+  }
+  // Copy button on the assistant's replies (the Markdown-rendered ones).
+  if (agent && !m.pending && m.body.trim()) {
+    const row = document.createElement("div");
+    row.className = "bubble-actions msg-actions";
+    row.appendChild(makeCopyButton(m.body));
+    el.appendChild(row);
   }
   messageLog.appendChild(el);
   messageLog.scrollTop = messageLog.scrollHeight;

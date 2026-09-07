@@ -3552,6 +3552,47 @@ input[type="file"]::file-selector-button:hover {
   color: var(--text-muted);
 }
 
+/* Row under an assistant reply — currently just the Copy button. Pulled up
+   tight against the bubble (the chat log has a 10px flex gap). */
+.bubble-actions {
+  display: flex;
+  align-self: flex-start;
+  gap: 6px;
+  margin: -5px 0 -2px;
+  padding-left: 2px;
+}
+.msg-actions {
+  margin: 1px 0 0;
+}
+.bubble-copy {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.74rem;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: var(--r-md);
+  color: var(--text-faint);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.bubble-copy svg {
+  width: 13px;
+  height: 13px;
+}
+.bubble-copy:hover {
+  background: var(--surface-2);
+  color: var(--text-strong);
+}
+.bubble-copy.is-copied {
+  color: var(--local);
+}
+.bubble-copy:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent-ring);
+}
+
 .chat-references {
   display: flex;
   flex-wrap: wrap;

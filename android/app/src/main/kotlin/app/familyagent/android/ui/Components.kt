@@ -16,23 +16,34 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.ui.theme.AppAccents
 import app.familyagent.android.ui.theme.SourceSerif
+import kotlinx.coroutines.delay
 
 /**
  * Standard screen frame: safe-area padding, a title and an editorial serif
@@ -137,6 +148,41 @@ fun Chip(
 @Composable
 fun StatusDot(color: Color, modifier: Modifier = Modifier) {
     Box(modifier.size(9.dp).clip(CircleShape).background(color))
+}
+
+/** A small "Copy" button for an assistant / agent reply — copies the raw text
+ *  (the Markdown source, not the rendered output) and shows "Copied" briefly. */
+@Composable
+fun CopyButton(text: String, modifier: Modifier = Modifier) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1500)
+            copied = false
+        }
+    }
+    TextButton(
+        onClick = {
+            clipboard.setText(AnnotatedString(text))
+            copied = true
+        },
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+        modifier = modifier.heightIn(min = 30.dp),
+    ) {
+        Icon(
+            if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = if (copied) AppAccents.success else AppAccents.textSecondary,
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            if (copied) "Copied" else "Copy",
+            style = MaterialTheme.typography.labelMedium,
+            color = if (copied) AppAccents.success else AppAccents.textSecondary,
+        )
+    }
 }
 
 /** Centered icon in a colored bubble + a friendly message. */

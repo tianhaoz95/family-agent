@@ -535,6 +535,9 @@ private fun ChatBubble(msg: ChatMessage, onReferenceClick: (ChatReference) -> Un
             }
         }
     }
+    if (!isUser && msg.text.isNotBlank()) {
+        CopyButton(msg.text, Modifier.offset(x = (-4).dp))
+    }
     if (!isUser && msg.references.isNotEmpty()) {
         Spacer(Modifier.height(6.dp))
         androidx.compose.foundation.layout.FlowRow(

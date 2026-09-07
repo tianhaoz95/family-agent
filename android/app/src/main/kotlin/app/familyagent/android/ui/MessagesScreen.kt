@@ -419,6 +419,9 @@ private fun MessageBubble(msg: Message, own: Boolean, channel: Channel?) {
                     )
                 }
             }
+            if (agent && !msg.pending && msg.body.isNotBlank()) {
+                CopyButton(msg.body, Modifier.offset(x = (-4).dp))
+            }
         }
     }
 }
