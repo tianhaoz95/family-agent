@@ -729,18 +729,21 @@ Later changes (not part of the original autonomous session):
     canvas, `#0075de` accent, Inter + Source Serif, shapes 12/16/20/26);
     **dark mode dropped** (light only, no `values-night/`); `ui/Atmosphere.kt`
     adds the animated gradient canvas (the Compose counterpart of
-    `body::before`); glass top bar + drawer; springy `NavHost` transitions;
-    floating Board panel + chat composers; active drawer item → `accent-soft`.
+    `body::before`); opaque floating surfaces over it (no Android backdrop
+    blur → no glass); springy `NavHost` transitions; active drawer item →
+    `accent-soft`.
     `AppAccents` kept as a compat shim (remapped). Verified on the emulator
     across login, Chat, Messages, drawer, Board, Events, Settings —
     `compileDebugKotlin` + `testDebugUnitTest` + `assembleDebug` green.
     `android/DESIGN.md` rewritten; `CLAUDE.md` / `docs/DECISIONS.md` updated.
   - **Follow-up — Android app bar removed.** The `AppTopBar` (menu button +
     wordmark + divider, ~56dp) is gone; a single **floating menu button**
-    (glass, top-left) opens the drawer, hidden on the tool WebView and
+    (opaque white, top-left) opens the drawer, hidden on the tool WebView and
     inside a conversation. `ScreenScaffold` top padding 16→58dp to clear it
     (also fixes the pre-auth screens' status-bar overlap). Also: the chat/
     messages composer is one line on init (shortened placeholder + `maxLines=1`
-    on it; still grows to 4), and the menu button + composers use
-    `surface@0.74` glass so the gradient shows through. Verified on the
-    emulator.
+    on it; still grows to 4). Translucent-glass surfaces were tried and
+    reverted — no cheap backdrop blur on Android, so a flat translucent panel
+    just ghosts the content behind it; the drawer, menu button, composers and
+    cards are all opaque `surface`, floating over the gradient via shadows
+    like the desktop's opaque cards. Verified on the emulator.

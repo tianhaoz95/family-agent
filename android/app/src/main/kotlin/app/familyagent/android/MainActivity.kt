@@ -409,9 +409,9 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         .align(Alignment.TopStart)
                         .statusBarsPadding()
                         .padding(start = 12.dp, top = 6.dp)
-                        .shadow(5.dp, RoundedCornerShape(13.dp))
+                        .shadow(6.dp, RoundedCornerShape(13.dp))
                         .clip(RoundedCornerShape(13.dp))
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.74f))
+                        .background(MaterialTheme.colorScheme.surface)
                         .clickable { scope.launch { drawerState.open() } }
                         .size(42.dp),
                     contentAlignment = Alignment.Center,
@@ -458,8 +458,11 @@ private fun AppDrawer(
     connectionsEnabled: Boolean,
     onSelect: (Destination) -> Unit,
 ) {
+    // Opaque, not glass: Android has no cheap backdrop blur, so a translucent
+    // sheet just shows a distracting ghost of the screen behind it. The drawer
+    // still floats over the gradient via its shadow + rounded corner + a scrim.
     ModalDrawerSheet(
-        drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+        drawerContainerColor = MaterialTheme.colorScheme.surface,
         drawerShape = RoundedCornerShape(topEnd = 26.dp, bottomEnd = 26.dp),
         modifier = Modifier.fillMaxWidth(0.84f),
     ) {

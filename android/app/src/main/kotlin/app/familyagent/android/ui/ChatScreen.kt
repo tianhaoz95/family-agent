@@ -318,7 +318,7 @@ fun ChatScreen(
                 .fillMaxWidth()
                 .shadow(5.dp, RoundedCornerShape(20.dp), clip = false)
                 .clip(RoundedCornerShape(20.dp))
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.74f))
+                .background(MaterialTheme.colorScheme.surface)
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(20.dp))
                 .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,

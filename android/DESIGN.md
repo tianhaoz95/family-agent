@@ -38,13 +38,16 @@ layers:
   that drift on sine waves via a 34 s `rememberInfiniteTransition`. Frozen when
   the OS `ANIMATOR_DURATION_SCALE` is 0 (the platform "remove animations"
   setting).
-- **Glass chrome.** `AppTopBar` and the `ModalDrawerSheet` use
-  `surface.copy(alpha = 0.72 / 0.88)` — no real backdrop blur (Compose can't do
-  it cheaply pre-12), but the gradient shows through so it reads as glass.
+- **No glass, opaque surfaces.** The desktop's glass chrome relies on
+  `backdrop-filter: blur()`, which Compose can't do cheaply (pre-Android-12).
+  A flat translucent surface with no blur just shows a distracting ghost of
+  whatever is behind it, so the drawer, the floating menu button, the chat/
+  messages composers, and every card are **opaque `surface`**. They still
+  "float" over the animated gradient the way the desktop cards do — via their
+  shadow + rounded corners, with the wash showing in the gutters between them.
 - **Transparent screens.** `Scaffold` `containerColor = Color.Transparent`;
-  `ScreenScaffold` paints no background; the conversation screen and Chat/
-  Messages composers dropped their solid fills — so the wash shows around and
-  between the floating cards.
+  `ScreenScaffold` paints no background; the conversation screen dropped its
+  solid fill — so the wash shows around and between the floating cards.
 - **Floating cards.** `AppCard` keeps its shadow + hairline border; the Board
   panel and the chat composers gained a shadow + border + white fill.
 - **Springy nav.** `NavHost` `enterTransition` / `exitTransition` — a small

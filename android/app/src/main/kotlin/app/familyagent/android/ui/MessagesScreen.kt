@@ -298,7 +298,7 @@ fun ConversationScreen(
                 .fillMaxWidth()
                 .shadow(5.dp, MaterialTheme.shapes.large, clip = false)
                 .clip(MaterialTheme.shapes.large)
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.74f))
+                .background(MaterialTheme.colorScheme.surface)
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large)
                 .padding(6.dp),
             verticalAlignment = Alignment.CenterVertically,

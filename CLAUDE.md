@@ -38,8 +38,10 @@ the end of `desktop/src/style.css` plus the `:root` token edits. Tokens live in
 The **Android** app **converged onto the same look** (as of 2026-09-07 — it previously had a
 standalone "Playful Color" indigo/pink/cyan system, now retired). Same warm `#f6f5f4` canvas,
 single `#0075de` blue accent, Inter (+ Source Serif for subtitles), floating cards, an animated
-gradient canvas (`ui/Atmosphere.kt` — the counterpart of `body::before`), glass top bar +
-drawer, springy `NavHost` transitions. **Light only now** — no dark mode, no `values-night/`.
+gradient canvas (`ui/Atmosphere.kt` — the counterpart of `body::before`), springy `NavHost`
+transitions. **No app bar** — a floating white menu button opens the `ModalNavigationDrawer`.
+Surfaces are opaque (Android has no cheap backdrop blur, so no glass — cards float over the
+gradient via shadows). **Light only now** — no dark mode, no `values-night/`.
 Tokens live in `android/.../ui/theme/Theme.kt` (`LightColors`, `AppAccents`, `AppTypography`,
 `AppShapes`) and `android/app/src/main/res/values/colors.xml`. It's still a hand-maintained
 mirror — a token change on one platform is a deliberate, separate change on the other, not

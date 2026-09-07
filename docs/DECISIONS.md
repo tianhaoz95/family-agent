@@ -1780,10 +1780,12 @@ convergence (not just porting the effects onto the Playful palette).
   `rememberInfiniteTransition`, sine-wave centres) over the paper base, frozen
   when the OS `ANIMATOR_DURATION_SCALE` is 0. Wraps the whole app in
   `MainActivity` (around the auth `when`, so login/discovery get it too).
-- Glass chrome: `AppTopBar` + `ModalDrawerSheet` use `surface.copy(alpha=...)`
-  — no real backdrop blur (Compose can't do it cheaply pre-12), but the
-  gradient shows through. `Scaffold` container + `ScreenScaffold` +
-  conversation screen made transparent so the wash reaches the content.
+- No glass chrome. Tried translucent `surface.copy(alpha=…)` on the drawer /
+  top bar / composers; without a backdrop blur (which Compose can't do cheaply
+  pre-12) it just shows a distracting ghost of the content behind, so
+  everything went back to opaque `surface` — it still floats over the gradient
+  via shadows, like the desktop cards. `Scaffold` container + `ScreenScaffold`
+  + conversation screen are transparent so the wash reaches the gutters.
 - Floating: `AppCard` keeps its shadow; the Board panel and both chat composers
   gained shadow + hairline border + white fill (were `surfaceVariant`).
 - Springy `NavHost` enter/exit transitions (small horizontal slide + fade).
@@ -1819,6 +1821,9 @@ Two small follow-ups on the same commit path: (1) the Android chat/messages
 composer was ~2 lines tall on init because its long placeholder wrapped —
 shortened it ("Ask anything, or type /") and gave the placeholder `Text`
 `maxLines = 1` + ellipsis, so the field is one line until the user types
-(it still grows to `maxLines = 4`). (2) the floating menu button and both
-composers went from opaque `surface` to `surface.copy(alpha = 0.74f)` glass,
-so the animated gradient shows through them like the drawer.
+(it still grows to `maxLines = 4`). (2) briefly tried translucent
+`surface.copy(alpha = 0.74f)` on the menu button + composers to read as glass;
+without a backdrop blur it looked muddy/tinted, so all of them — plus the
+drawer (had been `0.88`) — are back to opaque `surface`. They float over the
+gradient via shadows, exactly like the desktop's opaque `#fff` cards; only
+the desktop *rail / side panels* are true glass (they have `backdrop-filter`).
