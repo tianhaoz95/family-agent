@@ -3601,3 +3601,28 @@ input[type="file"]::file-selector-button:hover {
   gap: 8px;
   flex: none;
 }
+
+/* Skills: the "draft with AI" affordance sits between the metadata fields and
+   the markdown editor. */
+.skill-draft-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.skill-draft-row .settings-hint { margin: 0; }
+.routine-row .routine-instruction code,
+.skill-scripts {
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+.skill-scripts { margin: 6px 0 0; }
+/* MCP connection form: the URL / command fields toggle by transport. */
+#mcp-form { margin-top: 4px; }
+#mcp-list { max-height: 320px; }
+.mcp-row-tools {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+}
+.mcp-row-error { color: var(--danger); }

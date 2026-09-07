@@ -9,8 +9,12 @@ import app.familyagent.android.data.Document
 import app.familyagent.android.data.DocumentSearchHit
 import app.familyagent.android.data.FamilyAgentApi
 import app.familyagent.android.data.FamilyMember
+import app.familyagent.android.data.McpServer
 import app.familyagent.android.data.Message
 import app.familyagent.android.data.Routine
+import app.familyagent.android.data.SaveMcpServerResponse
+import app.familyagent.android.data.SaveSkillRequest
+import app.familyagent.android.data.Skill
 import app.familyagent.android.data.RoutineInput
 import app.familyagent.android.data.RoutineRun
 import app.familyagent.android.data.SettingsStore
@@ -113,6 +117,17 @@ data class AppUiState(
     val routineStatus: String? = null,
     /** Recent runs, loaded on demand when a routine card is expanded. */
     val routineRuns: Map<String, List<RoutineRun>> = emptyMap(),
+    // ---- skills ----
+    /** /health.skills: "off" hides the Skills drawer item and the /skill command. */
+    val skillsMode: String = "off",
+    val skills: List<Skill> = emptyList(),
+    val skillScriptsRunnable: Boolean = false,
+    val skillStatus: String? = null,
+    // ---- MCP connections ----
+    /** /health.mcp: "on" | "no-servers" | "off". "off" hides Connections + /connect. */
+    val mcpMode: String = "off",
+    val mcpServers: List<McpServer> = emptyList(),
+    val mcpStatus: String? = null,
     /** Non-null while the detail bottom-sheet is open. */
     val detail: DetailContent? = null,
 ) {
@@ -247,6 +262,8 @@ class AppViewModel(
                         voiceEnabled = h.asrEnabled,
                         semanticSearchEnabled = h.semanticSearch == "on",
                         routinesEnabled = h.routinesEnabled,
+                        skillsMode = h.skills,
+                        mcpMode = h.mcp,
                     )
                 }
                 .onFailure {
@@ -812,6 +829,105 @@ class AppViewModel(
             apiCall { api.listRoutineRuns(id, 10) }.onSuccess { runs ->
                 _state.value = _state.value.copy(routineRuns = _state.value.routineRuns + (id to runs))
             }
+        }
+    }
+
+    // ---- skills ----
+    // All the skill logic (markdown parsing, sandboxed scripts) is in agent-core;
+    // this is a thin CRUD wrapper over GET/POST/PATCH/DELETE /skills.
+
+    fun refreshSkills() {
+        if (_state.value.skillsMode == "off") return
+        viewModelScope.launch {
+            apiCall { api.listSkills() }
+                .onSuccess {
+                    _state.value = _state.value.copy(
+                        skills = it.skills,
+                        skillScriptsRunnable = it.scriptsRunnable,
+                        skillStatus = null,
+                    )
+                }
+                .onFailure { _state.value = _state.value.copy(skillStatus = it.message) }
+        }
+    }
+
+    /** Loads the full markdown body for the edit sheet. */
+    fun loadSkillBody(name: String, onBody: (String) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.getSkill(name) }
+                .onSuccess { onBody(it.body ?: "") }
+                .onFailure { onBody("") }
+        }
+    }
+
+    fun saveSkill(req: SaveSkillRequest, onDone: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.saveSkill(req) }
+                .onSuccess { onDone(); refreshSkills() }
+                .onFailure { onError(it.message ?: "Could not save the skill.") }
+        }
+    }
+
+    fun draftSkill(name: String, description: String, onDraft: (String) -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.draftSkill(name, description) }
+                .onSuccess { onDraft(it) }
+                .onFailure { onError(it.message ?: "Draft failed.") }
+        }
+    }
+
+    fun setSkillEnabled(name: String, enabled: Boolean) {
+        _state.value = _state.value.copy(
+            skills = _state.value.skills.map { if (it.name == name) it.copy(enabled = enabled) else it },
+        )
+        viewModelScope.launch { apiCall { api.setSkillEnabled(name, enabled) }.onSuccess { refreshSkills() } }
+    }
+
+    fun deleteSkill(name: String) {
+        _state.value = _state.value.copy(skills = _state.value.skills.filterNot { it.name == name })
+        viewModelScope.launch { apiCall { api.deleteSkill(name) }.onSuccess { refreshSkills() } }
+    }
+
+    // ---- MCP connections ----
+
+    fun refreshConnections() {
+        if (_state.value.mcpMode == "off") return
+        viewModelScope.launch {
+            apiCall { api.listMcpServers() }
+                .onSuccess { _state.value = _state.value.copy(mcpServers = it, mcpStatus = null) }
+                .onFailure { _state.value = _state.value.copy(mcpStatus = it.message) }
+        }
+    }
+
+    fun saveMcpServer(server: McpServer, onResult: (SaveMcpServerResponse) -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.saveMcpServer(server) }
+                .onSuccess { onResult(it); refreshStatus(); refreshConnections() }
+                .onFailure { onError(it.message ?: "Could not save the connection.") }
+        }
+    }
+
+    fun setMcpServerEnabled(name: String, enabled: Boolean) {
+        _state.value = _state.value.copy(
+            mcpServers = _state.value.mcpServers.map { if (it.name == name) it.copy(enabled = enabled) else it },
+        )
+        viewModelScope.launch {
+            apiCall { api.setMcpServerEnabled(name, enabled) }.onSuccess { refreshStatus(); refreshConnections() }
+        }
+    }
+
+    fun deleteMcpServer(name: String) {
+        _state.value = _state.value.copy(mcpServers = _state.value.mcpServers.filterNot { it.name == name })
+        viewModelScope.launch {
+            apiCall { api.deleteMcpServer(name) }.onSuccess { refreshStatus(); refreshConnections() }
+        }
+    }
+
+    fun probeMcpServer(name: String, onResult: (String) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.probeMcpServer(name) }
+                .onSuccess { onResult(if (it.ok) "${it.toolCount ?: 0} tool(s) available" else "Failed: ${it.error ?: "unknown"}") }
+                .onFailure { onResult(it.message ?: "Test failed.") }
         }
     }
 

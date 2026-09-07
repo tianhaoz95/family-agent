@@ -331,6 +331,50 @@ class FamilyAgentApi(
     suspend fun runRoutine(id: String): RunRoutineResponse =
         json.decodeFromString(sendNoBody("POST", "/routines/$id/run"))
 
+    // ---- skills ----
+    suspend fun listSkills(): SkillsResponse = json.decodeFromString(get("/skills"))
+
+    suspend fun getSkill(name: String): Skill =
+        json.decodeFromString<SkillResponse>(get("/skills/${name.encodeQuery()}")).skill
+
+    suspend fun saveSkill(req: SaveSkillRequest): Skill =
+        json.decodeFromString<SkillResponse>(send("POST", "/skills", json.encodeToString(req))).skill
+
+    suspend fun setSkillEnabled(name: String, enabled: Boolean): Skill =
+        json.decodeFromString<SkillResponse>(
+            send("PATCH", "/skills/${name.encodeQuery()}", json.encodeToString(SetSkillEnabledRequest(enabled)))
+        ).skill
+
+    suspend fun deleteSkill(name: String) {
+        sendNoBody("DELETE", "/skills/${name.encodeQuery()}")
+    }
+
+    suspend fun draftSkill(name: String, description: String): String =
+        json.decodeFromString<DraftSkillResponse>(
+            send("POST", "/skills/draft", json.encodeToString(DraftSkillRequest(name, description)))
+        ).markdown
+
+    // ---- MCP connections ----
+    suspend fun listMcpServers(): List<McpServer> =
+        json.decodeFromString<McpServersResponse>(get("/mcp/servers")).servers
+
+    suspend fun saveMcpServer(server: McpServer): SaveMcpServerResponse =
+        json.decodeFromString(send("POST", "/mcp/servers", json.encodeToString(server)))
+
+    suspend fun setMcpServerEnabled(name: String, enabled: Boolean) {
+        send("PATCH", "/mcp/servers/${name.encodeQuery()}", json.encodeToString(SetSkillEnabledRequest(enabled)))
+    }
+
+    suspend fun deleteMcpServer(name: String) {
+        sendNoBody("DELETE", "/mcp/servers/${name.encodeQuery()}")
+    }
+
+    suspend fun probeMcpServer(name: String): McpProbeResult =
+        json.decodeFromString(sendNoBody("POST", "/mcp/servers/${name.encodeQuery()}/probe"))
+
+    suspend fun listMcpTools(): List<McpToolInfo> =
+        json.decodeFromString<McpToolsResponse>(get("/mcp/tools")).tools
+
     suspend fun listTools(): List<Tool> = json.decodeFromString<ToolsResponse>(get("/tools")).tools
 
     suspend fun buildTool(prompt: String) {

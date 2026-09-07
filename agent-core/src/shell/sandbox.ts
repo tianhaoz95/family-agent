@@ -40,10 +40,11 @@ export function sandboxAvailable(): { ok: boolean; reason?: string } {
 // The read-only system mounts every CLI tool is likely to need. Kept tight —
 // no /home, no /root, no /etc beyond what dynamic linking + CA certs want
 // (there's no network anyway), no /proc mounts of the host.
-function baseBwrapArgs(workdir: string): string[] {
-  const roBinds = ["/usr", "/bin", "/lib", "/lib64", "/sbin", "/etc/alternatives", "/etc/fonts", "/etc/ImageMagick-6", "/etc/ImageMagick-7", "/opt"];
+function baseBwrapArgs(workdir: string, extraRoBinds: [string, string][] = []): string[] {
+  const roBinds = ["/usr", "/bin", "/lib", "/lib64", "/sbin", "/etc/alternatives", "/etc/fonts", "/etc/ssl", "/etc/ca-certificates", "/etc/ImageMagick-6", "/etc/ImageMagick-7", "/opt"];
   const args = ["--unshare-all", "--die-with-parent", "--new-session"];
   for (const p of roBinds) if (existsSync(p)) args.push("--ro-bind", p, p);
+  for (const [src, dest] of extraRoBinds) if (existsSync(src)) args.push("--ro-bind", src, dest);
   args.push(
     "--proc", "/proc",
     "--dev", "/dev",
@@ -76,7 +77,12 @@ export interface SandboxResult {
 export function runSandboxed(
   argv: string[],
   workdir: string,
-  opts: { timeoutMs?: number; maxOutputBytes?: number } = {}
+  opts: {
+    timeoutMs?: number;
+    maxOutputBytes?: number;
+    /** [hostPath, sandboxPath] pairs mounted read-only (e.g. a skill folder). */
+    extraRoBinds?: [string, string][];
+  } = {}
 ): Promise<SandboxResult> {
   const bin = bwrap();
   if (!bin) return Promise.resolve({ code: null, stdout: "", stderr: "sandbox unavailable", timedOut: false });
@@ -86,7 +92,7 @@ export function runSandboxed(
   // ulimit inside the sandbox caps address space + output file size; `timeout`
   // outside is the hard wall-clock kill.
   const inner = ["sh", "-c", `ulimit -v 2097152 2>/dev/null; ulimit -f 1048576 2>/dev/null; exec "$@"`, "sh", ...argv];
-  const full = [bin, ...baseBwrapArgs(workdir), "--", ...inner];
+  const full = [bin, ...baseBwrapArgs(workdir, opts.extraRoBinds), "--", ...inner];
 
   return new Promise((resolve) => {
     const proc = spawn(full[0], full.slice(1), { stdio: ["ignore", "pipe", "pipe"] });

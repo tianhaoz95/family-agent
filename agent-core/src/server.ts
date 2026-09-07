@@ -8,6 +8,25 @@ import { webEnabled } from "./web/search.js";
 import { sandboxAvailable } from "./shell/sandbox.js";
 import { installedTools } from "./shell/executor.js";
 import {
+  listSkills,
+  getSkill,
+  saveSkill,
+  setSkillEnabled,
+  deleteSkill,
+  isValidSkillName,
+} from "./skills/skills.js";
+import { skillScriptsRunnable } from "./skills/runScript.js";
+import { generateSkillMarkdown } from "./agents/skillgen.js";
+import { McpManager } from "./mcp/manager.js";
+import {
+  listMcpServers,
+  upsertMcpServer,
+  setMcpServerEnabled,
+  deleteMcpServer,
+  redactMcpServer,
+  type McpServerConfig,
+} from "./mcp/config.js";
+import {
   RoutineScheduler,
   parseTriggerInput,
   nextRunAt,
@@ -25,6 +44,8 @@ import {
   buildFamilyResearchAgent,
   buildFamilyWorkshopAgent,
   buildFamilyCalcAgent,
+  buildFamilySkillAgent,
+  buildFamilyConnectionsAgent,
   askFamilyAgent,
   askFamilyAgentInChannel,
   mentionsAgent,
@@ -80,6 +101,8 @@ declare module "fastify" {
   interface FastifyInstance {
     /** The scheduled-routines loop. Only .start()ed by main() (opts below). */
     routineScheduler: RoutineScheduler;
+    /** Live MCP connections — main() drains these on shutdown. */
+    mcpManager: McpManager;
   }
 }
 
@@ -334,6 +357,25 @@ export function buildServer(
         }
       : undefined;
 
+  // Skills — leaf tools on the planner (list_skills / use_skill / run_skill_script).
+  const skillsDeps = (userId: string) =>
+    config.skillsEnabled
+      ? { logActivity: (a: string, ac: string, d: string) => store.scoped(userId).logActivity(a, ac, d) }
+      : undefined;
+
+  // External MCP servers — one process-wide manager; a per-user deps closure
+  // for the connections-agent subagent (scoped so a user only sees family +
+  // their own connections).
+  const mcpManager = new McpManager();
+  const mcpDeps = (userId: string) =>
+    mcpManager.enabled() && mcpManager.servers().some((s) => s.enabled)
+      ? {
+          userId,
+          manager: mcpManager,
+          logActivity: (a: string, ac: string, d: string) => store.scoped(userId).logActivity(a, ac, d),
+        }
+      : undefined;
+
   const plannerAgents = makeAgentCache<FamilyAgent>((userId) =>
     buildFamilyAgent(store.scoped(userId), {
       startToolBuild: (p) => startToolBuild(userId, p),
@@ -344,6 +386,8 @@ export function buildServer(
       familyTools: config.toolsEnabled ? familyToolsDeps(userId) : undefined,
       web: webDeps(userId),
       shell: shellDeps(userId),
+      skills: skillsDeps(userId),
+      mcp: mcpDeps(userId),
     })
   );
   // The four "/<keyword>" caches only ever get built when that keyword was
@@ -383,6 +427,8 @@ export function buildServer(
     buildFamilyWorkshopAgent({ ...shellDeps(userId)!, onReference: (ref) => chatRefs.get(userId)?.push(ref) })
   );
   const calcAgents = makeAgentCache((userId) => buildFamilyCalcAgent(store.scoped(userId)));
+  const skillAgents = makeAgentCache((userId) => buildFamilySkillAgent(skillsDeps(userId)!));
+  const connectAgents = makeAgentCache((userId) => buildFamilyConnectionsAgent(mcpDeps(userId)!));
 
   // A tool build/improve/delete (or a model-client rebuild) invalidates every
   // one of the caches above in lockstep — miss one and a stale agent lingers.
@@ -397,6 +443,8 @@ export function buildServer(
     researchAgents.delete(userId);
     workshopAgents.delete(userId);
     calcAgents.delete(userId);
+    skillAgents.delete(userId);
+    connectAgents.delete(userId);
   };
   const dropAllAgents = () => {
     plannerAgents.clear();
@@ -409,6 +457,8 @@ export function buildServer(
     researchAgents.clear();
     workshopAgents.clear();
     calcAgents.clear();
+    skillAgents.clear();
+    connectAgents.clear();
   };
   const agentFor = (userId: string) => plannerAgents.get(userId);
   const toolsAgentFor = (userId: string) => toolsAgents.get(userId);
@@ -420,6 +470,8 @@ export function buildServer(
   const researchAgentFor = (userId: string) => researchAgents.get(userId);
   const workshopAgentFor = (userId: string) => workshopAgents.get(userId);
   const calcAgentFor = (userId: string) => calcAgents.get(userId);
+  const skillAgentFor = (userId: string) => skillAgents.get(userId);
+  const connectAgentFor = (userId: string) => connectAgents.get(userId);
   // Resolve collected hints to {type, id, label}, deduped and capped.
   const resolveReferences = (userStore: ScopedStore, userId: string) => {
     const collected = chatRefs.get(userId) ?? [];
@@ -483,6 +535,10 @@ export function buildServer(
         if (!webEnabled()) return "Web access is turned off on this server.";
         agent = researchAgentFor(userId);
         break;
+      case "connect":
+        if (!mcpHasServers()) return "No external services are connected on this server.";
+        agent = connectAgentFor(userId);
+        break;
       default:
         agent = agentFor(userId);
     }
@@ -508,6 +564,8 @@ export function buildServer(
     research: researchAgentFor,
     workshop: workshopAgentFor,
     calc: calcAgentFor,
+    skill: skillAgentFor,
+    connect: connectAgentFor,
   };
   const forcedFallback: Record<ForcedAgentKind, string> = {
     tools: "What can you do?",
@@ -519,12 +577,18 @@ export function buildServer(
     research: "What can you look up for me?",
     workshop: "What files can you help me process?",
     calc: "What can you calculate for me?",
+    skill: "What skills do we have?",
+    connect: "What connected services can you use?",
   };
+  const mcpHasServers = () => mcpManager.enabled() && mcpManager.servers().some((s) => s.enabled);
   const forcedKindOffReason = (kind: ForcedAgentKind): string | null => {
     if (kind === "tools" && !config.toolsEnabled) return "Tools aren't turned on for this server.";
     if (kind === "research" && !webEnabled()) return "Web access isn't turned on for this server.";
     if (kind === "workshop" && !shellReady) return "File processing isn't turned on for this server.";
     if (kind === "calc" && !config.computeEnabled) return "The calculator is turned off on this server.";
+    if (kind === "skill" && !config.skillsEnabled) return "Skills are turned off on this server.";
+    if (kind === "connect" && !mcpHasServers())
+      return "No external services are connected on this server.";
     return null;
   };
 
@@ -548,6 +612,7 @@ export function buildServer(
     catchUpGraceMs: config.routineCatchUpGraceMs,
   });
   app.decorate("routineScheduler", routineScheduler);
+  app.decorate("mcpManager", mcpManager);
   if (opts.startRoutineScheduler && config.routinesEnabled) routineScheduler.start();
 
   /** 404 body for a routine route when the feature is disabled server-wide. */
@@ -623,6 +688,11 @@ export function buildServer(
     shell: shellReady ? "on" : config.shellEnabled ? "unavailable" : "off",
     // The stateless code sandbox (run_code). On by default — it's a pure function.
     compute: config.computeEnabled,
+    // Family skills (playbooks). On by default; "scripts" true when skill
+    // helper scripts can also run (needs the bubblewrap sandbox).
+    skills: config.skillsEnabled ? (skillScriptsRunnable().ok ? "full" : "docs-only") : "off",
+    // External MCP connections. "on" only when enabled AND at least one server.
+    mcp: mcpManager.enabled() ? (mcpHasServers() ? "on" : "no-servers") : "off",
   }));
 
   app.post("/_diag", async (req) => {
@@ -1120,6 +1190,160 @@ export function buildServer(
   });
 
   app.get("/activity", async (req) => ({ activity: req.userStore.listActivity() }));
+
+  // ---- skills ----
+  // A skill is a folder of instructions (+ optional sandboxed scripts) the
+  // family teaches the agent. Read for any user, write for admins.
+  const skillsOff = (reply: FastifyReply) =>
+    reply.code(404).send({ error: "Skills are turned off on this server." });
+
+  app.get("/skills", async (_req, reply) => {
+    if (!config.skillsEnabled) return skillsOff(reply);
+    return {
+      skills: listSkills().map((s) => ({
+        name: s.name,
+        description: s.description,
+        whenToUse: s.whenToUse ?? null,
+        enabled: s.enabled,
+        scripts: s.scripts,
+        updatedAt: s.updatedAt,
+      })),
+      scriptsRunnable: skillScriptsRunnable().ok,
+    };
+  });
+
+  app.get("/skills/:name", async (req, reply) => {
+    if (!config.skillsEnabled) return skillsOff(reply);
+    const s = getSkill((req.params as { name: string }).name);
+    if (!s) return reply.code(404).send({ error: "skill not found" });
+    return { skill: s };
+  });
+
+  const SkillBody = z.object({
+    name: z.string().trim().min(1).max(48),
+    description: z.string().trim().max(300).optional(),
+    whenToUse: z.string().trim().max(300).optional(),
+    enabled: z.boolean().optional(),
+    markdown: z.string().min(1).max(20_000),
+  });
+  app.post("/skills", { preHandler: requireAdmin }, async (req, reply) => {
+    if (!config.skillsEnabled) return skillsOff(reply);
+    const parsed = SkillBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    if (!isValidSkillName(parsed.data.name.toLowerCase())) {
+      return reply.code(400).send({ error: "Skill name: lowercase letters, digits and hyphens only." });
+    }
+    try {
+      const s = saveSkill({ ...parsed.data, name: parsed.data.name.toLowerCase() });
+      req.userStore.logActivity("skills", "skill.saved", `Saved the "${s.name}" skill`);
+      return reply.code(201).send({ skill: s });
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.patch("/skills/:name", { preHandler: requireAdmin }, async (req, reply) => {
+    if (!config.skillsEnabled) return skillsOff(reply);
+    const { name } = req.params as { name: string };
+    const parsed = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const s = setSkillEnabled(name, parsed.data.enabled);
+    if (!s) return reply.code(404).send({ error: "skill not found" });
+    dropAllAgents(); // the planner prompt / tool set doesn't change, but be safe
+    return { skill: s };
+  });
+
+  app.delete("/skills/:name", { preHandler: requireAdmin }, async (req, reply) => {
+    if (!config.skillsEnabled) return skillsOff(reply);
+    const { name } = req.params as { name: string };
+    if (!deleteSkill(name)) return reply.code(404).send({ error: "skill not found" });
+    req.userStore.logActivity("skills", "skill.deleted", `Deleted the "${name}" skill`);
+    return { deleted: true };
+  });
+
+  // Draft a SKILL.md from a description — one model call, result is returned for
+  // the user to review/edit before POSTing it.
+  app.post("/skills/draft", { preHandler: requireAdmin }, async (req, reply) => {
+    if (!config.skillsEnabled) return skillsOff(reply);
+    const parsed = z
+      .object({ name: z.string().trim().min(1).max(48), description: z.string().trim().min(3).max(600) })
+      .safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const md = await generateSkillMarkdown(extractionModel, parsed.data);
+    if (!md) return reply.code(502).send({ error: "The model didn't produce a usable draft — try again or write it yourself." });
+    return { markdown: md };
+  });
+
+  // ---- MCP connections (admin) ----
+  const mcpOff = (reply: FastifyReply) =>
+    reply.code(404).send({ error: "MCP connections are turned off on this server (FAMILY_AGENT_MCP=1)." });
+
+  app.get("/mcp/servers", { preHandler: requireAdmin }, async (_req, reply) => {
+    if (!mcpManager.enabled()) return mcpOff(reply);
+    return { servers: listMcpServers().map(redactMcpServer) };
+  });
+
+  const McpServerBody = z.object({
+    name: z.string().trim().min(1).max(48),
+    transport: z.enum(["http", "stdio"]),
+    enabled: z.boolean().optional(),
+    url: z.string().trim().max(400).optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    command: z.string().trim().max(200).optional(),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    allowHosts: z.array(z.string()).optional(),
+    scope: z.string().trim().max(48).optional(),
+    note: z.string().trim().max(300).optional(),
+  });
+  app.post("/mcp/servers", { preHandler: requireAdmin }, async (req, reply) => {
+    if (!mcpManager.enabled()) return mcpOff(reply);
+    const parsed = McpServerBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    try {
+      const saved = upsertMcpServer({ ...parsed.data, enabled: parsed.data.enabled ?? true } as McpServerConfig);
+      mcpManager.invalidate(saved.name);
+      req.userStore.logActivity("connections-agent", "mcp.server.saved", `Configured MCP server "${saved.name}"`);
+      const probe = saved.enabled ? await mcpManager.probe(saved.name) : { ok: true, toolCount: 0 };
+      return reply.code(201).send({ server: redactMcpServer(saved), probe });
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.patch("/mcp/servers/:name", { preHandler: requireAdmin }, async (req, reply) => {
+    if (!mcpManager.enabled()) return mcpOff(reply);
+    const { name } = req.params as { name: string };
+    const parsed = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const s = setMcpServerEnabled(name, parsed.data.enabled);
+    if (!s) return reply.code(404).send({ error: "server not found" });
+    mcpManager.invalidate(name);
+    dropAllAgents();
+    return { server: redactMcpServer(s) };
+  });
+
+  app.delete("/mcp/servers/:name", { preHandler: requireAdmin }, async (req, reply) => {
+    if (!mcpManager.enabled()) return mcpOff(reply);
+    const { name } = req.params as { name: string };
+    if (!deleteMcpServer(name)) return reply.code(404).send({ error: "server not found" });
+    mcpManager.invalidate(name);
+    dropAllAgents();
+    req.userStore.logActivity("connections-agent", "mcp.server.deleted", `Removed MCP server "${name}"`);
+    return { deleted: true };
+  });
+
+  app.post("/mcp/servers/:name/probe", { preHandler: requireAdmin }, async (req, reply) => {
+    if (!mcpManager.enabled()) return mcpOff(reply);
+    return mcpManager.probe((req.params as { name: string }).name);
+  });
+
+  // The tools every connected server exposes to THIS user — for the UI.
+  app.get("/mcp/tools", async (req) => {
+    if (!mcpManager.enabled()) return { tools: [] };
+    const tools = await mcpManager.toolsForUser(req.authUser.id);
+    return { tools: tools.map((t) => ({ server: t.server, name: t.tool.name, description: t.tool.description ?? "" })) };
+  });
 
   // ---- family directory ----
   // Every authenticated user can see who else has an account (name + username
@@ -1909,6 +2133,7 @@ async function main() {
       mdns?.destroy();
       app.routineScheduler.stop();
       supervisor.stopAll();
+      app.mcpManager.stopAll();
       toolsServer?.close();
       for (const w of watchers.values()) await w.close();
       process.exit(0);

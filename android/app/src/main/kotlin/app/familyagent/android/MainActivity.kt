@@ -26,8 +26,10 @@ import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -55,6 +57,7 @@ import app.familyagent.android.ui.ActivityScreen
 import app.familyagent.android.ui.BoardScreen
 import app.familyagent.android.ui.ChatScreen
 import app.familyagent.android.ui.ChatSessionsScreen
+import app.familyagent.android.ui.ConnectionsScreen
 import app.familyagent.android.ui.DetailSheet
 import app.familyagent.android.ui.ConversationScreen
 import app.familyagent.android.ui.DiscoveryScreen
@@ -63,6 +66,7 @@ import app.familyagent.android.ui.LoginScreen
 import app.familyagent.android.ui.MessagesScreen
 import app.familyagent.android.ui.RoutinesScreen
 import app.familyagent.android.ui.SettingsScreen
+import app.familyagent.android.ui.SkillsScreen
 import app.familyagent.android.ui.StatusDot
 import app.familyagent.android.ui.TasksScreen
 import app.familyagent.android.ui.ToolWebViewScreen
@@ -79,6 +83,8 @@ private enum class Destination(val route: String, val label: String, val icon: a
     Documents("documents", "Documents", Icons.Rounded.Description),
     Tools("tools", "Tools", Icons.Rounded.Build),
     Routines("routines", "Routines", Icons.Rounded.Schedule),
+    Skills("skills", "Skills", Icons.Rounded.School),
+    Connections("connections", "Connections", Icons.Rounded.Hub),
     Activity("activity", "Activity", Icons.Rounded.History),
     Settings("settings", "Settings", Icons.Rounded.Settings),
 }
@@ -161,6 +167,8 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
             Destination.Documents -> viewModel.refreshDocuments()
             Destination.Tools -> viewModel.refreshTools()
             Destination.Routines -> viewModel.refreshRoutines()
+            Destination.Skills -> viewModel.refreshSkills()
+            Destination.Connections -> viewModel.refreshConnections()
             Destination.Activity -> viewModel.refreshActivity()
             else -> {}
         }
@@ -176,6 +184,9 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                 connection = state.connection,
                 unread = state.totalUnread,
                 routinesEnabled = state.routinesEnabled,
+                skillsEnabled = state.skillsMode != "off",
+                connectionsEnabled = state.mcpMode != "off" &&
+                    (state.auth as? AuthState.Authenticated)?.user?.role == "admin",
                 onSelect = { dest ->
                     scope.launch { drawerState.close() }
                     val alreadyHere = currentDestination?.hierarchy?.any { it.route == dest.route } == true
@@ -330,6 +341,31 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onRefresh = viewModel::refreshRoutines,
                     )
                 }
+                composable(Destination.Skills.route) {
+                    SkillsScreen(
+                        skills = state.skills,
+                        status = state.skillStatus,
+                        scriptsRunnable = state.skillScriptsRunnable,
+                        isAdmin = (state.auth as? AuthState.Authenticated)?.user?.role == "admin",
+                        onRefresh = viewModel::refreshSkills,
+                        onLoadBody = viewModel::loadSkillBody,
+                        onSave = viewModel::saveSkill,
+                        onDraft = viewModel::draftSkill,
+                        onSetEnabled = viewModel::setSkillEnabled,
+                        onDelete = viewModel::deleteSkill,
+                    )
+                }
+                composable(Destination.Connections.route) {
+                    ConnectionsScreen(
+                        servers = state.mcpServers,
+                        status = state.mcpStatus,
+                        onRefresh = viewModel::refreshConnections,
+                        onSave = viewModel::saveMcpServer,
+                        onSetEnabled = viewModel::setMcpServerEnabled,
+                        onProbe = viewModel::probeMcpServer,
+                        onDelete = viewModel::deleteMcpServer,
+                    )
+                }
                 composable(Destination.Activity.route) {
                     ActivityScreen(state.activity)
                 }
@@ -413,6 +449,8 @@ private fun AppDrawer(
     connection: ConnectionStatus,
     unread: Int,
     routinesEnabled: Boolean,
+    skillsEnabled: Boolean,
+    connectionsEnabled: Boolean,
     onSelect: (Destination) -> Unit,
 ) {
     ModalDrawerSheet(
@@ -441,6 +479,8 @@ private fun AppDrawer(
 
             Destination.entries.forEach { dest ->
                 if (dest == Destination.Routines && !routinesEnabled) return@forEach
+                if (dest == Destination.Skills && !skillsEnabled) return@forEach
+                if (dest == Destination.Connections && !connectionsEnabled) return@forEach
                 val selected = current?.hierarchy?.any { it.route == dest.route } == true
                 NavigationDrawerItem(
                     label = {

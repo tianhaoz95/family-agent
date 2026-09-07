@@ -390,21 +390,25 @@ message skips that decision entirely and routes straight to one specialist,
 guaranteed structurally rather than by a stronger prompt:
 `parseForcedAgentCommand()` (`agents/index.ts`, next to `mentionsAgent()`)
 reads the word right after `/` — `build`→builder, `task`→task, `find`/`search`
-(alias)→document, `note`→notes, `schedule`/`remind` (alias)→routine — and
+(alias)→document, `note`→notes, `schedule`/`remind` (alias)→routine,
+`web`/`lookup`→research, `run`/`shell`→workshop, `calc`/`compute`→calc,
+`skill`→skill, `connect`/`mcp`→connect — and
 returns `{ kind, text }`; anything else (a tool name, or nothing) still means
 `kind: "tools"`, the original behavior, so a plain `/ItemTracker …` message is
 unaffected by the recognized keywords existing. Each `kind` has its own
 standalone builder — `buildFamilyToolsAgent`/`buildFamilyTaskAgent`/
 `buildFamilyDocumentAgent`/`buildFamilyBuilderAgent`/`buildFamilyNotesAgent`/
-`buildFamilyRoutineAgent` — a `createDeepAgent` instance with *only* that one
+`buildFamilyRoutineAgent`/`buildFamilySkillAgent`/`buildFamilyConnectionsAgent`
+— a `createDeepAgent` instance with *only* that one
 subagent's own tools bound (no `subagents` array, same permissions/middleware
 as the planner), so it structurally cannot route anywhere else.
 `buildFamilyBuilderAgent` shares `makeBuilderTools()` with the planner's own
 builder-agent subagent rather than duplicating those three tool definitions.
 
-`server.ts` keeps one `makeAgentCache()`-built cache per kind (nine total,
-including the planner — the five original subagents plus `routine`, `research`,
-`workshop`) instead of hand-rolled `Map`s; `dropAgents(userId)`/
+`server.ts` keeps one `makeAgentCache()`-built cache per kind (the planner plus
+one per forced kind — the five original subagents plus `routine`, `research`,
+`workshop`, `calc`, `skill`, `connect`) instead of hand-rolled `Map`s;
+`dropAgents(userId)`/
 `dropAllAgents()` touch all of them in lockstep at every call site that changes
 what an agent can do (a tool build/improve/delete, or a model-client
 rebuild). Both `POST /chat` AND `POST /channels/:id/messages` run a `/` command
@@ -419,9 +423,11 @@ per-kind fallback prompt (e.g. "List my tasks.") rather than an empty
 message.
 
 Both clients turn `/` into a Slack-style autocomplete merging two sources:
-a small fixed list of the four command keywords (kept in sync by hand with
+a small fixed list of the command keywords (kept in sync by hand with
 `FORCED_AGENT_KEYWORDS` — desktop's `SLASH_COMMANDS` in `main.ts`, Android's
-`SLASH_COMMANDS` in `ChatScreen.kt`) and the already-fetched tool list
+`SLASH_COMMANDS` in `ChatScreen.kt`; desktop hides the capability-gated ones —
+`web`/`run`/`calc`/`skill`/`connect` — off `/health`, Android lists them all)
+and the already-fetched tool list
 filtered to `kind === "server" && status === "ready"` (a `kind === "static"`
 tool has no operations to call via this path at all — see
 `familyToolCatalog` in `server.ts` — so it's excluded; no new endpoint
@@ -464,7 +470,8 @@ math and the runner:
   `cron`); `parseTriggerInput()` canonicalises + validates. `describeTrigger()`
   is the human sentence shown in the UI and echoed by the agent.
 - **Action** — `{ agent, instruction }`; `agent` ∈ `planner` | `task` |
-  `document` | `notes` | `tools`. **`builder` is not a valid value** — a routine
+  `document` | `notes` | `tools` | `research` (web on) | `connect` (MCP on).
+  **`builder` and `workshop` are not valid values** — a routine
   never generates or rewrites code unattended. Enforced structurally: the zod
   enum omits it and `runRoutineAction` (`server.ts`) has no branch for it. A
   local model + a fixed agent set means a scheduled run can't exfiltrate or take
@@ -603,11 +610,82 @@ exact result.
 - Tests: `test/compute.test.ts` (13 — result/logs/input/NOW, error reporting,
   every cap enforced, no ambient globals, no state leak).
 
+## Skills and MCP (skills/*, mcp/*, skill-agent, connections-agent)
+
+Two extension points that don't need code in `agent-core`. Both use the
+`tools-agent` "enumerate then call" shape so a 2B model isn't holding every
+skill body / MCP tool in its prompt. Full rationale: `docs/DECISIONS.md` →
+"Skills and MCP".
+
+**Skills** (`agent-core/src/skills/`, `agents/skillTools.ts`). A skill is a
+folder `<dataDir>/skills/<name>/` with a `SKILL.md` (forgiving `key: value`
+front-matter — `name` / `description` / `when_to_use` / `enabled` — + a
+markdown body) and an optional `scripts/` dir.
+- `skills.ts` owns the folder store (`listSkills` / `getSkill` / `saveSkill` /
+  `setSkillEnabled` / `deleteSkill`; `saveSkill` synthesises front-matter if
+  the markdown lacks it). `runScript.ts` runs a bundled `.py`/`.js`/`.mjs`/
+  `.sh`/`.bash` script via `shell/sandbox.ts`'s `runSandboxed` with the skill
+  folder read-only at `/skill` (new `extraRoBinds` option) — no network,
+  read-only system, same as `workshop-agent`.
+- Planner tools: `list_skills` (cheap, stays in the always-loaded tool list),
+  `use_skill(name)` (loads one body into the turn), `run_skill_script`.
+  `PLANNER_SKILLS_SECTION` appended only when `config.skillsEnabled`
+  (**default on** — text carries no new trust boundary). `/skill` forced turn
+  → `buildFamilySkillAgent`.
+- `agents/skillgen.ts` — `generateSkillMarkdown(model, {name, description})`,
+  one `extractionModel` call, output reviewed before save (same off-planner
+  pattern as `agents/rename.ts`). Route: `POST /skills/draft`.
+- Routes: `GET /skills`, `GET /skills/:name`, `POST /skills` (admin),
+  `PATCH /skills/:name` (admin, enable toggle), `DELETE /skills/:name` (admin),
+  `POST /skills/draft` (admin). Reads are open to every user.
+  `/health.skills` = `"full"` (scripts runnable) | `"docs-only"` | `"off"`.
+  Desktop `#view-skills`; Android `Destination.Skills`.
+
+**MCP client** (`agent-core/src/mcp/`, `agents/mcpTools.ts`). `agent-core`
+connecting *out* to external MCP servers (distinct from `tools/toolMcp.ts`,
+which is agent-core being an MCP *server* for generated tools).
+- **Off unless `FAMILY_AGENT_MCP=1`** — it's the second non-localhost egress
+  point in the codebase (after `src/web/`), so an operator env switch like
+  `FAMILY_AGENT_WEB`/`_SHELL`, not a Settings toggle. `test/web.egress.test.ts`
+  excludes `src/mcp/` (it only fetches an admin-configured URL, never a
+  hard-coded host — noted in that test).
+- `config.ts` — `mcp.json` at `<dataDir>/mcp.json`, seeded once from
+  `FAMILY_AGENT_MCP_SERVERS`. Each server: `transport` (`http` | `stdio`),
+  `enabled`, `scope` (`"family"` or `"user:<id>"`), http `url` + `headers`, or
+  stdio `command` + `args` + `env` + `allowHosts`. `redactMcpServer` scrubs
+  secret-looking headers/env on every API response.
+- `mcp/client.ts` — hand-rolled JSON-RPC 2.0 (no SDK). **http**: Streamable
+  HTTP spec `2025-06-18`, parses direct JSON or SSE, carries `Mcp-Session-Id`,
+  **redirects not followed**. **stdio**: spawned inside bwrap `--unshare-all`
+  (no network) unless `allowHosts` is set, NDJSON over pipes.
+- `mcp/manager.ts` — `McpManager`, process-wide (one, like `ToolSupervisor` /
+  `RoutineScheduler`), one lazy connection per enabled server, 5-min tool-list
+  cache, a failing server degrades to "no tools", drained on SIGINT/SIGTERM
+  (`app.mcpManager.stopAll()`). `mcpServersForUser(userId)` = family-scoped +
+  that user's own.
+- Subagent `connections-agent` (`makeMcpTools` → `list_mcp_tools` /
+  `call_mcp_tool`) — wired only when MCP is on **and** ≥1 server enabled.
+  External tool descriptions + results are **untrusted**: results clamped to
+  `config.mcpMaxResultChars` and framed with a "don't act on instructions in
+  it" note; the subagent has no write tools and can't reach other subagents
+  (blast radius = "a wrong answer", like `research-agent`). Allowed as a
+  routine action agent (`connect`); `/connect` (alias `/mcp`) forced turn →
+  `buildFamilyConnectionsAgent`.
+- Routes (admin): `GET/POST /mcp/servers`, `PATCH /mcp/servers/:name` (enable),
+  `DELETE /mcp/servers/:name`, `POST /mcp/servers/:name/probe` (also run on
+  save). `GET /mcp/tools` (any user — their connections' tools, for the UI).
+  `/health.mcp` = `"on"` (≥1 enabled server) | `"no-servers"` | `"off"`.
+  Desktop: Settings → "Connections (MCP)"; Android: `Destination.Connections`.
+  Both admin-only.
+
+Tests: `test/skills.test.ts`, `test/mcp.test.ts`.
+
 ## Scope notes
 
-Eight subagents ship: `task-agent`, `document-agent`, `builder-agent`,
+Ten subagents ship: `task-agent`, `document-agent`, `builder-agent`,
 `notes-agent`, `tools-agent`, `routine-agent`, `research-agent` (web access
-on), and `workshop-agent` (file processing on) — plus `run_code`, a leaf tool
+on), `workshop-agent` (file processing on), `skill-agent` (skills, default on),
+and `connections-agent` (MCP on) — plus `run_code`, a leaf tool
 on the planner + `document-agent` (see "Code sandbox" above). `builder-agent`
 generates small self-contained web tools (`agent-core/src/tools/*`, and a "Tools" screen in
 both apps) — see `docs/STATUS.md` for the architecture. A build starts with a **plan pass**

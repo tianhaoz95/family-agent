@@ -17,7 +17,7 @@ import {
 // "dailyAt: 07:00" fine. parseTriggerInput() turns them into the canonical
 // trigger and validates.
 
-const ACTION_AGENTS: RoutineAgentKind[] = ["planner", "task", "document", "notes", "tools", "research"];
+const ACTION_AGENTS: RoutineAgentKind[] = ["planner", "task", "document", "notes", "tools", "research", "connect"];
 
 export function makeRoutineTools(store: ScopedStore, now: () => Date = () => new Date()) {
   const currentDatetime = tool(
@@ -92,9 +92,9 @@ export function makeRoutineTools(store: ScopedStore, now: () => Date = () => new
           .min(1)
           .describe("What the agent should do each run, e.g. 'Summarise today's events, overdue tasks, and any bills due this week.'"),
         agent: z
-          .enum(["planner", "task", "document", "notes", "tools", "research"])
+          .enum(["planner", "task", "document", "notes", "tools", "research", "connect"])
           .optional()
-          .describe("Which agent runs the instruction. 'planner' (default) is the full assistant. 'research' searches the web (weather/news briefings). Never 'builder'."),
+          .describe("Which agent runs the instruction. 'planner' (default) is the full assistant. 'research' searches the web (weather/news briefings). 'connect' uses a connected external service (MCP). Never 'builder'."),
         dailyAt: z.string().optional().describe("'HH:MM' — every day at this time"),
         weeklyOn: z.string().optional().describe("Weekday name — every week on this day (pair with weeklyAt)"),
         weeklyAt: z.string().optional().describe("'HH:MM' for weeklyOn (default 09:00)"),

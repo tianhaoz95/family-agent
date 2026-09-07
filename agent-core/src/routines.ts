@@ -29,7 +29,7 @@ export type RoutineTrigger =
   /** A plain fixed interval, anchored at creation. Handy for "every 30 minutes". */
   | { kind: "every"; minutes: number };
 
-export type RoutineAgentKind = "planner" | "task" | "document" | "notes" | "tools" | "research";
+export type RoutineAgentKind = "planner" | "task" | "document" | "notes" | "tools" | "research" | "connect";
 
 export interface RoutineAction {
   /** Which agent runs the instruction. "planner" is the full assistant; the

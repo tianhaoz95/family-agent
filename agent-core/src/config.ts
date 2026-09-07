@@ -183,6 +183,30 @@ export const config = {
   computeTimeoutMs: Number(process.env.FAMILY_AGENT_COMPUTE_TIMEOUT_MS ?? 3_000),
   computeMemoryBytes: Number(process.env.FAMILY_AGENT_COMPUTE_MEMORY_BYTES ?? 64 * 1024 * 1024),
   computeMaxOutputChars: Number(process.env.FAMILY_AGENT_COMPUTE_MAX_OUTPUT ?? 10_000),
+
+  // ---- Skills (skills/*, agents/skillTools.ts) ----
+  // A skill is a folder the family adds under <dataDir>/skills/<name>/ with a
+  // SKILL.md (front-matter + instructions) and optional scripts/. The planner
+  // sees only names + descriptions until it calls use_skill, which loads the
+  // full instructions for the rest of the turn (progressive disclosure — keeps
+  // a small model's context lean). Just prompt text + sandboxed scripts, so
+  // it's ON by default. FAMILY_AGENT_SKILLS=0 disables it.
+  skillsEnabled: process.env.FAMILY_AGENT_SKILLS !== "0",
+  skillScriptTimeoutMs: Number(process.env.FAMILY_AGENT_SKILL_SCRIPT_TIMEOUT_MS ?? 30_000),
+
+  // ---- MCP connections (mcp/*, agents/mcpTools.ts) ----
+  // Connect the family agent to external Model Context Protocol servers (a
+  // calendar, a company knowledge base, home automation, …). OFF unless
+  // FAMILY_AGENT_MCP=1. Each server is configured in <dataDir>/mcp.json (or
+  // seeded from FAMILY_AGENT_MCP_SERVERS, a JSON array). A `connections-agent`
+  // subagent enumerates and calls their tools — never the planner directly, so
+  // a server with 30 tools doesn't blow the small model's context. Results are
+  // wrapped untrusted, every call logged. HTTP transport is guarded like the
+  // web capability; stdio servers run inside the bubblewrap sandbox.
+  mcpEnabled: process.env.FAMILY_AGENT_MCP === "1",
+  mcpServersSeed: process.env.FAMILY_AGENT_MCP_SERVERS ?? "",
+  mcpCallTimeoutMs: Number(process.env.FAMILY_AGENT_MCP_TIMEOUT_MS ?? 30_000),
+  mcpMaxResultChars: Number(process.env.FAMILY_AGENT_MCP_MAX_RESULT ?? 8_000),
 };
 
 /** The watched folder for one user — their own override, or the derived default. */
@@ -197,6 +221,16 @@ export function toolsDir(): string {
 /** Per-user scratch dir the workshop agent's CLI tools read and write. */
 export function workspaceDir(userId: string): string {
   return `${config.dataDir}/workspace/${userId}`;
+}
+
+/** Where family skills live: one folder per skill, each with a SKILL.md. */
+export function skillsDir(): string {
+  return `${config.dataDir}/skills`;
+}
+
+/** Config file for external MCP servers the agent connects to. */
+export function mcpConfigPath(): string {
+  return `${config.dataDir}/mcp.json`;
 }
 
 /** Where an uploaded document's original file is kept so it can be previewed

@@ -3,9 +3,12 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 // The egress chokepoint rule: nothing in agent-core makes an outbound request
-// to a non-localhost host EXCEPT the modules under src/web/. Everything else
-// (Ollama, the tools server) talks to 127.0.0.1. See docs/DECISIONS.md → "Web
-// access". A new `fetch("https://…")` outside src/web/ should fail this test.
+// to a non-localhost host EXCEPT the modules under src/web/ and src/mcp/.
+// Everything else (Ollama, the tools server) talks to 127.0.0.1. See
+// docs/DECISIONS.md → "Web access" and "Skills and MCP". A new
+// `fetch("https://…")` outside those two dirs should fail this test. src/mcp/
+// only ever fetches an admin-configured server URL (never a hard-coded host),
+// so it is excluded here as well.
 
 const SRC = new URL("../src/", import.meta.url).pathname;
 
@@ -24,7 +27,7 @@ function walk(dir: string): string[] {
 const LOCAL_HINTS = ["127.0.0.1", "localhost", "ollamaBaseUrl", "baseUrl", "${port}", "${realPort}", "${config.toolsPort}"];
 
 describe("outbound-request chokepoint", () => {
-  const files = walk(SRC).filter((f) => !f.includes("/web/"));
+  const files = walk(SRC).filter((f) => !f.includes("/web/") && !f.includes("/mcp/"));
 
   it("no module outside src/web/ fetches a hard-coded remote URL", () => {
     const offenders: string[] = [];

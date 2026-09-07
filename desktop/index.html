@@ -109,6 +109,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
             <span class="nav-label">Routines</span>
           </button>
+          <button class="nav-item" data-view="skills" type="button" id="nav-skills" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 7l9 5 9-5-9-5Z"/><path d="M3 17l9 5 9-5M3 12l9 5 9-5"/></svg>
+            <span class="nav-label">Skills</span>
+          </button>
           <button class="nav-item" data-view="family" type="button" id="nav-family" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             <span class="nav-label">Family</span>
@@ -476,6 +480,52 @@
           <ul id="routine-list" class="routine-list"></ul>
         </section>
 
+        <section id="view-skills" class="view" aria-label="Skills">
+          <div class="view-header view-header--row">
+            <div>
+              <h1>Skills</h1>
+              <p class="view-sub">Named playbooks you teach the assistant — step-by-step instructions it follows for a recurring family task. The assistant checks its skills whenever a request might match one.</p>
+            </div>
+            <button type="button" id="skill-new-btn" class="board-add">+ New skill</button>
+          </div>
+
+          <form id="skill-form" class="routine-form" hidden>
+            <div class="routine-form-grid">
+              <label class="field">Name
+                <input id="skill-name" type="text" placeholder="weekly-meal-plan" required maxlength="48"
+                  pattern="[a-z0-9][a-z0-9-]*" title="lowercase letters, digits and hyphens" />
+              </label>
+              <label class="field">Short description
+                <input id="skill-description" type="text" placeholder="Plan the week's dinners" maxlength="300" />
+              </label>
+            </div>
+            <label class="field">When should the assistant use this? <span class="settings-hint">(optional)</span>
+              <input id="skill-when" type="text" placeholder="When someone asks about dinner plans or a grocery run" maxlength="300" />
+            </label>
+            <div class="skill-draft-row">
+              <button type="button" id="skill-draft-btn" class="btn-ghost">Draft with AI from the description</button>
+              <span id="skill-draft-status" class="settings-hint" role="status"></span>
+            </div>
+            <label class="field">Instructions (Markdown)
+              <textarea id="skill-markdown" rows="12" required maxlength="20000"
+                placeholder="# Weekly meal plan&#10;&#10;## Steps&#10;1. Check the board for meal ideas.&#10;2. Draft 7 dinners.&#10;3. Add a grocery list as a sticky note."></textarea>
+            </label>
+            <label class="settings-checkbox">
+              <input type="checkbox" id="skill-enabled" checked /> Enabled
+            </label>
+            <div class="routine-form-foot">
+              <p id="skill-form-status" class="settings-hint" role="status"></p>
+              <div>
+                <button type="button" id="skill-cancel-btn" class="btn-ghost">Cancel</button>
+                <button type="submit" id="skill-save-btn">Save skill</button>
+              </div>
+            </div>
+          </form>
+
+          <p id="skill-status" class="settings-hint" role="status"></p>
+          <ul id="skill-list" class="routine-list"></ul>
+        </section>
+
         <section id="view-activity" class="view" aria-label="Activity">
           <div class="view-header">
             <h1>Activity</h1>
@@ -575,6 +625,49 @@
             </label>
             <p id="settings-autostart-status" class="settings-hint" role="status"></p>
             <button type="button" id="settings-quit-btn" class="btn-ghost" hidden>Quit Family Agent</button>
+          </div>
+
+          <div class="settings-section" id="settings-connections-section" hidden>
+            <h3>Connections (MCP)</h3>
+            <p class="settings-hint">
+              External services the assistant can call through the
+              <a href="https://modelcontextprotocol.io" target="_blank" rel="noreferrer">Model Context Protocol</a>.
+              A connection's tools are untrusted — the assistant treats their results as
+              information only, never as instructions. HTTP servers are reached directly;
+              <code>stdio</code> servers run sandboxed with no network unless you allow
+              specific hosts. Enable with <code>FAMILY_AGENT_MCP=1</code>.
+            </p>
+            <form id="mcp-form" class="routine-form">
+              <div class="routine-form-grid">
+                <label class="field">Name
+                  <input id="mcp-name" type="text" placeholder="github" maxlength="48"
+                    pattern="[a-z0-9][a-z0-9-]*" title="lowercase letters, digits and hyphens" required />
+                </label>
+                <label class="field">Transport
+                  <select id="mcp-transport">
+                    <option value="http">HTTP (URL)</option>
+                    <option value="stdio">stdio (command)</option>
+                  </select>
+                </label>
+              </div>
+              <label class="field" id="mcp-url-field">Server URL
+                <input id="mcp-url" type="url" placeholder="https://mcp.example.com/mcp" />
+              </label>
+              <label class="field" id="mcp-headers-field">Headers <span class="settings-hint">(one per line, <code>Name: value</code>)</span>
+                <textarea id="mcp-headers" rows="2" placeholder="Authorization: Bearer …"></textarea>
+              </label>
+              <label class="field" id="mcp-command-field" hidden>Command + args <span class="settings-hint">(space-separated)</span>
+                <input id="mcp-command" type="text" placeholder="/usr/bin/some-mcp-server --flag" />
+              </label>
+              <label class="field" id="mcp-allowhosts-field" hidden>Allowed hosts <span class="settings-hint">(comma-separated; empty = no network)</span>
+                <input id="mcp-allowhosts" type="text" placeholder="api.github.com" />
+              </label>
+              <div class="routine-form-foot">
+                <p id="mcp-form-status" class="settings-hint" role="status"></p>
+                <button type="submit" id="mcp-save-btn">Add connection</button>
+              </div>
+            </form>
+            <ul id="mcp-list" class="routine-list"></ul>
           </div>
 
           <div class="settings-section">

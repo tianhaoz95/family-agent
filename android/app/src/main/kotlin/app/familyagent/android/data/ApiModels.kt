@@ -96,6 +96,10 @@ data class HealthResponse(
     val shell: String = "off",
     /** Whether the stateless code sandbox (run_code / the /calc command) is available. */
     val compute: Boolean = true,
+    /** "full" = skills + sandboxed scripts; "docs-only" = instructions only; "off". */
+    val skills: String = "off",
+    /** "on" = MCP enabled with ≥1 connected server; "no-servers" = enabled, none; "off". */
+    val mcp: String = "off",
 )
 
 @Serializable
@@ -442,3 +446,77 @@ data class RunRoutineResponse(
     val error: String? = null,
     val run: RoutineRun? = null,
 )
+
+// ---- skills ----
+
+@Serializable
+data class Skill(
+    val name: String,
+    val description: String = "",
+    val whenToUse: String? = null,
+    val enabled: Boolean = true,
+    val scripts: List<String> = emptyList(),
+    val updatedAt: String = "",
+    /** Only present from GET /skills/:name. */
+    val body: String? = null,
+)
+
+@Serializable
+data class SkillsResponse(val skills: List<Skill>, val scriptsRunnable: Boolean = false)
+
+@Serializable
+data class SkillResponse(val skill: Skill)
+
+@Serializable
+data class SaveSkillRequest(
+    val name: String,
+    val description: String? = null,
+    val whenToUse: String? = null,
+    val enabled: Boolean = true,
+    val markdown: String,
+)
+
+@Serializable
+data class SetSkillEnabledRequest(val enabled: Boolean)
+
+@Serializable
+data class DraftSkillRequest(val name: String, val description: String)
+
+@Serializable
+data class DraftSkillResponse(val markdown: String)
+
+// ---- MCP connections ----
+
+@Serializable
+data class McpServer(
+    val name: String,
+    val transport: String = "http",
+    val enabled: Boolean = true,
+    val url: String? = null,
+    val headers: Map<String, String>? = null,
+    val command: String? = null,
+    val args: List<String>? = null,
+    val env: Map<String, String>? = null,
+    val allowHosts: List<String>? = null,
+    val scope: String? = null,
+    val note: String? = null,
+)
+
+@Serializable
+data class McpServersResponse(val servers: List<McpServer>)
+
+@Serializable
+data class McpProbeResult(
+    val ok: Boolean = false,
+    val toolCount: Int? = null,
+    val error: String? = null,
+)
+
+@Serializable
+data class SaveMcpServerResponse(val server: McpServer, val probe: McpProbeResult = McpProbeResult())
+
+@Serializable
+data class McpToolInfo(val server: String, val name: String, val description: String = "")
+
+@Serializable
+data class McpToolsResponse(val tools: List<McpToolInfo> = emptyList())

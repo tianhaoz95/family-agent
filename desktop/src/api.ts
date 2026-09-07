@@ -355,6 +355,56 @@ export interface Health {
   shell?: "on" | "off" | "unavailable";
   /** Whether the stateless code sandbox (run_code / the /calc command) is available. */
   compute?: boolean;
+  /** "full" = skills + sandboxed scripts; "docs-only" = instructions but no script runner; "off". */
+  skills?: "full" | "docs-only" | "off";
+  /** "on" = MCP enabled with ≥1 connected server; "no-servers" = enabled, none configured; "off". */
+  mcp?: "on" | "no-servers" | "off";
+}
+
+// ---- skills ----
+
+export interface Skill {
+  name: string;
+  description: string;
+  whenToUse: string | null;
+  enabled: boolean;
+  scripts: string[];
+  updatedAt: string;
+}
+
+/** A skill with its full markdown body — from GET /skills/:name. */
+export interface SkillDetail extends Skill {
+  body: string;
+}
+
+// ---- MCP connections ----
+
+export type McpTransport = "http" | "stdio";
+
+export interface McpServer {
+  name: string;
+  transport: McpTransport;
+  enabled: boolean;
+  url?: string;
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  allowHosts?: string[];
+  scope?: string;
+  note?: string;
+}
+
+export interface McpProbeResult {
+  ok: boolean;
+  toolCount?: number;
+  error?: string;
+}
+
+export interface McpToolInfo {
+  server: string;
+  name: string;
+  description: string;
 }
 
 /** Document search strategy — see agent-core embeddings.ts. */
@@ -565,6 +615,39 @@ export const api = {
       method: "POST",
     }),
   listActivity: () => request<{ activity: ActivityEntry[] }>("/activity"),
+
+  // ---- skills ----
+  listSkills: () => request<{ skills: Skill[]; scriptsRunnable: boolean }>("/skills"),
+  getSkill: (name: string) => request<{ skill: SkillDetail }>(`/skills/${encodeURIComponent(name)}`),
+  saveSkill: (body: { name: string; description?: string; whenToUse?: string; enabled?: boolean; markdown: string }) =>
+    request<{ skill: SkillDetail }>("/skills", { method: "POST", body: JSON.stringify(body) }),
+  setSkillEnabled: (name: string, enabled: boolean) =>
+    request<{ skill: SkillDetail }>(`/skills/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  deleteSkill: (name: string) =>
+    request<{ deleted: true }>(`/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  draftSkill: (body: { name: string; description: string }) =>
+    request<{ markdown: string }>("/skills/draft", { method: "POST", body: JSON.stringify(body) }),
+
+  // ---- MCP connections (admin) ----
+  listMcpServers: () => request<{ servers: McpServer[] }>("/mcp/servers"),
+  saveMcpServer: (body: McpServer) =>
+    request<{ server: McpServer; probe: McpProbeResult }>("/mcp/servers", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  setMcpServerEnabled: (name: string, enabled: boolean) =>
+    request<{ server: McpServer }>(`/mcp/servers/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  deleteMcpServer: (name: string) =>
+    request<{ deleted: true }>(`/mcp/servers/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  probeMcpServer: (name: string) =>
+    request<McpProbeResult>(`/mcp/servers/${encodeURIComponent(name)}/probe`, { method: "POST" }),
+  listMcpTools: () => request<{ tools: McpToolInfo[] }>("/mcp/tools"),
 
   // ---- scheduled routines ----
   listRoutines: () => request<{ routines: Routine[] }>("/routines"),

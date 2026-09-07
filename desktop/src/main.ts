@@ -32,6 +32,8 @@ import {
   type RoutineRun,
   type RoutineTriggerInput,
   type RoutineAgentKind,
+  type Skill,
+  type McpServer,
 } from "./api.js";
 import { startRecording, type Recording } from "./audio.js";
 import {
@@ -92,8 +94,12 @@ function showView(name: string) {
   }
   if (name === "activity") void refreshActivity();
   if (name === "routines") void refreshRoutines();
+  if (name === "skills") void refreshSkills();
   if (name === "family") void refreshUsers();
-  if (name === "settings") void refreshSettings();
+  if (name === "settings") {
+    void refreshSettings();
+    if (mcpMode !== "off" && currentUser?.role === "admin") void refreshConnections();
+  }
 }
 
 for (const btn of navButtons) {
@@ -117,6 +123,11 @@ let semanticSearchOff = false;
 // Mirrors /health.routinesEnabled — hides the Routines nav item when off.
 let routinesEnabled = true;
 const navRoutines = document.getElementById("nav-routines") as HTMLButtonElement;
+// Mirrors /health.skills — hides the Skills nav item when "off", gates /skill.
+let skillsMode: NonNullable<Health["skills"]> = "off";
+const navSkills = document.getElementById("nav-skills") as HTMLButtonElement;
+// Mirrors /health.mcp — gates the Connections settings section and /connect.
+let mcpMode: NonNullable<Health["mcp"]> = "off";
 // Mirror /health.web / .shell / .compute — gate the /web, /run, /calc slash commands.
 let webEnabled = false;
 let shellEnabled = false;
@@ -135,6 +146,10 @@ async function refreshStatus() {
     semanticSearchOff = health.semanticSearch === "off";
     routinesEnabled = health.routinesEnabled !== false;
     navRoutines.hidden = !routinesEnabled;
+    skillsMode = health.skills ?? "off";
+    navSkills.hidden = skillsMode === "off";
+    mcpMode = health.mcp ?? "off";
+    settingsConnectionsSection.hidden = mcpMode === "off" || currentUser?.role !== "admin";
     webEnabled = health.web === "on";
     shellEnabled = health.shell === "on";
     computeEnabled = health.compute !== false;
@@ -191,6 +206,8 @@ const SLASH_COMMANDS: SlashEntry[] = [
   { name: "web", description: "Search the web and read a page (alias: /lookup)" },
   { name: "run", description: "Process a file with command-line tools (alias: /shell)" },
   { name: "calc", description: "Compute an exact answer — maths, dates, totals (alias: /compute)" },
+  { name: "skill", description: "Use one of the family's taught skills" },
+  { name: "connect", description: "Use a connected external service (alias: /mcp)" },
 ];
 // Populated (from the same /tools list the Tools view already fetches) when
 // the Chat view is entered; only ready, server-kind tools are offered — a
@@ -527,7 +544,9 @@ function wireSlashMenu(
       (c) =>
         (c.name !== "web" || webEnabled) &&
         (c.name !== "run" || shellEnabled) &&
-        (c.name !== "calc" || computeEnabled)
+        (c.name !== "calc" || computeEnabled) &&
+        (c.name !== "skill" || skillsMode !== "off") &&
+        (c.name !== "connect" || mcpMode === "on")
     );
   const knownName = (name: string) =>
     enabledCommands().some((c) => c.name === name) ||
@@ -2108,6 +2127,368 @@ async function refreshRoutines() {
   }
 }
 
+// ---------- skills ----------
+// A skill is a markdown playbook the assistant follows for a recurring task.
+// Read for everyone, edited by admins (the server enforces both). Scripts, if
+// a skill ships any, run sandboxed on the server — this view just lists them.
+const skillList = document.getElementById("skill-list")!;
+const skillStatus = document.getElementById("skill-status")!;
+const skillNewBtn = document.getElementById("skill-new-btn") as HTMLButtonElement;
+const skillForm = document.getElementById("skill-form") as HTMLFormElement;
+const skillNameInput = document.getElementById("skill-name") as HTMLInputElement;
+const skillDescriptionInput = document.getElementById("skill-description") as HTMLInputElement;
+const skillWhenInput = document.getElementById("skill-when") as HTMLInputElement;
+const skillMarkdownInput = document.getElementById("skill-markdown") as HTMLTextAreaElement;
+const skillEnabledCheckbox = document.getElementById("skill-enabled") as HTMLInputElement;
+const skillDraftBtn = document.getElementById("skill-draft-btn") as HTMLButtonElement;
+const skillDraftStatus = document.getElementById("skill-draft-status")!;
+const skillFormStatus = document.getElementById("skill-form-status")!;
+const skillCancelBtn = document.getElementById("skill-cancel-btn") as HTMLButtonElement;
+const skillSaveBtn = document.getElementById("skill-save-btn") as HTMLButtonElement;
+
+let skills: Skill[] = [];
+let editingSkillName: string | null = null;
+let skillScriptsRunnable = false;
+
+function isAdmin() {
+  return currentUser?.role === "admin";
+}
+
+function openSkillForm(skill?: Skill) {
+  editingSkillName = skill?.name ?? null;
+  skillFormStatus.textContent = "";
+  skillDraftStatus.textContent = "";
+  skillNameInput.value = skill?.name ?? "";
+  skillNameInput.disabled = !!skill; // name is the id — rename = delete + recreate
+  skillDescriptionInput.value = skill?.description ?? "";
+  skillWhenInput.value = skill?.whenToUse ?? "";
+  skillEnabledCheckbox.checked = skill ? skill.enabled : true;
+  skillSaveBtn.textContent = skill ? "Save changes" : "Save skill";
+  skillForm.hidden = false;
+  skillNewBtn.hidden = true;
+  if (skill) {
+    skillMarkdownInput.value = "Loading…";
+    void api
+      .getSkill(skill.name)
+      .then(({ skill: full }) => {
+        skillMarkdownInput.value = full.body;
+      })
+      .catch(() => {
+        skillMarkdownInput.value = "";
+        skillFormStatus.textContent = "Couldn't load the skill body.";
+      });
+  } else {
+    skillMarkdownInput.value = "";
+  }
+  skillNameInput.focus();
+}
+
+function closeSkillForm() {
+  skillForm.hidden = true;
+  skillNewBtn.hidden = false;
+  editingSkillName = null;
+}
+
+skillNewBtn.addEventListener("click", () => openSkillForm());
+skillCancelBtn.addEventListener("click", closeSkillForm);
+
+skillDraftBtn.addEventListener("click", async () => {
+  const name = skillNameInput.value.trim().toLowerCase();
+  const description = skillDescriptionInput.value.trim();
+  if (name.length < 1 || description.length < 3) {
+    skillDraftStatus.textContent = "Fill in the name and description first.";
+    return;
+  }
+  skillDraftBtn.disabled = true;
+  skillDraftStatus.textContent = "Drafting… (a local model call, ~10–30s)";
+  try {
+    const { markdown } = await api.draftSkill({ name, description });
+    skillMarkdownInput.value = markdown;
+    skillDraftStatus.textContent = "Draft ready — review and edit before saving.";
+  } catch (err) {
+    skillDraftStatus.textContent = err instanceof Error ? err.message : "Draft failed.";
+  } finally {
+    skillDraftBtn.disabled = false;
+  }
+});
+
+skillForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = skillNameInput.value.trim().toLowerCase();
+  const markdown = skillMarkdownInput.value.trim();
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+    skillFormStatus.textContent = "Name: lowercase letters, digits and hyphens only.";
+    return;
+  }
+  if (markdown.length < 1) {
+    skillFormStatus.textContent = "Write some instructions.";
+    return;
+  }
+  skillSaveBtn.disabled = true;
+  skillFormStatus.textContent = "Saving…";
+  try {
+    await api.saveSkill({
+      name,
+      description: skillDescriptionInput.value.trim() || undefined,
+      whenToUse: skillWhenInput.value.trim() || undefined,
+      enabled: skillEnabledCheckbox.checked,
+      markdown,
+    });
+    closeSkillForm();
+    await refreshSkills();
+  } catch (err) {
+    skillFormStatus.textContent = err instanceof Error ? err.message : "Could not save.";
+  } finally {
+    skillSaveBtn.disabled = false;
+  }
+});
+
+function renderSkills() {
+  skillList.innerHTML = "";
+  skillNewBtn.hidden = !isAdmin() || !skillForm.hidden;
+  if (skills.length === 0) {
+    skillList.innerHTML = `<li class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 7l9 5 9-5-9-5Z"/><path d="M3 17l9 5 9-5M3 12l9 5 9-5"/></svg><span>${
+      isAdmin() ? "No skills yet. Add one to teach the assistant a repeatable task." : "No skills yet."
+    }</span></li>`;
+    return;
+  }
+  for (const s of skills) {
+    const li = document.createElement("li");
+    li.className = "routine-row" + (s.enabled ? "" : " is-off");
+    const scripts = s.scripts.length
+      ? `<p class="skill-scripts">Scripts: ${s.scripts.map(escapeHtml).join(", ")}${
+          skillScriptsRunnable ? "" : " (script runner unavailable on this server)"
+        }</p>`
+      : "";
+    li.innerHTML = `
+      <div class="routine-row-head">
+        ${isAdmin() ? `<span class="routine-switch" role="switch" tabindex="0" aria-checked="${s.enabled}" aria-label="Enabled"></span>` : ""}
+        <span class="routine-name">${escapeHtml(s.name)}</span>
+      </div>
+      <p class="routine-instruction">${escapeHtml(s.description)}</p>
+      ${s.whenToUse ? `<p class="routine-sched">Use when: ${escapeHtml(s.whenToUse)}</p>` : ""}
+      ${scripts}
+      <div class="routine-sub"><span>updated ${escapeHtml(relativeTime(s.updatedAt))}</span></div>
+      <div class="routine-row-foot"></div>`;
+
+    const foot = li.querySelector(".routine-row-foot")!;
+    if (isAdmin()) {
+      const editBtn = document.createElement("button");
+      editBtn.className = "btn-ghost";
+      editBtn.type = "button";
+      editBtn.textContent = "Edit";
+      editBtn.addEventListener("click", () => openSkillForm(s));
+      const delBtn = document.createElement("button");
+      delBtn.className = "btn-ghost";
+      delBtn.type = "button";
+      delBtn.textContent = "Delete";
+      delBtn.addEventListener("click", async () => {
+        if (!confirm(`Delete the skill "${s.name}"?`)) return;
+        await api.deleteSkill(s.name);
+        await refreshSkills();
+      });
+      foot.append(editBtn, delBtn);
+
+      const toggle = li.querySelector(".routine-switch") as HTMLElement;
+      const flip = async () => {
+        try {
+          await api.setSkillEnabled(s.name, !s.enabled);
+          await refreshSkills();
+        } catch (err) {
+          skillStatus.textContent = err instanceof Error ? err.message : "Could not update.";
+        }
+      };
+      toggle.addEventListener("click", flip);
+      toggle.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          void flip();
+        }
+      });
+    }
+    skillList.appendChild(li);
+  }
+}
+
+async function refreshSkills() {
+  if (skillsMode === "off") return;
+  try {
+    const { skills: list, scriptsRunnable } = await api.listSkills();
+    skills = list;
+    skillScriptsRunnable = scriptsRunnable;
+    skillStatus.textContent = "";
+    renderSkills();
+  } catch (err) {
+    skillStatus.textContent = err instanceof Error ? err.message : "Couldn't load skills.";
+  }
+}
+
+// ---------- MCP connections (Settings) ----------
+const mcpForm = document.getElementById("mcp-form") as HTMLFormElement;
+const mcpNameInput = document.getElementById("mcp-name") as HTMLInputElement;
+const mcpTransportSelect = document.getElementById("mcp-transport") as HTMLSelectElement;
+const mcpUrlField = document.getElementById("mcp-url-field") as HTMLElement;
+const mcpUrlInput = document.getElementById("mcp-url") as HTMLInputElement;
+const mcpHeadersField = document.getElementById("mcp-headers-field") as HTMLElement;
+const mcpHeadersInput = document.getElementById("mcp-headers") as HTMLTextAreaElement;
+const mcpCommandField = document.getElementById("mcp-command-field") as HTMLElement;
+const mcpCommandInput = document.getElementById("mcp-command") as HTMLInputElement;
+const mcpAllowHostsField = document.getElementById("mcp-allowhosts-field") as HTMLElement;
+const mcpAllowHostsInput = document.getElementById("mcp-allowhosts") as HTMLInputElement;
+const mcpFormStatus = document.getElementById("mcp-form-status")!;
+const mcpSaveBtn = document.getElementById("mcp-save-btn") as HTMLButtonElement;
+const mcpList = document.getElementById("mcp-list")!;
+
+let mcpServers: McpServer[] = [];
+
+function syncMcpTransportFields() {
+  const stdio = mcpTransportSelect.value === "stdio";
+  mcpUrlField.hidden = stdio;
+  mcpHeadersField.hidden = stdio;
+  mcpCommandField.hidden = !stdio;
+  mcpAllowHostsField.hidden = !stdio;
+}
+mcpTransportSelect.addEventListener("change", syncMcpTransportFields);
+syncMcpTransportFields();
+
+function parseHeaderLines(text: string): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const i = line.indexOf(":");
+    if (i < 1) continue;
+    out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+mcpForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = mcpNameInput.value.trim().toLowerCase();
+  const transport = mcpTransportSelect.value as McpServer["transport"];
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+    mcpFormStatus.textContent = "Name: lowercase letters, digits and hyphens only.";
+    return;
+  }
+  const body: McpServer = { name, transport, enabled: true };
+  if (transport === "http") {
+    body.url = mcpUrlInput.value.trim();
+    body.headers = parseHeaderLines(mcpHeadersInput.value);
+    if (!/^https?:\/\//i.test(body.url)) {
+      mcpFormStatus.textContent = "Enter a full http(s) URL.";
+      return;
+    }
+  } else {
+    const parts = mcpCommandInput.value.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) {
+      mcpFormStatus.textContent = "Enter a command to run.";
+      return;
+    }
+    body.command = parts[0];
+    body.args = parts.slice(1);
+    body.allowHosts = mcpAllowHostsInput.value
+      .split(",")
+      .map((h) => h.trim())
+      .filter(Boolean);
+  }
+  mcpSaveBtn.disabled = true;
+  mcpFormStatus.textContent = "Saving and testing…";
+  try {
+    const { probe } = await api.saveMcpServer(body);
+    mcpFormStatus.textContent = probe.ok
+      ? `Connected — ${probe.toolCount ?? 0} tool(s) available.`
+      : `Saved, but the test failed: ${probe.error ?? "unknown error"}`;
+    mcpForm.reset();
+    syncMcpTransportFields();
+    await refreshConnections();
+  } catch (err) {
+    mcpFormStatus.textContent = err instanceof Error ? err.message : "Could not save.";
+  } finally {
+    mcpSaveBtn.disabled = false;
+  }
+});
+
+function renderConnections() {
+  mcpList.innerHTML = "";
+  if (mcpServers.length === 0) {
+    mcpList.innerHTML = "<li class='settings-hint'>No connections yet.</li>";
+    return;
+  }
+  for (const s of mcpServers) {
+    const li = document.createElement("li");
+    li.className = "routine-row" + (s.enabled ? "" : " is-off");
+    const target = s.transport === "http" ? s.url : [s.command, ...(s.args ?? [])].join(" ");
+    li.innerHTML = `
+      <div class="routine-row-head">
+        <span class="routine-switch" role="switch" tabindex="0" aria-checked="${s.enabled}" aria-label="Enabled"></span>
+        <span class="routine-name">${escapeHtml(s.name)}</span>
+        <span class="settings-hint">${s.transport}</span>
+      </div>
+      <p class="routine-instruction">${escapeHtml(target ?? "")}</p>
+      <p class="mcp-row-tools" data-role="tools"></p>
+      <div class="routine-row-foot"></div>`;
+
+    const foot = li.querySelector(".routine-row-foot")!;
+    const toolsEl = li.querySelector('[data-role="tools"]') as HTMLElement;
+
+    const probeBtn = document.createElement("button");
+    probeBtn.className = "btn-ghost";
+    probeBtn.type = "button";
+    probeBtn.textContent = "Test";
+    probeBtn.addEventListener("click", async () => {
+      probeBtn.disabled = true;
+      toolsEl.textContent = "Testing…";
+      toolsEl.classList.remove("mcp-row-error");
+      try {
+        const res = await api.probeMcpServer(s.name);
+        toolsEl.textContent = res.ok ? `${res.toolCount ?? 0} tool(s) available` : `Failed: ${res.error ?? "unknown"}`;
+        toolsEl.classList.toggle("mcp-row-error", !res.ok);
+      } finally {
+        probeBtn.disabled = false;
+      }
+    });
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn-ghost";
+    delBtn.type = "button";
+    delBtn.textContent = "Remove";
+    delBtn.addEventListener("click", async () => {
+      if (!confirm(`Remove the "${s.name}" connection?`)) return;
+      await api.deleteMcpServer(s.name);
+      await refreshConnections();
+    });
+    foot.append(probeBtn, delBtn);
+
+    const toggle = li.querySelector(".routine-switch") as HTMLElement;
+    const flip = async () => {
+      try {
+        await api.setMcpServerEnabled(s.name, !s.enabled);
+        await refreshConnections();
+      } catch (err) {
+        mcpFormStatus.textContent = err instanceof Error ? err.message : "Could not update.";
+      }
+    };
+    toggle.addEventListener("click", flip);
+    toggle.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        void flip();
+      }
+    });
+
+    mcpList.appendChild(li);
+  }
+}
+
+async function refreshConnections() {
+  try {
+    const { servers } = await api.listMcpServers();
+    mcpServers = servers;
+    renderConnections();
+  } catch (err) {
+    mcpFormStatus.textContent = err instanceof Error ? err.message : "Couldn't load connections.";
+  }
+}
+
 // ---------- tools ----------
 const toolForm = document.getElementById("tool-form") as HTMLFormElement;
 const toolPromptInput = document.getElementById("tool-prompt") as HTMLInputElement;
@@ -2737,6 +3118,7 @@ function renderDbGrid(
 }
 
 // ---------- settings ----------
+const settingsConnectionsSection = document.getElementById("settings-connections-section") as HTMLElement;
 const settingsModelSelect = document.getElementById("settings-model-select") as HTMLSelectElement;
 const settingsModelForm = document.getElementById("settings-model-form") as HTMLFormElement;
 const settingsModelStatusEl = document.getElementById("settings-model-status")!;

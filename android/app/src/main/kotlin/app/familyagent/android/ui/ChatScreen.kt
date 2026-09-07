@@ -80,6 +80,8 @@ private val SLASH_COMMANDS = listOf(
     "web" to "Search the web and read a page (alias: /lookup)",
     "run" to "Process a file with command-line tools (alias: /shell)",
     "calc" to "Compute an exact answer — maths, dates, totals (alias: /compute)",
+    "skill" to "Use one of the family's taught skills",
+    "connect" to "Use a connected external service (alias: /mcp)",
 )
 
 @Composable

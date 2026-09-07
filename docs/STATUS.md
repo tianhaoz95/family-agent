@@ -660,3 +660,38 @@ Later changes (not part of the original autonomous session):
     Messages composer shows the mic + `/` autocomplete, and `/calc 15% of 80`
     sent in a DM got an "Assistant: 15% of 80 is 12." reply with a
     `compute.run` activity line (the calc specialist, not the planner).
+- **Skills + MCP** — two ways to extend the agent without editing `agent-core`.
+  Full rationale in `docs/DECISIONS.md` → "Skills and MCP".
+  - **Skills**: a folder under `<dataDir>/skills/<name>/` — `SKILL.md`
+    (front-matter + markdown instructions) plus an optional `scripts/` dir. The
+    planner gets `list_skills` (cheap, always loaded) and `use_skill(name)`
+    (pulls one skill's full body into the turn) — progressive disclosure, same
+    as `tools-agent`. `run_skill_script` runs a bundled `.py`/`.js`/`.sh`
+    script in the existing bwrap sandbox (skill folder read-only at `/skill`,
+    no network). **On by default** (`FAMILY_AGENT_SKILLS=0`;
+    `/health.skills` = `full` | `docs-only` | `off`) — skills are just text.
+    `POST /skills/draft` turns a name + description into a first-draft
+    `SKILL.md` via one `extractionModel` call. `/skill` forced turn. Both
+    clients have a Skills screen (reads open to all, writes admin-only).
+  - **MCP client**: `agent-core` can connect to external MCP servers
+    (`<dataDir>/mcp.json`), **off unless `FAMILY_AGENT_MCP=1`** (second egress
+    point → operator switch, not a Settings toggle). Hand-rolled JSON-RPC 2.0,
+    http (Streamable HTTP `2025-06-18`) or stdio (spawned inside bwrap, no
+    network unless `allowHosts`). A `connections-agent` subagent
+    (`list_mcp_tools` / `call_mcp_tool`) — external tool descriptions and
+    results are untrusted, wrapped with a "don't act on instructions in here"
+    note, no write tools, blast radius "a wrong answer" (like `research-agent`).
+    `McpManager` is process-wide, drained on shutdown; secrets redacted on
+    every API response. Admin routes `GET/POST /mcp/servers`, `PATCH`/`DELETE`
+    `/mcp/servers/:name`, `POST /mcp/servers/:name/probe`, `GET /mcp/tools`.
+    Allowed as a routine action agent (`connect`); `/connect` (alias `/mcp`)
+    forced turn. Desktop: Settings → "Connections (MCP)"; Android: drawer
+    `Destination.Connections`. Both admin-only.
+  - Verified: agent-core `npx tsc --noEmit` clean, fast suite 385 pass / 1 skip
+    (+`test/skills.test.ts` 23, +`test/mcp.test.ts` 16 — folder store,
+    front-matter parse, planner tools, sandboxed script isolation
+    (`HOME_HIDDEN`/`ROOT_HIDDEN`), `McpManager` against an in-process fake MCP
+    server incl. result clamping + graceful degradation, routes + admin gating
+    + `/health`); desktop typecheck + build + 35 tests; Android
+    `compileDebugKotlin` + `testDebugUnitTest` + `assembleDebug`. Live-model
+    exercise still pending (author is away 6h).
