@@ -1807,7 +1807,50 @@ and cards keep their depth — motion is the only thing dropped.
 and a floating-glass treatment fights Material. Android keeps flat paper.
 
 Reversible: `git revert` the commit, or delete the appended block + the `:root`
-diff. No JS or DOM changes — it's `style.css` only.
+diff. (The canvas motion later moved from CSS keyframes to a JS rAF loop — see
+the next follow-up; that part is `atmosphere.ts` + the `--atmo-*` vars.)
+
+### Follow-up: the drift means something — and it's JS-animated, not CSS
+
+The owner asked for the gradient motion to *mean* something: drift while the
+model is generating (a progress cue), hold still while you read (no
+distraction), and a slow welcome drift on first launch before there's anything
+on screen to focus on.
+
+**First cut (CSS) failed on the transitions.** Gating the existing
+`canvas-drift*` keyframes with `animation-play-state` + a `--atmo-dur-*` swap
+between states looked fine in isolation but: (1) ending a turn snapped the wash
+to a different position — changing `animation-duration` (or pausing) recomputes
+the keyframe offset from elapsed time, so it *jumps*; (2) at keyframe speeds
+that didn't jump, the "generating" drift was too slow and subtle to read as a
+progress indicator at all.
+
+**Decision: drive the motion from JS, no CSS keyframes.**
+`desktop/src/atmosphere.ts` runs a `requestAnimationFrame` loop that writes nine
+`--atmo-*` custom properties (`x1/y1/r1/s1`, `x2/y2/r2/s2`, `o2`); `body::before`
+/ `body::after` just consume them in `transform` / `opacity`. Each frame:
+- one monotonic `phase` advances by `speed`; position is a sum of sines of
+  `phase`, so it's continuous at every instant no matter how `speed` changes.
+- `speed` eases toward its target (`0` idle / `0.5` welcome / `2.6` active) with
+  a ~0.55s time constant → "generation done" is a ~2.5s glide to rest that then
+  **freezes exactly in place** (the loop stops; the last transform stands).
+- a `pulse` value (0→1 while generating) widens the drift amplitude and adds a
+  slow breathing swell to `::after`'s scale + opacity (0.8 → ~1.0) — that swell
+  is the unmistakable "working" cue the subtle CSS version lacked.
+- fallback values on the `var()`s are the static composition shown before the
+  first frame and under reduced motion.
+
+`atmosphereBusy(key, on)` is ref-counted by source string — `setChatPending`
+drives `"chat"`, `pollActiveChannel` drives `"channel"` off whether a
+`.msg.is-pending` bubble exists — so an overlapping 1:1 turn and `@agent`
+channel reply don't unbalance it, and the several code paths that call
+`setChatPending(false)` are harmless. `atmosphereWelcome()` (from `enterApp`)
+runs the welcome drift until the first `pointerdown`/`keydown`/`wheel`/
+`touchstart`, or 12s.
+
+`prefers-reduced-motion`: the loop simply never starts (`atmosphere.ts` checks
+`matchMedia`), so the canvas holds the static fallback; the reduced-motion block
+in `style.css` just pins it to a centred `scale(1.12)`.
 
 ### Follow-up: floating, collapsible sidebar
 
@@ -1823,8 +1866,9 @@ button — Gemini/VS-Code style.
   `.content`'s padding box.
 - Three states, driven by classes on `#app` and one `--rail-space` value each:
   `expanded` 268px → `rail-collapsed` 96px (rail 66px, `.nav-label` /
-  `.brand-name` / user / status text hidden, nav badges shrink to a corner
-  dot, `title` attrs added in JS for hover tooltips) → `rail-hidden` 58px
+  `.brand-name` / `.brand-mark` / user / status text hidden — the logo goes so
+  the expand chevron gets the brand row to itself — nav badges shrink to a
+  corner dot, `title` attrs added in JS for hover tooltips) → `rail-hidden` 58px
   (rail `translateX` off-screen, a fixed `.rail-reveal` button fades in).
 - Controls: a chevron in the brand row toggles expanded ⇄ collapsed; a "Hide
   sidebar" row in the footer goes to hidden; `.rail-reveal` and `Ctrl/Cmd+B`

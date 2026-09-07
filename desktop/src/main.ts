@@ -36,6 +36,7 @@ import {
   type McpServer,
 } from "./api.js";
 import { startRecording, type Recording } from "./audio.js";
+import { atmosphereBusy, atmosphereWelcome } from "./atmosphere.js";
 import {
   friendlyDate,
   friendlyTime,
@@ -1128,6 +1129,7 @@ function setChatPending(pending: boolean) {
   chatSendBtn.hidden = pending;
   chatStopBtn.hidden = !pending;
   chatSendBtn.disabled = pending;
+  atmosphereBusy("chat", pending);
 }
 
 // ---- chat history sessions ----
@@ -4075,6 +4077,8 @@ function enterApp(user: User) {
   setInterval(() => void refreshStatus(), 5000);
   startChannelBadgePolling();
   showView("chat");
+  // A slow welcome drift until the first interaction (atmosphere.ts).
+  atmosphereWelcome();
 }
 
 async function boot() {
@@ -4369,6 +4373,11 @@ async function pollActiveChannel() {
       const all = (await api.listMessages(activeChannelId)).messages;
       for (const m of all) renderMessage(m);
     }
+    // Keep the wash drifting while an @agent reply is still being composed.
+    atmosphereBusy(
+      "channel",
+      messageLog.querySelector(".msg.is-pending") !== null
+    );
   } catch {
     /* transient */
   }
@@ -4380,6 +4389,7 @@ function stopMessagePolling() {
     messagePollTimer = null;
   }
   activeChannelId = null;
+  atmosphereBusy("channel", false);
 }
 
 async function enterMessages() {

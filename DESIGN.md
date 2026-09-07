@@ -456,6 +456,16 @@ changes is depth and motion. This overrides three of the "Don't"s above **for
   app (`#app` is `z-index: 1`), the rail and side panels are translucent glass
   (`backdrop-filter`), and the centred content column is transparent, so the
   wash shows around and between the floating cards. Tokens: `--bloom-*`.
+  The drift is **state-driven and JS-animated** (`desktop/src/atmosphere.ts`) —
+  a `requestAnimationFrame` loop writes the `--atmo-*` custom properties the two
+  layers' `transform` / `opacity` read; there are no CSS keyframes. It eases to
+  a full stop and **freezes in place** while you read a reply (a CSS animation
+  can't — pausing or re-timing it snaps to a recomputed keyframe), drifts
+  briskly with a breathing swell on `::after` while the agent generates
+  (`atmosphereBusy`, ref-counted per source, hooked from `setChatPending` and
+  `pollActiveChannel` for 1:1 chat and `@agent` channel threads), and does a
+  gentle **welcome** drift on first launch that eases away on the first
+  interaction (`atmosphereWelcome`, from `enterApp`).
 - **Floating cards.** `--shadow-sm` is now a real soft, warm-tinted shadow
   (was `none`); container cards carry it and list rows lift (`translateY(-2px)`
   + `--shadow-hover`) on hover. `--shadow-pop` for menus / the side panel.
@@ -463,13 +473,15 @@ changes is depth and motion. This overrides three of the "Don't"s above **for
   unchanged.
 - **Springier motion.** `--ease-out` / `--ease-spring` curves; `--dur-lg`
   (420ms) for view transitions (`view-rise`) and the bubble entrance
-  (`bubble-rise`). All of it freezes under `prefers-reduced-motion` (the
-  global rule near the end of `style.css`, extended to `body::after` and the
-  hover lifts) — the canvas holds a static position, cards keep their depth.
+  (`bubble-rise`). All of it freezes under `prefers-reduced-motion` — the
+  global rule near the end of `style.css` drops the hover lifts, and
+  `atmosphere.ts` never starts its loop, so the canvas holds a static position.
+  Cards keep their depth.
 - **Floating, collapsible sidebar.** `.rail` is `position: fixed` with a gutter
   on all sides (glass, `--r-xl`, `--shadow-pop`) — no longer docked to the
   edge. Three states on `#app`: default (`--rail-space` 268px), `.rail-collapsed`
-  (icon-only, ~66px, labels hidden, badges become corner dots), `.rail-hidden`
+  (icon-only, ~66px, labels hidden, logo hidden so the expand chevron has the
+  brand row to itself, badges become corner dots), `.rail-hidden`
   (slid off-screen, a floating `.rail-reveal` button brings it back).
   `.content` reserves `padding-left: var(--rail-space)` so nothing sits under
   the panel. Controls: a chevron in the brand row (expand ⇄ collapse), a "Hide

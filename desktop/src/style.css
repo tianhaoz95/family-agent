@@ -120,11 +120,15 @@ body {
   font-feature-settings: "lnum";
 }
 
-/* Animated gradient canvas — three soft colour blooms over the warm paper base,
-   drifting slowly so the app feels alive without ever pulling focus. Sits behind
-   everything; the rail is glass and the content column is transparent, so the
-   wash shows through around and between the floating cards. Frozen by the
-   global prefers-reduced-motion rule further down. */
+/* Animated gradient canvas — three soft colour blooms over the warm paper base.
+   The drift is driven frame-by-frame from JS (atmosphere.ts) through the
+   --atmo-* custom properties below, *not* a CSS animation: it eases to a full
+   stop and freezes in place while you read a reply, drifts briskly (with a
+   breathing swell on the ::after layer) while the agent generates, and does a
+   gentle welcome drift on first launch. The fallback values here are the
+   static composition shown before JS starts and under reduced motion. Sits
+   behind everything; the rail is glass and the content column is transparent,
+   so the wash shows through around and between the floating cards. */
 body::before,
 body::after {
   content: "";
@@ -142,40 +146,21 @@ body::before {
     radial-gradient(52vmax 52vmax at 78% 96%, var(--bloom-lilac), transparent 58%),
     radial-gradient(44vmax 44vmax at 4% 88%, var(--bloom-mint), transparent 60%);
   filter: blur(10px);
-  animation: canvas-drift 34s ease-in-out infinite alternate;
+  transform: translate3d(var(--atmo-x1, -3%), var(--atmo-y1, -2%), 0)
+    rotate(var(--atmo-r1, 0deg)) scale(var(--atmo-s1, 1.4));
 }
 
-/* A second, slower bloom layer drifting the other way — gives the wash more
-   depth and keeps it from ever looking like a static gradient. */
+/* A second bloom layer drifting the other way — gives the wash more depth, and
+   its opacity/scale swell is the "agent is working" cue (driven by --atmo-o2). */
 body::after {
   background:
     radial-gradient(40vmax 40vmax at 96% 60%, var(--bloom-sky), transparent 62%),
     radial-gradient(44vmax 44vmax at 2% 44%, var(--bloom-lilac), transparent 62%),
     radial-gradient(34vmax 34vmax at 48% 2%, var(--bloom-peach), transparent 64%);
   filter: blur(14px);
-  opacity: 0.8;
-  animation: canvas-drift-2 52s ease-in-out infinite alternate;
-}
-
-@keyframes canvas-drift {
-  0% {
-    transform: translate3d(-4%, -3%, 0) rotate(0deg) scale(1.25);
-  }
-  50% {
-    transform: translate3d(3%, 4%, 0) rotate(6deg) scale(1.35);
-  }
-  100% {
-    transform: translate3d(5%, -2%, 0) rotate(-3deg) scale(1.28);
-  }
-}
-
-@keyframes canvas-drift-2 {
-  from {
-    transform: translate3d(4%, 3%, 0) rotate(0deg) scale(1.3);
-  }
-  to {
-    transform: translate3d(-5%, -4%, 0) rotate(-8deg) scale(1.4);
-  }
+  opacity: var(--atmo-o2, 0.8);
+  transform: translate3d(var(--atmo-x2, 3%), var(--atmo-y2, 2%), 0)
+    rotate(var(--atmo-r2, 0deg)) scale(var(--atmo-s2, 1.46));
 }
 
 button,
@@ -481,6 +466,10 @@ textarea {
 #app.rail-collapsed .brand {
   justify-content: center;
   padding: 4px 0 12px;
+}
+/* Icon-only rail: drop the logo so the expand control has the row to itself. */
+#app.rail-collapsed .brand-mark {
+  display: none;
 }
 #app.rail-collapsed .brand-name,
 #app.rail-collapsed .nav-label,
@@ -4186,10 +4175,11 @@ input[type="file"]::file-selector-button:hover {
 
 /* ---- Reduced motion: freeze the canvas, drop the lifts, keep the depth -- */
 @media (prefers-reduced-motion: reduce) {
+  /* atmosphere.ts never starts its loop under reduced motion, so the canvas
+     keeps the --atmo-* fallbacks; pin it to a calm centred composition. */
   body::before,
   body::after {
-    animation: none;
-    transform: translate3d(0, 0, 0) scale(1.1);
+    transform: translate3d(0, 0, 0) scale(1.12);
   }
   .task-row:hover,
   .document-row:hover,
