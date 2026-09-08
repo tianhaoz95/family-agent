@@ -1,0 +1,194 @@
+import SwiftUI
+import PhotosUI
+
+let FORCED_AGENT_KEYWORDS: [(String, String)] = [
+    ("build", "Build a new tool, or improve an existing one"),
+    ("task", "Add, list, or complete a to-do"),
+    ("find", "Search the family's documents"),
+    ("note", "Read or add a sticky note"),
+    ("schedule", "Create or manage a scheduled routine"),
+    ("web", "Search the web and read a page"),
+    ("run", "Process a file with command-line tools"),
+    ("calc", "Compute an exact answer"),
+    ("skill", "Use one of the family's taught skills"),
+    ("connect", "Use a connected external service"),
+    ("vault", "Look up a password or 2FA code"),
+]
+
+struct ChatView: View {
+    @Environment(AppModel.self) private var model
+    @State private var input = ""
+    @State private var attached: [String] = []
+    @State private var photoItem: PhotosPickerItem?
+    @State private var showHistory = false
+    @State private var slashChip: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        if model.chatMessages.isEmpty {
+                            EmptyState(text: "Ask anything, or type / for a command.", systemImage: "bubble.left.and.bubble.right")
+                                .padding(.top, 40)
+                        }
+                        ForEach(model.chatMessages) { msg in
+                            ChatBubble(message: msg,
+                                       ttsEnabled: model.ttsEnabled,
+                                       speakingText: model.speakingText,
+                                       loadingText: model.speakLoadingText,
+                                       onSpeak: model.speak,
+                                       onStepsTap: { model.showStepsDetail($0) },
+                                       onCardSource: { model.showCardSource($0) },
+                                       onReference: { model.openReferenceDetail($0) })
+                            .id(msg.id)
+                        }
+                        if model.chatSending {
+                            if !model.chatLiveSteps.isEmpty {
+                                StepsStrip(steps: model.chatLiveSteps, live: true) {
+                                    model.showStepsDetail(model.chatLiveSteps)
+                                }
+                            }
+                            TypingDots().id("typing")
+                        }
+                    }
+                    .padding(16)
+                }
+                .onChange(of: model.chatMessages.count) { _, _ in
+                    withAnimation { proxy.scrollTo(model.chatMessages.last?.id, anchor: .bottom) }
+                }
+                .onChange(of: model.chatSending) { _, sending in
+                    if sending { withAnimation { proxy.scrollTo("typing", anchor: .bottom) } }
+                }
+            }
+
+            composer
+        }
+        .background(Color.clear)
+        .scrollContentBackground(.hidden)
+        .navigationTitle("Chat")
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button { model.startNewChatSession() } label: { Image(systemName: "square.and.pencil") }
+                Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }
+            }
+        }
+        .task { await model.refreshTools() }
+        .sheet(isPresented: $showHistory) {
+            ChatSessionsView { showHistory = false }
+        }
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let uri = ImageAttach.scaledJpegDataURI(data), attached.count < 4 {
+                    attached.append(uri)
+                }
+                photoItem = nil
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var composer: some View {
+        VStack(spacing: 6) {
+            ImageTray(images: $attached)
+            if !slashCandidates.isEmpty && slashChip == nil {
+                SlashCommandMenu(candidates: slashCandidates) { cmd in
+                    slashChip = cmd
+                    input = ""
+                }
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                PhotosPicker(selection: $photoItem, matching: .images) {
+                    Image(systemName: "photo").font(.system(size: 18)).foregroundStyle(Theme.textMuted)
+                }
+                if let chip = slashChip {
+                    HStack(spacing: 3) {
+                        Text("/\(chip)").font(.inter(12, .semibold)).foregroundStyle(Theme.accent)
+                        Button { slashChip = nil } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 12)) }
+                            .foregroundStyle(Theme.accent.opacity(0.6))
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(Theme.accentSoft, in: Capsule())
+                }
+                TextField(slashChip == nil ? "Ask anything, or type / for a command" : "Message", text: $input, axis: .vertical)
+                    .lineLimit(1...3)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20))
+                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.border, lineWidth: 1))
+                    .onChange(of: input) { _, v in
+                        if slashChip == nil, v.hasPrefix("/"), v.hasSuffix(" "),
+                           let kw = FORCED_AGENT_KEYWORDS.first(where: { "/\($0.0) " == v })?.0 {
+                            slashChip = kw
+                            input = ""
+                        }
+                    }
+                if model.voiceEnabled {
+                    HoldToTalkMic(enabled: !model.chatSending, transcribing: model.chatTranscribing,
+                                  onDictate: { model.transcribeVoice($0) { input += $0 } },
+                                  onVoiceSend: { model.sendChatVoice($0) })
+                }
+                Button {
+                    send()
+                } label: {
+                    Image(systemName: model.chatSending ? "stop.fill" : "arrow.up")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(Theme.accent, in: Circle())
+                }
+                .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty && attached.isEmpty && slashChip == nil)
+            }
+        }
+        .padding(12)
+        .glass(.floating, in: RoundedRectangle(cornerRadius: Theme.R.lg, style: .continuous))
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
+    }
+
+    private var slashCandidates: [(String, String)] {
+        guard input.hasPrefix("/") else { return [] }
+        let q = input.dropFirst().lowercased()
+        let kws = FORCED_AGENT_KEYWORDS.filter { $0.0.hasPrefix(q) }
+        let toolNames = model.tools
+            .filter { $0.kind == "server" && $0.status == "ready" }
+            .map { ($0.name, "Use the \($0.name) tool") }
+            .filter { q.isEmpty || $0.0.lowercased().hasPrefix(q) }
+        return kws + toolNames
+    }
+
+    private func send() {
+        if model.chatSending { return }
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wire = slashChip.map { "/\($0) \(text)" } ?? text
+        model.sendChat(wire, images: attached)
+        input = ""
+        attached = []
+        slashChip = nil
+    }
+}
+
+struct SlashCommandMenu: View {
+    let candidates: [(String, String)]
+    let onPick: (String) -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(candidates.prefix(6), id: \.0) { cmd in
+                Button { onPick(cmd.0) } label: {
+                    HStack {
+                        Text("/\(cmd.0)").font(.inter(13, .semibold)).foregroundStyle(Theme.accent)
+                        Text(cmd.1).appLabelSmall().foregroundStyle(Theme.textMuted).lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+                Divider()
+            }
+        }
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+    }
+}

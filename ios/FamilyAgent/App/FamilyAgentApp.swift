@@ -1,22 +1,14 @@
 import SwiftUI
-import MarkdownUI
 
 @main
 struct FamilyAgentApp: App {
+    @State private var model = AppModel()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
+                .environment(model)
+                .task { await model.restoreSession() }
         }
-    }
-}
-
-private struct ContentView: View {
-    var body: some View {
-        VStack(spacing: 12) {
-            Text("Family Agent")
-                .font(.custom("Inter", size: 28).weight(.semibold))
-            Markdown("iOS skeleton — **build OK**.")
-        }
-        .padding()
     }
 }
