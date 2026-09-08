@@ -288,7 +288,9 @@ tar -czf "$TARBALL" -C "$(dirname "$APP")" "$(basename "$APP")"
 
 if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
   if [ -f "$HOME/.tauri/family-agent-updater.key" ]; then
-    export TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/family-agent-updater.key"
+    # _PATH, not _PRIVATE_KEY: the latter wants the key's *contents*, and handing
+    # it a path fails with "failed to decode base64 secret key".
+    export TAURI_SIGNING_PRIVATE_KEY_PATH="$HOME/.tauri/family-agent-updater.key"
   else
     echo "!! no updater signing key. Expected ~/.tauri/family-agent-updater.key" >&2
     echo "   or TAURI_SIGNING_PRIVATE_KEY / _PATH set. See desktop/RELEASE.md." >&2

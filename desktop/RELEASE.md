@@ -211,10 +211,19 @@ GitHub rewrites spaces in asset names to dots, so `latest.json` points at
 `Family.Agent.app.tar.gz`; the tarball is uploaded under exactly that name and
 the script asserts the two agree before publishing.
 
-The version comes from `desktop/src-tauri/tauri.conf.json` — currently `0.1.0`,
-so the first public release wants `--version 1.0.0`. The updater compares
-against it, so an unbumped version means installed copies are never offered the
-update. The script also refuses to run if the tag already exists on the remote.
+The version comes from `desktop/src-tauri/tauri.conf.json`. Pass `--version
+X.Y.Z` to bump it as part of the release; the updater compares against it, so an
+unbumped version means installed copies are never offered the update. The script
+also refuses to run if the tag already exists on the remote.
+
+### The updater key, and a variable that bites
+
+`TAURI_SIGNING_PRIVATE_KEY` holds the key's **contents**;
+`TAURI_SIGNING_PRIVATE_KEY_PATH` holds a **path** to it. Putting a path in the
+first one fails with `failed to decode base64 secret key` — and it fails at the
+*end* of a twenty-minute build, right after notarization. Preflight now signs a
+throwaway file with the key rather than just checking one exists, so this is
+caught in a second.
 
 ## Known gaps
 

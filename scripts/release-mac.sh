@@ -85,12 +85,37 @@ else
   die "no notarization credentials — run ./scripts/sign-desktop.sh --notarize for the setup help."
 fi
 
-# updater signing key — without it the release ships without a working update path
-UPDATER_KEY="${TAURI_SIGNING_PRIVATE_KEY:-$HOME/.tauri/family-agent-updater.key}"
-[ -f "$UPDATER_KEY" ] || die "no updater signing key at $UPDATER_KEY.
+# Updater signing key. Note the two variables mean different things:
+# TAURI_SIGNING_PRIVATE_KEY is the key's *contents*, _PATH is a file path.
+# Passing a path in the first one fails with "failed to decode base64 secret key".
+if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  UPDATER_DESC="TAURI_SIGNING_PRIVATE_KEY (inline)"
+elif [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
+  UPDATER_DESC="${TAURI_SIGNING_PRIVATE_KEY_PATH}"
+  [ -f "$TAURI_SIGNING_PRIVATE_KEY_PATH" ] || die "no updater key at $TAURI_SIGNING_PRIVATE_KEY_PATH"
+else
+  export TAURI_SIGNING_PRIVATE_KEY_PATH="$HOME/.tauri/family-agent-updater.key"
+  UPDATER_DESC="$TAURI_SIGNING_PRIVATE_KEY_PATH"
+  [ -f "$TAURI_SIGNING_PRIVATE_KEY_PATH" ] || die "no updater signing key at $TAURI_SIGNING_PRIVATE_KEY_PATH.
    Without it the build cannot produce latest.json and installed copies will
    never see this release. See desktop/RELEASE.md."
-echo "    updater key     $UPDATER_KEY"
+fi
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+
+# Actually sign something. "The file exists" proves nothing — it did not catch a
+# real case of the path being passed in the contents variable, which only fails
+# at the very end of a twenty-minute build.
+PROBE="$(mktemp -t fa-updater-probe)"; echo probe > "$PROBE"
+if ( cd "$ROOT/desktop" && npx tauri signer sign "$PROBE" ) >/dev/null 2>&1 && [ -f "$PROBE.sig" ]; then
+  echo "    updater key     $UPDATER_DESC (test signature ok)"
+else
+  rm -f "$PROBE" "$PROBE.sig"
+  die "the updater key is present but signing with it failed.
+   If you exported TAURI_SIGNING_PRIVATE_KEY, note it wants the key's CONTENTS;
+   use TAURI_SIGNING_PRIVATE_KEY_PATH for a file path. If the key has a
+   password, set TAURI_SIGNING_PRIVATE_KEY_PASSWORD."
+fi
+rm -f "$PROBE" "$PROBE.sig"
 
 # github token (unless we're not publishing)
 TOKEN="${FA_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
