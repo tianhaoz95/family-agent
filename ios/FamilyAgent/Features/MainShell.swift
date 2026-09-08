@@ -81,30 +81,29 @@ struct MainShell: View {
                     .transition(.opacity)
             }
 
-            // Scrim + drawer overlay.
-            if drawerOpen || dragOffset != 0 {
-                Color.black
-                    .opacity(0.35 * openFraction)
-                    .ignoresSafeArea()
-                    .onTapGesture { close() }
+            // Scrim — dims + captures taps whenever the drawer is even partly open.
+            Color.black
+                .opacity(0.35 * openFraction)
+                .ignoresSafeArea()
+                .allowsHitTesting(openFraction > 0.01)
+                .onTapGesture { close() }
 
-                AppDrawer(
-                    destinations: visibleDestinations,
-                    selection: selection,
-                    connection: model.connection,
-                    unread: model.totalUnread,
-                    onSelect: { d in
-                        if d != selection { selection = d }
-                        close()
-                    }
-                )
-                .frame(width: drawerWidth)
-                .frame(maxHeight: .infinity)
-                .offset(x: drawerOpenX)
-                .transition(.identity)
-            }
+            // Drawer — always mounted, slid off-screen when closed.
+            AppDrawer(
+                destinations: visibleDestinations,
+                selection: selection,
+                connection: model.connection,
+                unread: model.totalUnread,
+                onSelect: { d in
+                    if d != selection { selection = d }
+                    close()
+                }
+            )
+            .frame(width: drawerWidth)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
+            .offset(x: -drawerWidth + openFraction * drawerWidth)
         }
-        .animation(.snappy(duration: 0.28), value: drawerOpen)
+        .animation(.snappy(duration: 0.3), value: drawerOpen)
         .gesture(edgeSwipe)
         .task {
             #if DEBUG
@@ -191,17 +190,14 @@ struct MainShell: View {
 
     // MARK: drawer open/close + drag
 
+    /// 0 = fully closed, 1 = fully open. Driven by `drawerOpen`, nudged live by a drag.
     private var openFraction: CGFloat {
-        if drawerOpen { return 1 }
-        return max(0, min(1, dragOffset / drawerWidth))
-    }
-    private var drawerOpenX: CGFloat {
-        let base: CGFloat = drawerOpen ? 0 : -drawerWidth
-        return base + (drawerOpen ? min(0, dragOffset) : max(0, dragOffset))
+        let fromState: CGFloat = drawerOpen ? 1 : 0
+        return max(0, min(1, fromState + dragOffset / drawerWidth))
     }
 
-    private func open() { withAnimation(.snappy(duration: 0.28)) { drawerOpen = true; dragOffset = 0 } }
-    private func close() { withAnimation(.snappy(duration: 0.28)) { drawerOpen = false; dragOffset = 0 } }
+    private func open() { withAnimation(.snappy(duration: 0.3)) { drawerOpen = true; dragOffset = 0 } }
+    private func close() { withAnimation(.snappy(duration: 0.3)) { drawerOpen = false; dragOffset = 0 } }
 
     private var edgeSwipe: some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .global)
