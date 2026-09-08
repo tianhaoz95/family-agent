@@ -9,29 +9,23 @@ Team: **HEJI TECHNOLOGY LLC** (`68CTFST8W2`).
 
 ---
 
-## The one thing still missing
+## Certificates
 
-This Mac has only an **Apple Development** certificate:
+Both are in the keychain:
 
 ```
-Apple Development: Tianhao Zhou (6522A974B3)
-  OU=68CTFST8W2  O=HEJI TECHNOLOGY LLC
+Developer ID Application: HEJI TECHNOLOGY LLC (68CTFST8W2)   ← distribution
+Apple Development: Tianhao Zhou (6522A974B3)                 ← local runs only
 ```
 
-That signs an app that runs *here*. It cannot be notarized, and Gatekeeper
-refuses it on anyone else's Mac. You need a **Developer ID Application**
-certificate:
+The scripts prefer the Developer ID one automatically and only fall back to the
+development certificate (which cannot be notarized, and which Gatekeeper refuses
+on anyone else's Mac) when no Developer ID exists. `FA_MAC_IDENTITY` overrides.
 
-> Xcode → Settings → Accounts → select **HEJI TECHNOLOGY LLC** →
-> **Manage Certificates** → **+** → **Developer ID Application**
-
-Only the **Account Holder** of the developer program can create one (an Admin
-cannot). They last 5 years and you get a limited number, so keep the private key
-backed up — export it from Keychain Access as a `.p12`.
-
-Everything else is done and verified. Once the certificate exists,
-`scripts/sign-desktop.sh` picks it up automatically — it prefers a Developer ID
-identity and only falls back to the development one.
+Developer ID certificates last 5 years, you get a limited number, and only the
+**Account Holder** can create them. Back the private key up — export it from
+Keychain Access as a `.p12` — because losing it means every future release has
+to be signed by a different key.
 
 ---
 
@@ -123,7 +117,8 @@ the DMG and the `.app` so a copy dragged out of the DMG still validates offline.
 
 ## Verified so far
 
-Run end to end with the development certificate:
+Signing has been run end to end, though at the time only the development
+certificate existed:
 
 | | |
 |---|---|
@@ -138,8 +133,12 @@ Run end to end with the development certificate:
 That last row is the one that matters — the hardened runtime is exactly what
 breaks a bundled Node runtime, and it doesn't here.
 
-`spctl -a -t exec` still reports **rejected**, which is correct and expected:
-Gatekeeper wants Developer ID *and* notarization. That is the only gap left.
+**Not yet exercised: the notarization submission itself.** Every step up to
+`notarytool submit` has run for real, but the script correctly refused to submit
+with a development certificate, so no build has been to Apple yet. The first
+`release-mac.sh` run will be the first submission, and it is the step most
+likely to surface something new. Apple's notary log is specific about what it
+rejects.
 
 ---
 
