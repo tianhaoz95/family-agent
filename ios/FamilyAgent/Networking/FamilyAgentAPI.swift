@@ -9,8 +9,14 @@ struct FamilyAgentAPI: Sendable {
 
     private var session: URLSession {
         let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 15
-        cfg.timeoutIntervalForResource = 120
+        // Matches `FamilyAgentApi.kt`'s OkHttp `readTimeout(120s)`. This was 15s,
+        // which is far shorter than Android and shorter than a planner turn: a
+        // `POST /chat` sends nothing until the model finishes, and a full turn has
+        // taken ~110s on modest hardware (see CLAUDE.md → "Test tiers"). Long turns
+        // surfaced to the user as "Could not reach <server> — is the home server
+        // running?", which blames the wrong thing entirely.
+        cfg.timeoutIntervalForRequest = 120
+        cfg.timeoutIntervalForResource = 300
         cfg.waitsForConnectivity = false
         return URLSession(configuration: cfg)
     }
