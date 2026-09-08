@@ -130,7 +130,7 @@ final class ServerDiscovery: Sendable {
                        case let .hostPort(host, port) = remote {
                         let h: String
                         switch host {
-                        case .ipv4(let a): h = "\(a)"
+                        case .ipv4(let a): h = "\(a)".components(separatedBy: "%").first ?? "\(a)"
                         case .ipv6(let a): h = "\(a)".components(separatedBy: "%").first ?? "\(a)"
                         case .name(let n, _): h = n
                         @unknown default: h = "\(host)"

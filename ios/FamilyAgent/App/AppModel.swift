@@ -160,6 +160,28 @@ final class AppModel {
     // MARK: - Session
 
     func restoreSession() async {
+        #if DEBUG
+        // Screenshot / smoke-test shortcut: FA_SERVER_URL + FA_AUTOLOGIN=user:pass
+        let env = ProcessInfo.processInfo.environment
+        if let url = env["FA_SERVER_URL"], let creds = env["FA_AUTOLOGIN"] {
+            let parts = creds.split(separator: ":", maxSplits: 1)
+            serverURL = url
+            api = FamilyAgentAPI(baseURL: url, authToken: nil)
+            settings.setServerURL(url)
+            do {
+                let resp = try await api.login(String(parts[0]), String(parts.count > 1 ? parts[1] : ""))
+                api = FamilyAgentAPI(baseURL: url, authToken: resp.token)
+                settings.saveSession(serverURL: url, token: resp.token, serverName: "Test Home", userName: resp.user.displayName)
+                auth = .authed(resp.user)
+                await refreshStatus()
+                await refreshChannels()
+                return
+            } catch {
+                auth = .needLogin(serverURL: url, serverName: "", error: error.localizedDescription)
+                return
+            }
+        }
+        #endif
         if let s = settings.session {
             serverURL = s.serverURL
             api = FamilyAgentAPI(baseURL: s.serverURL, authToken: s.token)

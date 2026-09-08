@@ -32,8 +32,19 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
 
 struct MainShell: View {
     @Environment(AppModel.self) private var model
-    @State private var selection: Destination? = .chat
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var selection: Destination? = {
+        #if DEBUG
+        if let s = ProcessInfo.processInfo.environment["FA_START"],
+           let d = Destination(rawValue: s) { return d }
+        #endif
+        return .chat
+    }()
+    @State private var columnVisibility: NavigationSplitViewVisibility = {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["FA_START"] != nil { return .detailOnly }
+        #endif
+        return .automatic
+    }()
 
     private var visibleDestinations: [Destination] {
         Destination.allCases.filter { d in
@@ -60,12 +71,17 @@ struct MainShell: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .background(Atmosphere().ignoresSafeArea())
             .navigationTitle("Family Agent")
             .tint(Theme.accent)
         } detail: {
             NavigationStack {
-                destinationView(selection ?? .chat)
-                    .navigationBarTitleDisplayMode(.inline)
+                ZStack {
+                    Atmosphere().ignoresSafeArea()
+                    destinationView(selection ?? .chat)
+                }
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbarBackground(.hidden, for: .navigationBar)
             }
         }
         .navigationSplitViewStyle(.balanced)

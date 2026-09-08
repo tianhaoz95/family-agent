@@ -73,7 +73,14 @@ struct ChatView: View {
                 Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }
             }
         }
-        .task { await model.refreshTools() }
+        .task {
+            await model.refreshTools()
+            #if DEBUG
+            if let p = ProcessInfo.processInfo.environment["FA_CHAT_PROMPT"], model.chatMessages.isEmpty {
+                model.sendChat(p)
+            }
+            #endif
+        }
         .sheet(isPresented: $showHistory) {
             ChatSessionsView { showHistory = false }
         }
