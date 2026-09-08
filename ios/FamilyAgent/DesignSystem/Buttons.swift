@@ -28,17 +28,17 @@ struct GhostButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.inter(14, .semibold))
-            .foregroundStyle(Theme.accent)
+            .foregroundStyle(Theme.accentInk)
             .padding(.horizontal, 14).padding(.vertical, 9)
             .background(Theme.accentSoft.opacity(configuration.isPressed ? 0.7 : 1), in: Capsule(style: .continuous))
-            .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.12), lineWidth: 1))
+            .overlay(Capsule().strokeBorder(Theme.accentInk.opacity(0.10), lineWidth: 1))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
 
 struct SoftButtonStyle: ButtonStyle {
-    var tint: Color = Theme.accent
+    var tint: Color = Theme.accentInk
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.inter(13.5, .medium))
@@ -90,7 +90,7 @@ struct BrandSegmented<Tag: Hashable>: View {
                 let selected = tag == selection
                 Text(label)
                     .font(.inter(13, selected ? .semibold : .medium))
-                    .foregroundStyle(selected ? Theme.accent : Theme.textMuted)
+                    .foregroundStyle(selected ? Theme.accentInk : Theme.textMuted)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 7)
                     .background {

@@ -111,7 +111,7 @@ struct RoutineCard: View {
 
             Spacer().frame(height: 10)
             HStack {
-                Button("Run now", action: onRun).buttonStyle(.primary)
+                Button("Run now", action: onRun).buttonStyle(.ghost)
                 Button("Edit", action: onEdit).font(.inter(13))
                 Button("Delete", role: .destructive, action: onDelete).font(.inter(13))
             }

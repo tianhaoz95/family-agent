@@ -50,10 +50,13 @@ struct ToolsView: View {
                                 default:
                                     if let base = model.toolsBaseURL, let path = tool.path,
                                        let u = URL(string: base.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) {
+                                        // Ghost, not primary: the screen's one filled
+                                        // accent is "Build" up top (DESIGN.md — one
+                                        // filled pill per screen).
                                         Button { openURL = IdentURL(u) } label: {
                                             Label("Open", systemImage: "arrow.up.forward.app")
                                         }
-                                        .buttonStyle(.primary)
+                                        .buttonStyle(.ghost)
                                     }
                                 }
                             }

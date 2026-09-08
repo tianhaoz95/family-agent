@@ -48,10 +48,10 @@ struct DocumentsView: View {
                         .buttonStyle(.ghost)
                         PhotosPicker(selection: $photoItem, matching: .images) {
                             Label("Scan", systemImage: "camera")
-                                .font(.inter(14, .semibold)).foregroundStyle(Theme.accent)
+                                .font(.inter(14, .semibold)).foregroundStyle(Theme.accentInk)
                                 .frame(maxWidth: .infinity).padding(.vertical, 9)
                                 .background(Theme.accentSoft, in: Capsule())
-                                .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.12), lineWidth: 1))
+                                .overlay(Capsule().strokeBorder(Theme.accentInk.opacity(0.12), lineWidth: 1))
                         }
                     }
                     if let s = model.documentUploadStatus {
@@ -75,7 +75,7 @@ struct DocumentsView: View {
                         }
                         .padding(.top, 6)
                     } label: {
-                        Text("Paste text directly").font(.inter(14, .medium)).foregroundStyle(Theme.accent)
+                        Text("Paste text directly").font(.inter(14, .medium)).foregroundStyle(Theme.accentInk)
                     }
 
                     Spacer().frame(height: 2)

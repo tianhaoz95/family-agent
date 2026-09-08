@@ -15,13 +15,16 @@ struct ScreenScaffold<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title).appHeadline().foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer().frame(height: 5)
+            Spacer().frame(height: 6)
+            // The serif voice stays, but quieter: at 16.5 it ran three lines on
+            // Routines/Vault/Skills and pushed content far down the screen while
+            // competing with the title for attention.
             Text(subtitle)
-                .font(.serif(16.5))
-                .lineSpacing(2)
+                .font(.serif(15))
+                .lineSpacing(1.5)
                 .foregroundStyle(Theme.textBody)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer().frame(height: 24)
+            Spacer().frame(height: 20)
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -54,18 +57,11 @@ struct AppCard<Content: View>: View {
                 .padding(padding)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Paper, not glass: a flat warm-white sheet, a warm hairline, and a short
+        // shadow. (The glossy top-highlight gradient that used to be here read as a
+        // web card — it only made sense while the ground was a dark colour wash.)
         .background(Theme.surface, in: shape)
         .overlay(shape.strokeBorder(Theme.border, lineWidth: 1))
-        // A faint top highlight sells the "floating over the wash" feel.
-        .overlay(alignment: .top) {
-            shape.stroke(
-                LinearGradient(colors: [.white.opacity(0.55), .clear],
-                               startPoint: .top, endPoint: .bottom),
-                lineWidth: 1
-            )
-            .blendMode(.plusLighter)
-            .mask(shape.fill(LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .center)))
-        }
         .elevation(Theme.E.card)
 
         if let onTap {
@@ -91,7 +87,7 @@ struct PressScaleStyle: ButtonStyle {
 
 struct Chip: View {
     let text: String
-    var color: Color = Theme.accent
+    var color: Color = Theme.accentInk
     var body: some View {
         Text(text.uppercased())
             .font(.inter(10.5, .bold))
@@ -122,7 +118,7 @@ struct EmptyState: View {
                 Circle().strokeBorder(.white.opacity(0.6), lineWidth: 1).frame(width: 78, height: 78)
                 Image(systemName: systemImage)
                     .font(.system(size: 27, weight: .regular))
-                    .foregroundStyle(Theme.accent.opacity(0.85))
+                    .foregroundStyle(Theme.accentInk.opacity(0.85))
             }
             .elevation(Theme.E.sm)
             Text(text)
@@ -180,8 +176,8 @@ struct SpeakButton: View {
                     ProgressView().controlSize(.mini).tint(Theme.accent)
                     Text("Synthesizing…").font(.inter(12, .medium)).foregroundStyle(Theme.textMuted)
                 } else if playing {
-                    Image(systemName: "stop.fill").font(.system(size: 12)).foregroundStyle(Theme.accent)
-                    Text("Stop").font(.inter(12, .medium)).foregroundStyle(Theme.accent)
+                    Image(systemName: "stop.fill").font(.system(size: 12)).foregroundStyle(Theme.accentInk)
+                    Text("Stop").font(.inter(12, .medium)).foregroundStyle(Theme.accentInk)
                 } else {
                     Image(systemName: "speaker.wave.2").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
                     Text("Read aloud").font(.inter(12, .medium)).foregroundStyle(Theme.textMuted)
@@ -273,11 +269,11 @@ struct StepsStrip: View {
                     if running {
                         ProgressView().controlSize(.mini).tint(Theme.accent)
                         Text(steps.isEmpty ? "Working…" : "Working — \(steps.count) tool call\(steps.count == 1 ? "" : "s")")
-                            .appLabelSmall().foregroundStyle(Theme.accent)
+                            .appLabelSmall().foregroundStyle(Theme.accentInk)
                     } else {
                         Text(errored ? "!" : "✓")
                             .font(.inter(11, .bold))
-                            .foregroundStyle(errored ? Theme.danger : Theme.accent)
+                            .foregroundStyle(errored ? Theme.danger : Theme.accentInk)
                         Text("\(steps.count) tool call\(steps.count == 1 ? "" : "s")")
                             .appLabelSmall().foregroundStyle(Theme.textMuted)
                     }

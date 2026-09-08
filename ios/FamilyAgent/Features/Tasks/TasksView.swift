@@ -38,7 +38,7 @@ struct TasksView: View {
                             Button { shift(1) } label: { Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)) }
                             Button("Today") { model.calAnchor = CalendarMath.cal.startOfDay(for: .now) }
                         }
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(Theme.accentInk)
                         .buttonStyle(.soft)
                         .padding(.horizontal, 2)
                     }
@@ -160,7 +160,7 @@ struct TaskListView: View {
                 Button { if !done { onComplete(t.id) } } label: {
                     Image(systemName: done ? "checkmark.square.fill" : "square")
                         .font(.system(size: 20))
-                        .foregroundStyle(done ? Theme.accent : Theme.textFaint)
+                        .foregroundStyle(done ? Theme.accentInk : Theme.textFaint)
                 }
                 .buttonStyle(.plain).disabled(done)
                 Text(t.title)
@@ -299,7 +299,7 @@ struct TaskMonthView: View {
                         .foregroundStyle(CalendarMath.isSameMonth(day, anchor) ? Theme.text : Theme.textFaint)
                     ForEach(dayTasks.prefix(2)) { t in
                         Text(t.title).font(.system(size: 8)).lineLimit(1)
-                            .foregroundStyle(Theme.accent)
+                            .foregroundStyle(Theme.accentInk)
                     }
                     if dayTasks.count > 2 {
                         Text("+\(dayTasks.count - 2)").font(.system(size: 8)).foregroundStyle(Theme.textMuted)

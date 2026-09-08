@@ -456,6 +456,16 @@ changes is depth and motion. This overrides three of the "Don't"s above **for
   app (`#app` is `z-index: 1`), the rail and side panels are translucent glass
   (`backdrop-filter`), and the centred content column is transparent, so the
   wash shows around and between the floating cards. Tokens: `--bloom-*`.
+  **The blooms are deliberately faint and edge-weighted** (alphas ~0.18/0.15/
+  0.13/0.10, radii ~26–40vmax) so colour pools around the *edges* and the middle
+  of the canvas stays `--canvas`. They were originally 0.40/0.32/0.30/0.22 at
+  34–52vmax; across two stacked layers that buried the warm paper under an
+  opaque cool wash, and left the single `#0075de` accent nothing neutral to read
+  against — every filled control looked pasted on. The paper is the ground; the
+  blooms only light it. Mirrored in `android/.../ui/theme/Theme.kt`
+  (`AppAccents.bloom*`) + `ui/Atmosphere.kt` and `ios/.../DesignSystem/Theme.swift`
+  (`Theme.bloom*`) + `Atmosphere.swift`, where the radii are a fraction of the
+  **short** side (0.68–0.85) for the same reason.
   The drift is **state-driven and JS-animated** (`desktop/src/atmosphere.ts`) —
   a `requestAnimationFrame` loop writes the `--atmo-*` custom properties the two
   layers' `transform` / `opacity` read; there are no CSS keyframes. It eases to

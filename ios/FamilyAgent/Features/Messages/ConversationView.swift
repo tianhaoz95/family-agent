@@ -29,7 +29,7 @@ struct ConversationView: View {
                     Image(systemName: "trash").font(.system(size: 16))
                 }
             }
-            .foregroundStyle(Theme.accent)
+            .foregroundStyle(Theme.accentInk)
             .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8)
             Divider()
 
@@ -123,7 +123,7 @@ struct ConversationView: View {
         ComposerBar {
             PhotosPicker(selection: $photoItem, matching: .images) {
                 Image(systemName: "photo").font(.system(size: 18))
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.accentInk)
                     .frame(width: 34, height: 34)
             }
             .disabled(attached.count >= 4)
@@ -135,7 +135,7 @@ struct ConversationView: View {
                         Text("@agent").font(.inter(12.5, .semibold))
                         Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                     }
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.accentInk)
                     .padding(.horizontal, 9).padding(.vertical, 5)
                     .background(Theme.accentSoft, in: Capsule())
                 }

@@ -37,7 +37,12 @@ layers:
   soft radial colour blooms (sky / peach / lilac / mint, from `AppAccents.bloom*`)
   that drift on sine waves via a 34 s `rememberInfiniteTransition`. Frozen when
   the OS `ANIMATOR_DURATION_SCALE` is 0 (the platform "remove animations"
-  setting).
+  setting). The blooms are **faint and edge-weighted** — alphas ~0.18/0.15/0.13/
+  0.10, radii `d * 0.68…0.85` of the **short** side — so colour pools in the
+  corners and the middle stays `Pal.canvas`. They were 0.40/0.32/0.30/0.22 at
+  `d * 1.10…1.34` (each bloom wider than the screen), which stacked into an
+  opaque cool wash that buried the warm paper. See the repo-root `DESIGN.md` →
+  "Desktop atmosphere layer".
 - **No glass, opaque surfaces.** The desktop's glass chrome relies on
   `backdrop-filter: blur()`, which Compose can't do cheaply (pre-Android-12).
   A flat translucent surface with no blur just shows a distracting ghost of

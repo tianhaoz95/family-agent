@@ -125,7 +125,7 @@ private struct VaultGate: View {
 
     var body: some View {
         AppCard {
-            Image(systemName: "lock.fill").foregroundStyle(Theme.accent)
+            Image(systemName: "lock.fill").foregroundStyle(Theme.accentInk)
             Spacer().frame(height: 8)
             Text(heading).appTitle()
             Spacer().frame(height: 6)

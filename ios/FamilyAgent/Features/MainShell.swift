@@ -129,7 +129,7 @@ struct MainShell: View {
         Button { open() } label: {
             Image(systemName: "line.3.horizontal")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Theme.accent)
+                .foregroundStyle(Theme.accentInk)
                 .frame(width: 42, height: 42)
                 .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
@@ -253,8 +253,13 @@ private struct AppDrawer: View {
                         let selected = d == selection
                         Button { onSelect(d) } label: {
                             HStack(spacing: 13) {
+                                // One pinned weight + scale for every glyph: at the
+                                // default weight the denser symbols (wrench, graduation
+                                // cap) read much heavier than the sparse ones (doc, clock).
                                 Image(systemName: d.systemImage)
-                                    .font(.system(size: 17, weight: selected ? .semibold : .regular))
+                                    .font(.system(size: 16.5, weight: .medium))
+                                    .imageScale(.medium)
+                                    .symbolRenderingMode(.monochrome)
                                     .frame(width: 24)
                                 Text(d.label).font(.inter(14.5, selected ? .semibold : .medium)).tracking(-0.1)
                                 Spacer()
@@ -265,7 +270,7 @@ private struct AppDrawer: View {
                                         .background(Theme.accent, in: Capsule())
                                 }
                             }
-                            .foregroundStyle(selected ? Theme.accent : Theme.textStrong)
+                            .foregroundStyle(selected ? Theme.accentInk : Theme.textStrong)
                             .padding(.horizontal, 13).padding(.vertical, 11)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background {
@@ -273,7 +278,7 @@ private struct AppDrawer: View {
                                     RoundedRectangle(cornerRadius: 13, style: .continuous)
                                         .fill(Theme.accentSoft)
                                         .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                            .strokeBorder(Theme.accent.opacity(0.10), lineWidth: 1))
+                                            .strokeBorder(Theme.accentInk.opacity(0.10), lineWidth: 1))
                                 }
                             }
                         }

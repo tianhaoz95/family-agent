@@ -85,7 +85,7 @@ struct NewConversationForm: View {
                     HStack(spacing: 10) {
                         Image(systemName: picked.contains(m.id) ? "checkmark.square.fill" : "square")
                             .font(.system(size: 20))
-                            .foregroundStyle(picked.contains(m.id) ? Theme.accent : Theme.textFaint)
+                            .foregroundStyle(picked.contains(m.id) ? Theme.accentInk : Theme.textFaint)
                         Text(m.displayName).appBody()
                         Spacer()
                     }

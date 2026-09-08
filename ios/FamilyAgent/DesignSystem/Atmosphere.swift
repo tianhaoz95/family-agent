@@ -33,10 +33,14 @@ struct Atmosphere: View {
                     )
                 }
 
-                bloom(0.12 + 0.06 * sin(phase),        0.05 + 0.05 * cos(phase * 0.8), 1.15, Theme.bloomSky)
-                bloom(0.92 - 0.05 * cos(phase),        0.16 + 0.06 * sin(phase * 1.1), 1.28, Theme.bloomPeach)
-                bloom(0.78 + 0.05 * sin(phase * 0.7),  0.95 - 0.05 * cos(phase),       1.34, Theme.bloomLilac)
-                bloom(0.05 - 0.04 * cos(phase * 0.9),  0.86 + 0.05 * sin(phase),       1.10, Theme.bloomMint)
+                // Radii are a fraction of the SHORT side, so each bloom is a corner
+                // glow that falls off well before the middle of the screen. They used
+                // to be 1.10–1.34 — larger than the screen itself — which made four
+                // full-bleed washes that stacked over the paper instead of lighting it.
+                bloom(0.12 + 0.06 * sin(phase),        0.05 + 0.05 * cos(phase * 0.8), 0.72, Theme.bloomSky)
+                bloom(0.92 - 0.05 * cos(phase),        0.16 + 0.06 * sin(phase * 1.1), 0.80, Theme.bloomPeach)
+                bloom(0.78 + 0.05 * sin(phase * 0.7),  0.95 - 0.05 * cos(phase),       0.85, Theme.bloomLilac)
+                bloom(0.05 - 0.04 * cos(phase * 0.9),  0.86 + 0.05 * sin(phase),       0.68, Theme.bloomMint)
             }
             .ignoresSafeArea()
         }

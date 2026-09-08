@@ -120,11 +120,15 @@ object AppAccents {
     val warning: Color = Pal.warn
 
     // Animated-canvas blooms — mirror desktop --bloom-* (see Atmosphere.kt).
-    // ARGB ints: ~0.40 sky, ~0.32 peach, ~0.30 lilac, ~0.22 mint.
-    val bloomSky: Color = Color(0x6660A8EC)
-    val bloomPeach: Color = Color(0x52FFB25A)
-    val bloomLilac: Color = Color(0x4D8C7CE6)
-    val bloomMint: Color = Color(0x384A9678)
+    // ARGB ints: ~0.18 sky, ~0.15 peach, ~0.13 lilac, ~0.10 mint.
+    // Deliberately faint. These pool colour in the *corners*; the middle of the
+    // screen stays `Pal.canvas`. At the old alphas (0.40/0.32/0.30/0.22) four
+    // screen-wide blooms stacked into an opaque cool wash that buried the warm
+    // paper entirely and left the accent nothing neutral to read against.
+    val bloomSky: Color = Color(0x2E60A8EC)
+    val bloomPeach: Color = Color(0x26FFB25A)
+    val bloomLilac: Color = Color(0x218C7CE6)
+    val bloomMint: Color = Color(0x1A4A9678)
 }
 
 // Shape — cards/sheets generously rounded, mirrors desktop --r-* (bumped for

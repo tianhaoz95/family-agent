@@ -22,7 +22,7 @@ struct HoldToTalkMic: View {
     var body: some View {
         Image(systemName: mode == .idle ? "mic" : "stop.fill")
             .font(.system(size: 18))
-            .foregroundStyle(mode == .idle ? Theme.accent : Theme.danger)
+            .foregroundStyle(mode == .idle ? Theme.accentInk : Theme.danger)
             .frame(width: 36, height: 36)
             .contentShape(Rectangle())
             .overlay {

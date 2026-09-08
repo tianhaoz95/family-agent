@@ -120,10 +120,13 @@ struct ChatView: View {
         Button(action: action) {
             Image(systemName: name)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.accent)
+                .foregroundStyle(Theme.accentInk)
                 .frame(width: 34, height: 34)
-                .background(Theme.accentSoft, in: Circle())
-                .overlay(Circle().strokeBorder(Theme.accent.opacity(0.10), lineWidth: 1))
+                // Neutral paper chips, not tinted discs — three blue circles in a
+                // row were the loudest thing on the screen.
+                .background(Theme.surface, in: Circle())
+                .overlay(Circle().strokeBorder(Theme.border, lineWidth: 1))
+                .elevation(Theme.E.sm)
         }
         .buttonStyle(PressScaleStyle(scale: 0.92))
     }
@@ -176,7 +179,7 @@ struct ChatView: View {
         ComposerBar {
             PhotosPicker(selection: $photoItem, matching: .images) {
                 Image(systemName: "photo").font(.system(size: 18))
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.accentInk)
                     .frame(width: 34, height: 34)
             }
             .disabled(attached.count >= 4)

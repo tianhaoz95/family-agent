@@ -81,10 +81,14 @@ fun AtmosphereBackground(
                     )
                 }
 
-                bloom(w * (0.12f + 0.06f * sin(phase)), h * (0.05f + 0.05f * cos(phase * 0.8f)), d * 1.15f, sky)
-                bloom(w * (0.92f - 0.05f * cos(phase)), h * (0.16f + 0.06f * sin(phase * 1.1f)), d * 1.28f, peach)
-                bloom(w * (0.78f + 0.05f * sin(phase * 0.7f)), h * (0.95f - 0.05f * cos(phase)), d * 1.34f, lilac)
-                bloom(w * (0.05f - 0.04f * cos(phase * 0.9f)), h * (0.86f + 0.05f * sin(phase)), d * 1.1f, mint)
+                // Radii are a fraction of the SHORT side, so each bloom is a corner
+                // glow that falls off well before the middle of the screen. They used
+                // to be 1.10–1.34 — larger than the screen itself — which made four
+                // full-bleed washes that stacked over the paper instead of lighting it.
+                bloom(w * (0.12f + 0.06f * sin(phase)), h * (0.05f + 0.05f * cos(phase * 0.8f)), d * 0.72f, sky)
+                bloom(w * (0.92f - 0.05f * cos(phase)), h * (0.16f + 0.06f * sin(phase * 1.1f)), d * 0.80f, peach)
+                bloom(w * (0.78f + 0.05f * sin(phase * 0.7f)), h * (0.95f - 0.05f * cos(phase)), d * 0.85f, lilac)
+                bloom(w * (0.05f - 0.04f * cos(phase * 0.9f)), h * (0.86f + 0.05f * sin(phase)), d * 0.68f, mint)
             },
         content = content,
     )

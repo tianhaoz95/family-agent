@@ -37,7 +37,7 @@ struct DetailSheet: View {
         Text(t.title).font(.inter(22, .bold))
         Spacer().frame(height: 6)
         Chip(text: t.status == "done" ? "done" : "open",
-             color: t.status == "done" ? Theme.ok : Theme.accent)
+             color: t.status == "done" ? Theme.ok : Theme.accentInk)
         if let d = t.dueDate {
             Spacer().frame(height: 8)
             Text("Due \(d)" + (t.dueTime.map { " at \($0)" } ?? ""))
@@ -113,7 +113,7 @@ struct DetailSheet: View {
     private func stepCard(_ n: Int, _ s: ToolStep) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("\(n)").font(.inter(12.5, .bold)).foregroundStyle(Theme.accent)
+                Text("\(n)").font(.inter(12.5, .bold)).foregroundStyle(Theme.accentInk)
                 Text(stepVerb(s)).appTitleSmall()
                 Spacer()
                 if let ms = s.durationMs {

@@ -19,7 +19,7 @@ extension MarkdownUI.Theme {
                 BackgroundColor(Theme.surfaceSunk)
             }
             .strong { FontWeight(.semibold) }
-            .link { ForegroundColor(Theme.accent) }
+            .link { ForegroundColor(Theme.accentInk) }
     }
 }
 
