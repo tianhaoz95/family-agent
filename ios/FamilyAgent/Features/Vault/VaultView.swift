@@ -9,7 +9,7 @@ struct VaultView: View {
 
     var body: some View {
         ScrollView {
-            ScreenScaffold(title: "Vault", subtitle: "Passwords and 2FA codes, encrypted on the server.") {
+            ScreenScaffold(title: "Vault", subtitle: "Passwords and two-factor codes for the family \u{2014} encrypted on the home server. Ask the assistant for one in a private \u{201C}/vault\u{201D} chat.") {
                 VStack(alignment: .leading, spacing: 12) {
                     if let code = model.vaultRecoveryCode {
                         AppCard(accent: Theme.marigold) {

@@ -12,7 +12,7 @@ struct TasksView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ScreenScaffold(title: "Events", subtitle: "Everything with a date attached.") {
+            ScreenScaffold(title: "Events", subtitle: "Everything the family agent is tracking for you.") {
                 VStack(spacing: 12) {
                     HStack(spacing: 10) {
                         Picker("", selection: Binding(get: { model.taskView }, set: { model.taskView = $0 })) {
@@ -36,6 +36,8 @@ struct TasksView: View {
                             Text(rangeLabel).appTitleSmall()
                             Spacer()
                             Button { shift(1) } label: { Image(systemName: "chevron.right") }
+                            Button("Today") { model.calAnchor = CalendarMath.cal.startOfDay(for: .now) }
+                                .font(.inter(13, .medium))
                         }
                         .padding(.horizontal, 4)
                     }
@@ -45,6 +47,7 @@ struct TasksView: View {
                         case "month": TaskMonthView(tasks: model.tasks, anchor: model.calAnchor,
                                                     onTapDay: { seed(for: $0, minutes: nil) })
                         case "list":  TaskListView(tasks: model.tasks,
+                                                   onAdd: { model.addTask(title: $0, dueDate: $1, dueTime: $2) },
                                                    onComplete: model.completeTask,
                                                    onReschedule: { reschedule = $0 })
                         default:      TaskScheduleView(view: model.taskView, tasks: model.tasks, anchor: model.calAnchor,
@@ -109,51 +112,67 @@ struct QuickAddSeed: Identifiable {
 
 struct TaskListView: View {
     let tasks: [TaskItem]
+    let onAdd: (String, String?, String?) -> Void
     let onComplete: (String) -> Void
     let onReschedule: (TaskItem) -> Void
 
-    private var open: [TaskItem] {
-        tasks.filter { $0.status != "done" }.sorted { ($0.dueDate ?? "~", $0.dueTime ?? "") < ($1.dueDate ?? "~", $1.dueTime ?? "") }
-    }
-    private var done: [TaskItem] { tasks.filter { $0.status == "done" } }
+    @State private var title = ""
+    @State private var due = ""
+    @State private var time = ""
 
     var body: some View {
-        if tasks.isEmpty {
-            EmptyState(text: "Nothing scheduled.", systemImage: "checkmark.circle")
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(open) { row($0) }
-                if !done.isEmpty {
-                    Text("Done").appLabelSmall().foregroundStyle(Theme.textMuted).padding(.top, 8)
-                    ForEach(done) { row($0) }
+        VStack(alignment: .leading, spacing: 8) {
+            // Inline add (matches Android's list view — no sheet).
+            HStack(spacing: 8) {
+                TextField("New event", text: $title)
+                    .textFieldStyle(.roundedBorder)
+                Button("Add") {
+                    guard !title.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                    onAdd(title, due.isEmpty ? nil : due, time.isEmpty ? nil : time)
+                    title = ""; due = ""; time = ""
                 }
+                .buttonStyle(.borderedProminent)
+            }
+            HStack(spacing: 8) {
+                TextField("Due date — 2026-11-01", text: $due)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("14:30", text: $time)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 100)
+            }
+            Spacer().frame(height: 8)
+
+            if tasks.isEmpty {
+                EmptyState(text: "No events yet. Add one above or ask in Chat.", systemImage: "checkmark.circle")
+            } else {
+                ForEach(tasks) { row($0) }
             }
         }
     }
 
     @ViewBuilder
     private func row(_ t: TaskItem) -> some View {
-        let overdue = (t.dueDate ?? "9999") < Date().isoDay && t.status != "done"
+        let done = t.status == "done"
         AppCard {
-            HStack(alignment: .top, spacing: 10) {
-                Button { onComplete(t.id) } label: {
-                    Image(systemName: t.status == "done" ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(t.status == "done" ? Theme.ok : Theme.textFaint)
+            HStack(spacing: 8) {
+                Button { if !done { onComplete(t.id) } } label: {
+                    Image(systemName: done ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 20))
+                        .foregroundStyle(done ? Theme.accent : Theme.textFaint)
                 }
-                .buttonStyle(.plain)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(t.title).appBody().strikethrough(t.status == "done")
-                        .foregroundStyle(t.status == "done" ? Theme.textMuted : Theme.text)
-                    if let d = t.dueDate {
-                        Text(d + (t.dueTime.map { " · \($0)" } ?? ""))
-                            .appLabelSmall()
-                            .foregroundStyle(overdue ? Theme.danger : Theme.textMuted)
-                    }
-                }
+                .buttonStyle(.plain).disabled(done)
+                Text(t.title)
+                    .appBody()
+                    .strikethrough(done)
+                    .foregroundStyle(done ? Theme.textMuted : Theme.text)
                 Spacer()
-                if t.status != "done" {
-                    Button { onReschedule(t) } label: { Image(systemName: "calendar") }
-                        .buttonStyle(.plain).foregroundStyle(Theme.textMuted)
+                if let d = t.dueDate {
+                    Text(t.dueTime != nil ? "\(d) \(t.dueTime!)" : d)
+                        .appLabelSmall().foregroundStyle(Theme.textMuted)
+                        .padding(.horizontal, 9).padding(.vertical, 3)
+                        .background(Theme.surfaceSunk, in: Capsule())
+                        .onTapGesture { if !done { onReschedule(t) } }
                 }
             }
         }

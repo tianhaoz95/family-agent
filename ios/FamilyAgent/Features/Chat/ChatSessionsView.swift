@@ -31,7 +31,7 @@ struct ChatSessionsView: View {
             .task { await model.refreshChatSessions() }
             .overlay {
                 if model.chatSessions.isEmpty {
-                    EmptyState(text: "No saved conversations yet.", systemImage: "clock.arrow.circlepath")
+                    EmptyState(text: "No conversations yet.", systemImage: "clock.arrow.circlepath")
                 }
             }
         }

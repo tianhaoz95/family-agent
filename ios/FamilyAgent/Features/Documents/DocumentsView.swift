@@ -2,80 +2,85 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 
+private let SEARCH_MODES: [(String, String)] = [
+    ("hybrid", "Smart"), ("keyword", "Exact"), ("fuzzy", "Fuzzy"), ("semantic", "Meaning"),
+]
+
+private struct DocRow: Identifiable {
+    let id: String
+    let filename: String
+    let category: String?
+    let summary: String?
+    let extractionStatus: String
+    let snippet: String?
+}
+
 struct DocumentsView: View {
     @Environment(AppModel.self) private var model
     @State private var showImporter = false
     @State private var photoItem: PhotosPickerItem?
+    @State private var pasteExpanded = false
+    @State private var pasteFilename = ""
     @State private var pasteText = ""
-    @State private var showPaste = false
     @State private var renaming: Document?
 
-    private let modes: [(String, String)] = [("hybrid", "Smart"), ("keyword", "Exact"), ("fuzzy", "Fuzzy"), ("semantic", "Meaning")]
+    private var searchActive: Bool { !model.documentSearchQuery.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
         ScrollView {
-            ScreenScaffold(title: "Documents", subtitle: "Everything the family has filed away.") {
+            ScreenScaffold(title: "Documents",
+                           subtitle: "Upload a PDF or photo, or scan a document with the camera.") {
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Button { showImporter = true } label: { Label("Upload", systemImage: "arrow.up.doc") }
-                            .buttonStyle(.borderedProminent)
-                        PhotosPicker(selection: $photoItem, matching: .images) {
-                            Label("Scan", systemImage: "camera")
+                    searchField
+                    if searchActive {
+                        Picker("", selection: Binding(
+                            get: { model.documentSearchMode },
+                            set: { model.setDocumentSearch(query: model.documentSearchQuery, mode: $0) }
+                        )) {
+                            ForEach(SEARCH_MODES, id: \.0) { Text($0.1).tag($0.0) }
+                        }
+                        .pickerStyle(.segmented)
+                        if let note = searchNote {
+                            Text(note).appLabelSmall().foregroundStyle(Theme.textMuted)
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        Button { showImporter = true } label: {
+                            Label("Upload", systemImage: "arrow.up.doc").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
-                        Button { showPaste = true } label: { Image(systemName: "text.badge.plus") }
-                            .buttonStyle(.bordered)
+                        PhotosPicker(selection: $photoItem, matching: .images) {
+                            Label("Scan", systemImage: "camera").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
                     }
                     if let s = model.documentUploadStatus {
                         Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
                     }
 
-                    TextField("Search documents", text: Binding(
-                        get: { model.documentSearchQuery },
-                        set: { model.setDocumentSearch(query: $0, mode: model.documentSearchMode) }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-
-                    Picker("", selection: Binding(
-                        get: { model.documentSearchMode },
-                        set: { model.setDocumentSearch(query: model.documentSearchQuery, mode: $0) }
-                    )) {
-                        ForEach(modes, id: \.0) { Text($0.1).tag($0.0) }
-                    }
-                    .pickerStyle(.segmented)
-
-                    if model.documentSearchMode == "semantic" && !model.semanticSearchEnabled {
-                        Text("No embedding model on the server — falling back to keyword + fuzzy.")
-                            .appLabelSmall().foregroundStyle(Theme.warn)
-                    }
-
-                    if let hits = model.documentSearchResults {
-                        if model.documentSearching {
-                            ProgressView()
-                        } else if hits.isEmpty {
-                            Text("No matches.").appBodySmall().foregroundStyle(Theme.textMuted)
-                        } else {
-                            Text("\(hits.count) match\(hits.count == 1 ? "" : "es")").appLabelSmall().foregroundStyle(Theme.textMuted)
-                            ForEach(hits) { hit in
-                                AppCard(onTap: { model.openDocumentDetail(hit.id) }) {
-                                    Text(hit.filename).appTitleSmall()
-                                    if !hit.snippet.isEmpty {
-                                        Text(hit.snippet).appBodySmall().foregroundStyle(Theme.textBody).lineLimit(2)
-                                    }
-                                }
+                    DisclosureGroup(isExpanded: $pasteExpanded) {
+                        VStack(spacing: 8) {
+                            TextField("Filename, e.g. electric-bill.txt", text: $pasteFilename)
+                                .textFieldStyle(.roundedBorder)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            TextField("Paste the document text here", text: $pasteText, axis: .vertical)
+                                .lineLimit(4...8)
+                                .textFieldStyle(.roundedBorder)
+                            Button("Ingest") {
+                                guard !pasteFilename.isEmpty, !pasteText.isEmpty else { return }
+                                model.ingestDocument(filename: pasteFilename, text: pasteText)
+                                pasteFilename = ""; pasteText = ""; pasteExpanded = false
                             }
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                         }
-                    } else if model.documents.isEmpty {
-                        EmptyState(text: "Nothing filed yet.", systemImage: "doc.text")
-                    } else {
-                        ForEach(model.documents) { doc in
-                            DocumentCard(doc: doc,
-                                         onOpen: { model.openDocumentDetail(doc.id) },
-                                         onRename: { renaming = doc },
-                                         onRetry: { model.retryExtraction(doc.id) },
-                                         onDelete: { model.deleteDocument(doc.id) })
-                        }
+                        .padding(.top, 6)
+                    } label: {
+                        Text("Paste text directly").font(.inter(14, .medium)).foregroundStyle(Theme.accent)
                     }
+
+                    Spacer().frame(height: 2)
+                    documentList
                 }
             }
         }
@@ -83,11 +88,9 @@ struct DocumentsView: View {
         .task {
             while !Task.isCancelled {
                 if model.documents.contains(where: { $0.extractionStatus == "pending" }) {
-                    try? await Task.sleep(for: .seconds(3))
                     await model.refreshDocuments()
-                } else {
-                    try? await Task.sleep(for: .seconds(3))
                 }
+                try? await Task.sleep(for: .seconds(3))
             }
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
@@ -95,67 +98,151 @@ struct DocumentsView: View {
             let ok = url.startAccessingSecurityScopedResource()
             defer { if ok { url.stopAccessingSecurityScopedResource() } }
             guard let data = try? Data(contentsOf: url) else { return }
-            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-            model.uploadDocument(filename: url.lastPathComponent, bytes: data, mime: mime)
+            model.uploadDocument(filename: url.lastPathComponent, bytes: data,
+                                 mime: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType)
         }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self) {
-                    model.uploadDocument(filename: "scan-\(Int(Date().timeIntervalSince1970)).jpg", bytes: data, mime: "image/jpeg")
+                    model.uploadDocument(filename: "scan-\(Int(Date().timeIntervalSince1970)).jpg",
+                                         bytes: data, mime: "image/jpeg")
                 }
                 photoItem = nil
             }
         }
-        .alert("Paste text", isPresented: $showPaste) {
-            TextField("Document text", text: $pasteText)
-            Button("Add") {
-                model.ingestDocument(filename: "note-\(Int(Date().timeIntervalSince1970)).txt", text: pasteText)
-                pasteText = ""
+        .sheet(item: $renaming) { RenameDocumentSheet(doc: $0) }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 15)).foregroundStyle(Theme.textMuted)
+            TextField("Search — by name, content, or meaning", text: Binding(
+                get: { model.documentSearchQuery },
+                set: { model.setDocumentSearch(query: $0, mode: model.documentSearchMode) }
+            ))
+            if searchActive {
+                Button {
+                    model.setDocumentSearch(query: "", mode: model.documentSearchMode)
+                } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.textFaint) }
+                .buttonStyle(.plain)
             }
-            Button("Cancel", role: .cancel) {}
         }
-        .sheet(item: $renaming) { doc in
-            RenameDocumentSheet(doc: doc)
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.R.md))
+        .overlay(RoundedRectangle(cornerRadius: Theme.R.md).stroke(Theme.border, lineWidth: 1))
+    }
+
+    private var searchNote: String? {
+        if model.documentSearchMode == "semantic" && !model.semanticSearchEnabled {
+            return "No embedding model on the server — showing keyword + fuzzy results."
+        }
+        if model.documentSearching { return "Searching…" }
+        if let r = model.documentSearchResults {
+            return "\(r.count) \(r.count == 1 ? "match" : "matches")"
+        }
+        return nil
+    }
+
+    private var rows: [DocRow] {
+        if searchActive {
+            return (model.documentSearchResults ?? []).map {
+                DocRow(id: $0.id, filename: $0.filename, category: $0.category, summary: $0.summary,
+                       extractionStatus: $0.extractionStatus, snippet: $0.snippet.isEmpty ? nil : $0.snippet)
+            }
+        }
+        return model.documents.map {
+            DocRow(id: $0.id, filename: $0.filename, category: $0.extracted?.category,
+                   summary: $0.extracted?.summary, extractionStatus: $0.extractionStatus, snippet: nil)
+        }
+    }
+
+    @ViewBuilder
+    private var documentList: some View {
+        if searchActive && model.documentSearchResults == nil {
+            EmptyView()   // first search in flight — the "Searching…" note covers it
+        } else if searchActive && rows.isEmpty {
+            EmptyState(text: "No documents match \u{201C}\(model.documentSearchQuery)\u{201D}.", systemImage: "magnifyingglass")
+        } else if !searchActive && rows.isEmpty {
+            EmptyState(text: "No documents yet. Upload or scan one to get started.", systemImage: "folder")
+        } else {
+            ForEach(rows) { row in
+                DocumentCard(row: row, query: model.documentSearchQuery,
+                             onPreview: { model.openDocumentDetail(row.id) },
+                             onRename: { renaming = model.documents.first { $0.id == row.id }
+                                 ?? Document(id: row.id, filename: row.filename, rawText: "", createdAt: "") },
+                             onDelete: { model.deleteDocument(row.id) },
+                             onRetry: { model.retryExtraction(row.id) })
+            }
         }
     }
 }
 
-struct DocumentCard: View {
-    @Environment(AppModel.self) private var model
-    let doc: Document
-    let onOpen: () -> Void
+private struct DocumentCard: View {
+    let row: DocRow
+    let query: String
+    let onPreview: () -> Void
     let onRename: () -> Void
-    let onRetry: () -> Void
     let onDelete: () -> Void
+    let onRetry: () -> Void
 
     var body: some View {
-        AppCard {
-            HStack {
-                Text(doc.filename).appTitleSmall()
+        AppCard(onTap: onPreview) {
+            HStack(spacing: 8) {
+                Text(row.filename).appTitleSmall().lineLimit(1)
                 Spacer()
-                if let cat = doc.extracted?.category {
-                    Chip(text: cat, color: Theme.marigold)
-                }
+                if let cat = row.category { Chip(text: cat) }
+                Button(action: onRename) {
+                    Image(systemName: "pencil").font(.system(size: 15)).foregroundStyle(Theme.textMuted)
+                }.buttonStyle(.plain)
+                Button(action: onDelete) {
+                    Image(systemName: "trash").font(.system(size: 15)).foregroundStyle(Theme.textMuted)
+                }.buttonStyle(.plain)
             }
-            if doc.extractionStatus == "pending" {
-                Label("Extracting…", systemImage: "hourglass").appLabelSmall().foregroundStyle(Theme.warn)
-            } else if doc.extractionStatus == "failed" {
-                HStack {
-                    Text("Extraction failed").appLabelSmall().foregroundStyle(Theme.danger)
+            Spacer().frame(height: 6)
+            if let sum = row.summary {
+                Text(sum).appBodySmall().foregroundStyle(Theme.textMuted)
+            } else if row.extractionStatus == "failed" {
+                HStack(spacing: 8) {
+                    Text("Couldn't read this document.").appBodySmall().foregroundStyle(Theme.danger)
                     Button("Retry", action: onRetry).font(.inter(12))
                 }
-            } else if let sum = doc.extracted?.summary, !sum.isEmpty {
-                Text(sum).appBodySmall().foregroundStyle(Theme.textBody).lineLimit(2)
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini)
+                    Text("Extracting…").appBodySmall().foregroundStyle(Theme.textMuted)
+                }
             }
-            HStack {
-                Button("Open", action: onOpen).font(.inter(13))
-                Button("Rename", action: onRename).font(.inter(13))
-                Spacer()
-                Button("Delete", role: .destructive, action: onDelete).font(.inter(13))
+            if let snippet = row.snippet {
+                Spacer().frame(height: 6)
+                Text(highlight(snippet, query))
+                    .appBodySmall().foregroundStyle(Theme.textMuted)
+                    .lineLimit(3)
             }
-            .padding(.top, 4)
         }
+    }
+
+    /// Bold 3+ char query tokens wherever they appear (mirrors Android `highlightTerms`).
+    private func highlight(_ text: String, _ query: String) -> AttributedString {
+        var out = AttributedString(text)
+        let terms = Set(query.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { $0.count >= 3 })
+        guard !terms.isEmpty else { return out }
+        let lower = text.lowercased()
+        for term in terms {
+            var search = lower.startIndex
+            while let r = lower.range(of: term, range: search..<lower.endIndex) {
+                let lo = lower.distance(from: lower.startIndex, to: r.lowerBound)
+                let hi = lower.distance(from: lower.startIndex, to: r.upperBound)
+                let a = out.characters.index(out.startIndex, offsetBy: lo)
+                let b = out.characters.index(out.startIndex, offsetBy: hi)
+                out[a..<b].font = .inter(13, .bold)
+                search = r.upperBound
+            }
+        }
+        return out
     }
 }
 
@@ -170,30 +257,36 @@ struct RenameDocumentSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Filename", text: $name)
+                TextField("Name", text: $name)
                     .onChange(of: name) { _, _ in byAgent = false }
                 Button {
                     suggesting = true
                     Task {
-                        if let s = await model.suggestDocumentName(doc.id) {
-                            name = s; byAgent = true
-                        }
+                        if let s = await model.suggestDocumentName(doc.id) { name = s; byAgent = true }
                         suggesting = false
                     }
                 } label: {
-                    if suggesting { ProgressView() } else { Label("Suggest with agent", systemImage: "sparkles") }
+                    if suggesting {
+                        HStack { ProgressView().controlSize(.small); Text("Thinking…") }
+                    } else {
+                        Label("Suggest with agent", systemImage: "sparkles")
+                    }
                 }
                 .disabled(suggesting)
+                if byAgent {
+                    Text("Agent suggestion — edit it or tap Save to confirm.")
+                        .appLabelSmall().foregroundStyle(Theme.textMuted)
+                }
             }
-            .navigationTitle("Rename").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Rename document").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        model.renameDocument(doc.id, filename: name, byAgent: byAgent)
+                        model.renameDocument(doc.id, filename: name.trimmingCharacters(in: .whitespaces), byAgent: byAgent)
                         dismiss()
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || name.trimmingCharacters(in: .whitespaces) == doc.filename)
                 }
             }
             .onAppear { name = doc.filename }

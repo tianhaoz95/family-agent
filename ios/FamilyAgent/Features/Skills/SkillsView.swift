@@ -7,7 +7,7 @@ struct SkillsView: View {
 
     var body: some View {
         ScrollView {
-            ScreenScaffold(title: "Skills", subtitle: "Playbooks the assistant can follow.") {
+            ScreenScaffold(title: "Skills", subtitle: "Named playbooks you teach the assistant \u{2014} step-by-step instructions it follows for a recurring family task.") {
                 VStack(alignment: .leading, spacing: 12) {
                     if model.isAdmin {
                         Button {
@@ -20,7 +20,7 @@ struct SkillsView: View {
                         Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
                     }
                     if model.skills.isEmpty {
-                        EmptyState(text: "No skills yet.", systemImage: "graduationcap")
+                        EmptyState(text: model.isAdmin ? "No skills yet. Add one to teach the assistant a repeatable task." : "No skills have been added yet.", systemImage: "graduationcap")
                     } else {
                         ForEach(model.skills) { skill in
                             AppCard {

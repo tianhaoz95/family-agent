@@ -29,16 +29,19 @@ struct ChatBubble: View {
                     CardView(card: card) { onCardSource(card) }
                 }
                 if !message.references.isEmpty {
-                    FlowLayout(spacing: 5) {
+                    FlowLayout(spacing: 6) {
                         ForEach(message.references) { ref in
                             Button { onReference(ref) } label: {
-                                Label(ref.label, systemImage: refIcon(ref.type))
-                                    .appLabelSmall()
-                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                Label(refLabel(ref), systemImage: refIcon(ref.type))
+                                    .font(.inter(12, .medium))
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 10).padding(.vertical, 5)
                                     .background(Theme.accentSoft, in: Capsule())
+                                    .foregroundStyle(Theme.accentInk)
                             }.buttonStyle(.plain)
                         }
                     }
+                    .frame(maxWidth: 320, alignment: .leading)
                 }
                 if !isUser && !isError {
                     HStack(spacing: 12) {
@@ -58,8 +61,12 @@ struct ChatBubble: View {
     private var bubble: some View {
         Group {
             if isUser {
-                HStack(spacing: 4) {
-                    if isForced { Image(systemName: "wrench.fill").font(.system(size: 10)) }
+                HStack(spacing: 5) {
+                    if isForced {
+                        Image(systemName: "hammer.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
                     Text(message.text).appBody().foregroundStyle(.white)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
@@ -71,16 +78,22 @@ struct ChatBubble: View {
                     .background(Theme.dangerSoft)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
             } else {
+                // Assistant bubble: sunk warm-gray, no border (matches Android's surfaceVariant).
                 AgentMarkdown(text: message.text)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(Theme.surface)
+                    .padding(.horizontal, 14).padding(.vertical, 11)
+                    .background(Theme.surfaceSunk)
                     .clipShape(UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 6, bottomTrailingRadius: 22, topTrailingRadius: 22))
-                    .overlay(
-                        UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 6, bottomTrailingRadius: 22, topTrailingRadius: 22)
-                            .stroke(Theme.border, lineWidth: 1)
-                    )
             }
         }
+    }
+
+    private func refLabel(_ ref: ChatReference) -> String {
+        guard ref.type == "link" else { return ref.label }
+        let s = ref.label
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+            .replacingOccurrences(of: "www.", with: "")
+        return String(s.prefix(40))
     }
 
     private func refIcon(_ type: String) -> String {

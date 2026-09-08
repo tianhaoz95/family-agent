@@ -46,6 +46,18 @@ func hhmm(fromMinutes total: Int) -> String {
     String(format: "%02d:%02d", (total / 60) % 24, total % 60)
 }
 
+/// "MMM d · h:mm a" for an ISO string — mirrors Android `shortWhen` (routines).
+func shortWhen(_ iso: String) -> String {
+    let parsers = [ISO8601DateFormatter(), { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()]
+    let date = parsers.compactMap { $0.date(from: iso) }.first
+        ?? { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd'T'HH:mm"; return f.date(from: String(iso.prefix(16))) }()
+    guard let date else { return iso }
+    let f = DateFormatter()
+    f.locale = .current
+    f.dateFormat = "MMM d · h:mm a"
+    return f.string(from: date)
+}
+
 /// Friendly relative-ish timestamp for an ISO string (activity, chat sessions).
 func friendlyTimestamp(_ iso: String) -> String {
     // Server sends ISO 8601; take the "T…" time or fall back to the raw string.

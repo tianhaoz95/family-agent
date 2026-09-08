@@ -289,29 +289,26 @@ struct StepsStrip: View {
     }
 }
 
-/// Friendly verb for one tool call — mirrors `stepVerb` in Components.kt.
+/// Friendly verb for one tool call — mirrors `stepVerb` in `DetailSheet.kt`.
 func stepVerb(_ s: ToolStep) -> String {
-    let map: [String: String] = [
-        "search_documents": "search documents",
-        "list_documents": "list documents",
-        "get_document": "open a document",
-        "save_extraction": "save document fields",
-        "search_tasks": "search events",
-        "list_tasks": "list events",
-        "create_task": "add an event",
-        "update_task": "update an event",
-        "list_sticky_notes": "read the board",
-        "add_sticky_note": "pin a note",
-        "list_family_tools": "list tools",
-        "describe_family_tool": "inspect a tool",
-        "call_family_tool": "use a tool",
-        "run_code": "run a calculation",
-        "web_search": "search the web",
-        "open_page": "open a web page",
-        "list_skills": "list skills",
-        "use_skill": "use a skill",
-        "current_datetime": "check the time",
-    ]
-    if let v = map[s.tool] { return v }
-    return s.tool.replacingOccurrences(of: "_", with: " ")
+    if s.tool == "task", let sub = s.subagent, !sub.isEmpty { return "Delegated to \(sub)" }
+    switch s.tool {
+    case "search_documents":  return "Searched documents"
+    case "list_documents":    return "Listed documents"
+    case "read_document":     return "Read a document"
+    case "search_tasks":      return "Searched tasks"
+    case "list_tasks":        return "Listed tasks"
+    case "create_task":       return "Created a task"
+    case "complete_task":     return "Completed a task"
+    case "list_sticky_notes": return "Read the notes board"
+    case "add_sticky_note":   return "Pinned a note"
+    case "run_code":          return "Ran a calculation"
+    case "web_search":        return "Searched the web"
+    case "open_page":         return "Opened a web page"
+    case "call_family_tool":  return "Used a family tool"
+    case "call_mcp_tool":     return "Called a connected service"
+    case "use_skill":         return "Loaded a skill"
+    case "current_datetime":  return "Checked the date"
+    default:                  return s.tool.replacingOccurrences(of: "_", with: " ")
+    }
 }

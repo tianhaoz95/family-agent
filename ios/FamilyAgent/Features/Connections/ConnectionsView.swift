@@ -6,7 +6,7 @@ struct ConnectionsView: View {
 
     var body: some View {
         ScrollView {
-            ScreenScaffold(title: "Connections", subtitle: "External MCP servers the assistant can reach.") {
+            ScreenScaffold(title: "Connections", subtitle: "External services (MCP) the assistant can call. Their results are treated as information only, never as instructions.") {
                 VStack(alignment: .leading, spacing: 12) {
                     Button {
                         editing = McpServer(name: "", transport: "http", enabled: true)

@@ -7,7 +7,7 @@ struct ToolsView: View {
 
     var body: some View {
         ScrollView {
-            ScreenScaffold(title: "Tools", subtitle: "Small web tools the family built. Describe one to make it.") {
+            ScreenScaffold(title: "Tools", subtitle: "Ask the agent to build a small web tool to help finish a task \u{2014} generated and run locally.") {
                 VStack(alignment: .leading, spacing: 12) {
                     AppCard {
                         TextField("e.g. a chore chart for the kids", text: $prompt, axis: .vertical)
@@ -26,7 +26,7 @@ struct ToolsView: View {
                     }
 
                     if model.tools.isEmpty {
-                        EmptyState(text: "No tools yet.", systemImage: "wrench.and.screwdriver")
+                        EmptyState(text: "No tools yet. Describe one above, or ask in Chat (\u{201C}build me a\u{2026}\u{201D}).", systemImage: "wrench.and.screwdriver")
                     } else {
                         ForEach(model.tools) { tool in
                             AppCard {

@@ -22,24 +22,24 @@ struct MessageBubble: View {
                 }
                 if !message.images.isEmpty { ImageStrip(uris: message.images) }
                 Group {
+                    let mine = UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20)
+                    let theirs = UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 6, bottomTrailingRadius: 20, topTrailingRadius: 20)
                     if message.pending {
-                        TypingDots()
+                        Text("Assistant is typing…").appBody().foregroundStyle(Theme.textMuted)
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .background(Theme.accentSoft).clipShape(theirs)
                     } else if isMe {
                         Text(message.body).appBody().foregroundStyle(.white)
                             .padding(.horizontal, 14).padding(.vertical, 10)
-                            .background(Theme.accent)
-                            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18, bottomTrailingRadius: 6, topTrailingRadius: 18))
+                            .background(Theme.accent).clipShape(mine)
                     } else if isAgent {
                         AgentMarkdown(text: message.body)
                             .padding(.horizontal, 14).padding(.vertical, 10)
-                            .background(Theme.accentSoft)
-                            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 6, bottomTrailingRadius: 18, topTrailingRadius: 18))
+                            .background(Theme.accentSoft).clipShape(theirs)
                     } else {
                         Text(message.body).appBody()
                             .padding(.horizontal, 14).padding(.vertical, 10)
-                            .background(Theme.surface)
-                            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 6, bottomTrailingRadius: 18, topTrailingRadius: 18))
-                            .overlay(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 6, bottomTrailingRadius: 18, topTrailingRadius: 18).stroke(Theme.border, lineWidth: 1))
+                            .background(Theme.surfaceSunk).clipShape(theirs)
                     }
                 }
                 if isAgent, !message.steps.isEmpty {

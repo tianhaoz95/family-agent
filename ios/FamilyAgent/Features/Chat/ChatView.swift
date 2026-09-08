@@ -1,18 +1,20 @@
 import SwiftUI
 import PhotosUI
 
-let FORCED_AGENT_KEYWORDS: [(String, String)] = [
+/// Keep in sync with `SLASH_COMMANDS` in `android/.../ui/ChatScreen.kt` and
+/// `FORCED_AGENT_KEYWORDS` in agent-core.
+let SLASH_COMMANDS: [(String, String)] = [
     ("build", "Build a new tool, or improve an existing one"),
     ("task", "Add, list, or complete a to-do"),
-    ("find", "Search the family's documents"),
+    ("find", "Search the family's documents (alias: /search)"),
     ("note", "Read or add a sticky note"),
-    ("schedule", "Create or manage a scheduled routine"),
-    ("web", "Search the web and read a page"),
-    ("run", "Process a file with command-line tools"),
-    ("calc", "Compute an exact answer"),
+    ("schedule", "Create or manage a scheduled routine (alias: /remind)"),
+    ("web", "Search the web and read a page (alias: /lookup)"),
+    ("run", "Process a file with command-line tools (alias: /shell)"),
+    ("calc", "Compute an exact answer — maths, dates, totals (alias: /compute)"),
     ("skill", "Use one of the family's taught skills"),
-    ("connect", "Use a connected external service"),
-    ("vault", "Look up a password or 2FA code"),
+    ("connect", "Use a connected external service (alias: /mcp)"),
+    ("vault", "Look up a password or 2FA code (alias: /password)"),
 ]
 
 struct ChatView: View {
@@ -21,34 +23,21 @@ struct ChatView: View {
     @State private var attached: [String] = []
     @State private var photoItem: PhotosPickerItem?
     @State private var showHistory = false
-    @State private var slashChip: String?
+    @State private var showSlashHelp = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // No app bar (Android parity) — a slim header row: title on the left
-            // (clearing the floating menu button), new-chat / history on the right.
-            HStack {
-                Text("Chat").appTitle().foregroundStyle(Theme.text)
-                Spacer()
-                Button { model.startNewChatSession() } label: {
-                    Image(systemName: "square.and.pencil").font(.system(size: 17))
-                }
-                Button { showHistory = true } label: {
-                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 17))
-                }
-            }
-            .foregroundStyle(Theme.accent)
-            .padding(.horizontal, 20)
-            .padding(.leading, 44)   // clear the menu button
-            .padding(.top, 10)
-            .padding(.bottom, 6)
+            header
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        if model.chatMessages.isEmpty {
-                            EmptyState(text: "Ask anything, or type / for a command.", systemImage: "bubble.left.and.bubble.right")
-                                .padding(.top, 40)
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        if model.chatMessages.isEmpty && !model.chatSending {
+                            EmptyState(
+                                text: "Start a conversation. Try \u{201C}Remind me to renew the car registration by Nov 1\u{201D}, or attach a photo.",
+                                systemImage: "bubble.left.and.bubble.right"
+                            )
+                            .padding(.top, 40)
                         }
                         ForEach(model.chatMessages) { msg in
                             ChatBubble(message: msg,
@@ -80,10 +69,15 @@ struct ChatView: View {
                 }
             }
 
+            if !attached.isEmpty {
+                ImageTray(images: $attached).padding(.horizontal, 16).padding(.bottom, 4)
+            }
+            if let matches = slashMatches {
+                slashAutocomplete(matches)
+            }
             composer
         }
         .background(Color.clear)
-        .scrollContentBackground(.hidden)
         .task {
             await model.refreshTools()
             #if DEBUG
@@ -92,9 +86,8 @@ struct ChatView: View {
             }
             #endif
         }
-        .sheet(isPresented: $showHistory) {
-            ChatSessionsView { showHistory = false }
-        }
+        .sheet(isPresented: $showHistory) { ChatSessionsView { showHistory = false } }
+        .sheet(isPresented: $showSlashHelp) { SlashHelpSheet(tools: model.tools) }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task {
@@ -107,125 +100,157 @@ struct ChatView: View {
         }
     }
 
-    private var canSend: Bool {
-        !input.trimmingCharacters(in: .whitespaces).isEmpty || !attached.isEmpty || slashChip != nil
+    // MARK: header (no app bar — Android parity)
+
+    private var header: some View {
+        HStack(spacing: 2) {
+            Text("Chat").appTitle().foregroundStyle(Theme.text)
+            Spacer()
+            Button { model.startNewChatSession() } label: {
+                Label("New", systemImage: "plus").font(.inter(13, .medium)).labelStyle(.titleAndIcon)
+            }
+            Button { showHistory = true } label: {
+                Label("History", systemImage: "clock.arrow.circlepath").font(.inter(13, .medium)).labelStyle(.titleAndIcon)
+            }
+            Button { showSlashHelp = true } label: {
+                Image(systemName: "questionmark.circle").font(.system(size: 17))
+            }
+        }
+        .foregroundStyle(Theme.accent)
+        .padding(.horizontal, 20)
+        .padding(.leading, 44)
+        .padding(.top, 10)
+        .padding(.bottom, 4)
+    }
+
+    // MARK: "/" autocomplete — while "/" + a partial name is typed (no space yet)
+
+    private var slashQuery: String? {
+        guard input.hasPrefix("/"), !input.dropFirst().contains(" ") else { return nil }
+        return String(input.dropFirst())
+    }
+    private var slashMatches: [(String, String)]? {
+        guard let q = slashQuery else { return nil }
+        let toolEntries = model.tools
+            .filter { $0.kind == "server" && $0.status == "ready" }
+            .map { ($0.name, $0.description) }
+        return (SLASH_COMMANDS + toolEntries).filter { $0.0.range(of: q, options: .caseInsensitive) != nil }
     }
 
     @ViewBuilder
-    private var composer: some View {
-        VStack(spacing: 8) {
-            if !slashCandidates.isEmpty && slashChip == nil {
-                SlashCommandMenu(candidates: slashCandidates) { cmd in
-                    slashChip = cmd
-                    input = ""
-                }
-                .padding(.horizontal, 12)
-            }
-            if !attached.isEmpty {
-                ImageTray(images: $attached).padding(.horizontal, 16)
-            }
-            HStack(alignment: .center, spacing: 4) {
-                PhotosPicker(selection: $photoItem, matching: .images) {
-                    Image(systemName: "photo")
-                        .font(.system(size: 19))
-                        .foregroundStyle(Theme.textMuted)
-                        .frame(width: 34, height: 34)
-                }
-
-                if let chip = slashChip {
-                    Button { slashChip = nil } label: {
-                        HStack(spacing: 3) {
-                            Text("/\(chip)").font(.inter(12.5, .semibold))
-                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+    private func slashAutocomplete(_ matches: [(String, String)]) -> some View {
+        AppCard {
+            if matches.isEmpty {
+                Text("No matching commands or tools.").appBody().foregroundStyle(Theme.textMuted)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(matches.prefix(8), id: \.0) { name, desc in
+                        Button { input = "/\(name) " } label: {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(name).font(.inter(14, .bold)).foregroundStyle(Theme.text)
+                                Text(desc).appBodySmall().foregroundStyle(Theme.textMuted).lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 9).padding(.vertical, 5)
-                        .background(Theme.accentSoft, in: Capsule())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
+    }
 
-                TextField(
-                    slashChip == nil ? "Ask anything, or type / for a command" : "Message",
-                    text: $input, axis: .vertical
-                )
+    // MARK: composer
+
+    private var canSend: Bool {
+        !input.trimmingCharacters(in: .whitespaces).isEmpty || !attached.isEmpty
+    }
+
+    private var composer: some View {
+        HStack(alignment: .center, spacing: 4) {
+            PhotosPicker(selection: $photoItem, matching: .images) {
+                Image(systemName: "photo").font(.system(size: 19))
+                    .foregroundStyle(Theme.accent).frame(width: 34, height: 34)
+            }
+            .disabled(attached.count >= 4)
+
+            TextField("Ask anything, or type /", text: $input, axis: .vertical)
                 .font(.inter(15))
                 .lineLimit(1...4)
                 .padding(.vertical, 7)
-                .padding(.leading, slashChip == nil ? 4 : 0)
-                .onChange(of: input) { _, v in
-                    if slashChip == nil, v.hasPrefix("/"), v.hasSuffix(" "),
-                       let kw = FORCED_AGENT_KEYWORDS.first(where: { "/\($0.0) " == v })?.0 {
-                        slashChip = kw
-                        input = ""
-                    }
-                }
+                .padding(.leading, 4)
 
-                if model.voiceEnabled {
-                    HoldToTalkMic(enabled: !model.chatSending, transcribing: model.chatTranscribing,
-                                  onDictate: { model.transcribeVoice($0) { input += $0 } },
-                                  onVoiceSend: { model.sendChatVoice($0) })
-                }
-
-                Button { send() } label: {
-                    Image(systemName: model.chatSending ? "stop.fill" : "arrow.up")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(canSend || model.chatSending ? Theme.accent : Theme.textFaint, in: Circle())
-                }
-                .disabled(!canSend && !model.chatSending)
+            if model.voiceEnabled {
+                HoldToTalkMic(enabled: !model.chatSending, transcribing: model.chatTranscribing,
+                              onDictate: { model.transcribeVoice($0) { t in
+                                  input = input.isEmpty ? t : "\(input.trimmingCharacters(in: .whitespaces)) \(t)"
+                              } },
+                              onVoiceSend: { model.sendChatVoice($0) })
             }
-            .padding(.leading, 8)
-            .padding(.trailing, 6)
-            .padding(.vertical, 4)
-            .glass(.floating, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
-    }
 
-    private var slashCandidates: [(String, String)] {
-        guard input.hasPrefix("/") else { return [] }
-        let q = input.dropFirst().lowercased()
-        let kws = FORCED_AGENT_KEYWORDS.filter { $0.0.hasPrefix(q) }
-        let toolNames = model.tools
-            .filter { $0.kind == "server" && $0.status == "ready" }
-            .map { ($0.name, "Use the \($0.name) tool") }
-            .filter { q.isEmpty || $0.0.lowercased().hasPrefix(q) }
-        return kws + toolNames
+            Button { send() } label: {
+                Image(systemName: model.chatSending ? "stop.fill" : "arrow.up")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(canSend || model.chatSending ? Theme.accent : Theme.textFaint, in: Circle())
+            }
+            .disabled(!canSend && !model.chatSending)
+        }
+        .padding(.leading, 8).padding(.trailing, 6).padding(.vertical, 4)
+        .glass(.floating, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .padding(.horizontal, 12).padding(.bottom, 8)
     }
 
     private func send() {
-        if model.chatSending { return }
-        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        let wire = slashChip.map { "/\($0) \(text)" } ?? text
-        model.sendChat(wire, images: attached)
+        guard !model.chatSending, canSend else { return }
+        model.sendChat(input.trimmingCharacters(in: .whitespacesAndNewlines), images: attached)
         input = ""
         attached = []
-        slashChip = nil
     }
 }
 
-struct SlashCommandMenu: View {
-    let candidates: [(String, String)]
-    let onPick: (String) -> Void
+/// The "?" bottom sheet explaining the "/" commands — mirrors Android's `SlashHelpSheet`.
+struct SlashHelpSheet: View {
+    let tools: [Tool]
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(candidates.prefix(6), id: \.0) { cmd in
-                Button { onPick(cmd.0) } label: {
-                    HStack {
-                        Text("/\(cmd.0)").font(.inter(13, .semibold)).foregroundStyle(Theme.accent)
-                        Text(cmd.1).appLabelSmall().foregroundStyle(Theme.textMuted).lineLimit(1)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 8)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Slash commands").font(.inter(20, .bold))
+                Spacer().frame(height: 8)
+                Text("Start a message with \u{201C}/\u{201D} to skip the assistant's own routing and send that turn straight to one specialist — useful when it doesn't otherwise pick the right one.")
+                    .appBodySmall().foregroundStyle(Theme.textMuted)
+                Spacer().frame(height: 16)
+                Text("COMMANDS").font(.inter(12, .bold)).foregroundStyle(Theme.textMuted)
+                Spacer().frame(height: 6)
+                ForEach(SLASH_COMMANDS, id: \.0) { row("/\($0.0)", $0.1) }
+                Spacer().frame(height: 16)
+                Text("OR ONE OF THE FAMILY'S TOOLS, BY NAME").font(.inter(12, .bold)).foregroundStyle(Theme.textMuted)
+                Spacer().frame(height: 6)
+                let ready = tools.filter { $0.kind == "server" && $0.status == "ready" }
+                if ready.isEmpty {
+                    Text("The family hasn't built any tools yet — see the Tools tab.")
+                        .appBody().foregroundStyle(Theme.textMuted)
+                } else {
+                    ForEach(ready) { row("/\($0.name)", $0.description) }
                 }
-                .buttonStyle(.plain)
-                Divider()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
         }
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder
+    private func row(_ command: String, _ description: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(command).font(.inter(14, .bold)).foregroundStyle(Theme.text)
+            Text(description).appBodySmall().foregroundStyle(Theme.textMuted)
+        }
+        .padding(.vertical, 4)
     }
 }
