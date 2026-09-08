@@ -10,7 +10,7 @@ deviation, see `docs/DECISIONS.md` — this file is the *what happened*.
   Gradle, no `ANDROID_HOME`. No `cargo tauri` CLI (used the npm
   `@tauri-apps/cli` instead — same tool, prebuilt binary, no compile step).
 - `ollama` binary present but no server running; `OLLAMA_HOST` env var
-  pointed at a Tailscale IP (`100.99.232.57`) not reachable from this
+  pointed at a Tailscale address on another machine, not reachable from this
   session's network namespace. A system-level `ollama serve` (user `ollama`,
   systemd-managed) was already listening on `127.0.0.1:11434` despite that —
   used that instance directly rather than starting a second one.
