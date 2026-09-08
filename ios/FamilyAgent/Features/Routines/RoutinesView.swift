@@ -62,7 +62,7 @@ struct RoutineCard: View {
             HStack {
                 Text(routine.name).appTitleSmall()
                 Spacer()
-                Toggle("", isOn: Binding(get: { routine.enabled }, set: onToggle)).labelsHidden()
+                Toggle("", isOn: Binding(get: { routine.enabled }, set: { onToggle($0) })).labelsHidden()
             }
             Text(routine.triggerText).appBodySmall().foregroundStyle(Theme.textBody)
             if let next = routine.nextRunAt {

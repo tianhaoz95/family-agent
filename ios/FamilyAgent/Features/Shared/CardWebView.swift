@@ -92,8 +92,9 @@ private struct SealedWebView: UIViewRepresentable {
                 "window.webkit.messageHandlers.card.postMessage(document.body.scrollHeight);"
             )
         }
+        @MainActor
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                     decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
             // Allow only the initial in-memory load.
             decisionHandler(loaded ? .cancel : .allow)
         }

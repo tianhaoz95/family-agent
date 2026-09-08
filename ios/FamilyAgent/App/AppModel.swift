@@ -270,7 +270,7 @@ final class AppModel {
             return try await op()
         } catch APIError.unauthorized {
             settings.clearSession()
-            if case let .authed = auth {
+            if case .authed = auth {
                 auth = .needLogin(serverURL: serverURL, serverName: settings.session?.serverName ?? "", error: "Your session expired — sign in again.")
             }
             return nil

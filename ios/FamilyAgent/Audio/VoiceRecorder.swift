@@ -1,23 +1,22 @@
+@preconcurrency import AVFoundation
 import Foundation
-import AVFoundation
 
 /// Records mic audio as 16 kHz mono 16-bit PCM and returns a WAV — the iOS
 /// mirror of `android/.../ui/VoiceRecorder.kt`. `amplitude` (0…1, smoothed RMS)
 /// drives the push-to-talk waveform, matching the Android constants
 /// (`min(1, s*6)`, fast-attack/slow-release).
 ///
-/// Confined to main-actor use; the tap callback is self-contained.
+/// The engine tap runs on the audio render thread; it feeds a lock-guarded
+/// `Sink`, and amplitude updates hop to the main actor. Public API is used
+/// only from the main actor.
 @MainActor
 final class VoiceRecorder {
     private let engine = AVAudioEngine()
-    private var converter: AVAudioConverter?
-    private var pcm = Data()
-    private var smoothed: Float = 0
+    private let sink = Sink()
     private(set) var amplitude: Float = 0
     private(set) var isRecording = false
-
-    /// Called on the main actor each time `amplitude` updates.
     var onAmplitude: ((Float) -> Void)?
+    private var tickTask: Task<Void, Never>?
 
     static func requestPermission() async -> Bool {
         await withCheckedContinuation { cont in
@@ -31,82 +30,108 @@ final class VoiceRecorder {
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.duckOthers, .defaultToSpeaker])
         try session.setActive(true)
 
-        pcm.removeAll(keepingCapacity: true)
-        smoothed = 0
+        sink.reset()
         amplitude = 0
 
         let input = engine.inputNode
         let inFormat = input.inputFormat(forBus: 0)
         guard let outFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
-                                            sampleRate: 16_000, channels: 1, interleaved: true) else {
+                                            sampleRate: 16_000, channels: 1, interleaved: true),
+              let converter = AVAudioConverter(from: inFormat, to: outFormat) else {
             throw NSError(domain: "VoiceRecorder", code: 1)
         }
-        converter = AVAudioConverter(from: inFormat, to: outFormat)
+        sink.converter = converter
+        sink.outFormat = outFormat
 
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { [weak self] buffer, _ in
-            guard let self, let converter = self.converterRef else { return }
-            let ratio = 16_000.0 / inFormat.sampleRate
-            let cap = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 64)
-            guard let out = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: cap) else { return }
-            var fed = false
-            var err: NSError?
-            converter.convert(to: out, error: &err) { _, status in
-                if fed { status.pointee = .noDataNow; return nil }
-                fed = true
-                status.pointee = .haveData
-                return buffer
-            }
-            if err != nil { return }
-            self.consume(out)
+        let sink = self.sink
+        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { buffer, _ in
+            sink.feed(buffer)
         }
         engine.prepare()
         try engine.start()
         isRecording = true
-    }
 
-    private var converterRef: AVAudioConverter? { converter }
-
-    private nonisolated func consume(_ out: AVAudioPCMBuffer) {
-        guard let ch = out.int16ChannelData else { return }
-        let n = Int(out.frameLength)
-        let samples = ch[0]
-        var sum: Double = 0
-        var bytes = Data(capacity: n * 2)
-        for i in 0..<n {
-            let s = samples[i]
-            withUnsafeBytes(of: s.littleEndian) { bytes.append(contentsOf: $0) }
-            let f = Double(s) / 32768.0
-            sum += f * f
-        }
-        let rms = n > 0 ? Float(sqrt(sum / Double(n))) : 0
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.pcm.append(bytes)
-            self.smoothed = rms > self.smoothed
-                ? rms * 0.6 + self.smoothed * 0.4
-                : rms * 0.2 + self.smoothed * 0.8
-            self.amplitude = min(1, self.smoothed * 6)
-            self.onAmplitude?(self.amplitude)
+        tickTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(50))
+                guard let self else { return }
+                let a = self.sink.currentAmplitude
+                self.amplitude = a
+                self.onAmplitude?(a)
+            }
         }
     }
 
     func stop() -> Data {
         guard isRecording else { return Data() }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        isRecording = false
-        amplitude = 0
-        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        finish()
+        let pcm = sink.drain()
         return pcm.isEmpty ? Data() : WAV.wrap(pcm)
     }
 
     func cancel() {
         guard isRecording else { return }
+        finish()
+        _ = sink.drain()
+    }
+
+    private func finish() {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRecording = false
         amplitude = 0
-        pcm.removeAll()
+        tickTask?.cancel()
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+
+    /// Lock-guarded PCM accumulator + RMS meter, safe to call from the render thread.
+    private final class Sink: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pcm = Data()
+        private var smoothed: Float = 0
+        var converter: AVAudioConverter?
+        var outFormat: AVAudioFormat?
+
+        func reset() { lock.lock(); pcm.removeAll(); smoothed = 0; lock.unlock() }
+        func drain() -> Data { lock.lock(); defer { lock.unlock() }; let d = pcm; pcm = Data(); return d }
+        var currentAmplitude: Float { lock.lock(); defer { lock.unlock() }; return min(1, smoothed * 6) }
+
+        func feed(_ buffer: AVAudioPCMBuffer) {
+            guard let converter, let outFormat else { return }
+            let inRate = buffer.format.sampleRate
+            let cap = AVAudioFrameCount(Double(buffer.frameLength) * (16_000.0 / inRate) + 64)
+            guard let out = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: cap) else { return }
+            let provided = ProvideOnce(buffer)
+            var err: NSError?
+            converter.convert(to: out, error: &err) { _, status in provided.next(status) }
+            guard err == nil, let ch = out.int16ChannelData else { return }
+            let n = Int(out.frameLength)
+            var sum = 0.0
+            var bytes = Data(capacity: n * 2)
+            for i in 0..<n {
+                let s = ch[0][i]
+                withUnsafeBytes(of: s.littleEndian) { bytes.append(contentsOf: $0) }
+                let f = Double(s) / 32768.0
+                sum += f * f
+            }
+            let rms = n > 0 ? Float((sum / Double(n)).squareRoot()) : 0
+            lock.lock()
+            pcm.append(bytes)
+            smoothed = rms > smoothed ? rms * 0.6 + smoothed * 0.4 : rms * 0.2 + smoothed * 0.8
+            lock.unlock()
+        }
+    }
+
+    /// One-shot converter input source (avoids a captured mutable `Bool`).
+    private final class ProvideOnce: @unchecked Sendable {
+        private let buffer: AVAudioPCMBuffer
+        private var used = false
+        init(_ b: AVAudioPCMBuffer) { buffer = b }
+        func next(_ status: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
+            if used { status.pointee = .noDataNow; return nil }
+            used = true
+            status.pointee = .haveData
+            return buffer
+        }
     }
 }

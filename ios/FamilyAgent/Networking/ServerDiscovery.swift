@@ -164,9 +164,9 @@ final class ServerDiscovery: Sendable {
             let flags = Int32(addr.pointee.ifa_flags)
             guard (flags & IFF_UP) == IFF_UP, (flags & IFF_LOOPBACK) == 0,
                   let sa = addr.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
-            let ip = String(cString: host)
+            var hostBuf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            getnameinfo(sa, socklen_t(sa.pointee.sa_len), &hostBuf, socklen_t(hostBuf.count), nil, 0, NI_NUMERICHOST)
+            let ip = String(decoding: hostBuf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
             guard ip.hasPrefix("192.168.") || ip.hasPrefix("10.") || ip.hasPrefix("172.") else { continue }
             let parts = ip.split(separator: ".")
             guard parts.count == 4, let selfLast = Int(parts[3]) else { continue }
