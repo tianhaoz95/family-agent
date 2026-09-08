@@ -14,6 +14,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -298,6 +300,80 @@ fun TypingDots(modifier: Modifier = Modifier) {
                         .clip(CircleShape)
                         .background(hues[i]),
                 )
+            }
+        }
+    }
+}
+
+/** A compact strip summarising the tool calls behind an assistant reply.
+ *  Tap to open the full "Under the hood" detail sheet. Live = still running. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+fun StepsStrip(
+    steps: List<app.familyagent.android.data.ToolStep>,
+    live: Boolean,
+    onClick: () -> Unit,
+) {
+    val running = steps.any { it.phase == "running" } || (live && steps.isEmpty())
+    val errored = steps.any { it.phase == "error" }
+    Surface(
+        onClick = onClick,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 11.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                if (running) {
+                    CircularProgressIndicator(Modifier.size(11.dp), strokeWidth = 1.6.dp, color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        if (steps.isEmpty()) "Working…" else "Working — ${steps.size} tool call${if (steps.size == 1) "" else "s"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    Text(
+                        if (errored) "!" else "✓",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (errored) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        "${steps.size} tool call${if (steps.size == 1) "" else "s"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AppAccents.textSecondary,
+                    )
+                }
+            }
+            if (steps.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    steps.take(8).forEach { s ->
+                        val dotColor = when (s.phase) {
+                            "running" -> MaterialTheme.colorScheme.primary
+                            "error" -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.primary
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(999.dp),
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Box(Modifier.size(5.dp).clip(CircleShape).background(dotColor))
+                                Text(
+                                    stepVerb(s),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (s.phase == "error") MaterialTheme.colorScheme.error else AppAccents.textSecondary,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

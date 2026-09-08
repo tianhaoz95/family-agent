@@ -142,8 +142,37 @@ export interface Message {
   body: string;
   /** Image attachments as data URIs — same as the 1:1 chat composer. */
   images: string[];
+  /** Tool calls the assistant made for this reply (agent messages). */
+  steps: ToolStep[];
+  /** Generated HTML cards attached to this reply (agent messages). */
+  cards: Card[];
   pending: boolean;
   createdAt: string;
+}
+
+/** A generated HTML card — see agent-core/src/cards/. `html` is the full
+ *  sealed document to drop into a sandboxed iframe; `fragment` is the raw
+ *  snippet the model wrote (for "view code"). */
+export interface Card {
+  id: string;
+  title: string;
+  html: string;
+  fragment: string;
+}
+
+/** One tool call the agent made during a turn — see agent-core/src/agents/steps.ts. */
+export interface ToolStep {
+  id: string;
+  tool: string;
+  /** For a `task` delegation: the subagent it was handed to. */
+  subagent?: string;
+  phase: "running" | "done" | "error";
+  input: unknown;
+  output?: string;
+  error?: string;
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
 }
 
 /** senderId of an assistant message (mirrors AGENT_SENDER_ID server-side). */
@@ -165,6 +194,10 @@ export interface ChatSessionMessage {
   body: string;
   images: string[];
   refs: ChatReference[];
+  /** Tool calls the assistant made for this reply (assistant turns). */
+  steps: ToolStep[];
+  /** Generated HTML cards attached to this reply (assistant turns). */
+  cards: Card[];
   createdAt: string;
 }
 
@@ -361,6 +394,76 @@ export interface Health {
   skills?: "full" | "docs-only" | "off";
   /** "on" = MCP enabled with ≥1 connected server; "no-servers" = enabled, none configured; "off". */
   mcp?: "on" | "no-servers" | "off";
+  /** "on" when the password vault feature is enabled — the Vault nav item hides when "off". */
+  vault?: "on" | "off";
+  /** Whether the assistant may read the vault via the "/vault" chat command. */
+  vaultAi?: boolean;
+  /** "on" when the assistant may answer with a generated HTML card (render_card). */
+  cards?: "on" | "off";
+}
+
+// ---- password vault ----
+
+export type VaultScope = "private" | "shared";
+
+export interface VaultEntry {
+  id: string;
+  userId: string;
+  scope: VaultScope;
+  folder: string | null;
+  title: string;
+  username: string | null;
+  url: string | null;
+  hasTotp: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VaultSecret {
+  password?: string;
+  totp?: { secret: string; digits: number; period: number; algorithm: string; issuer?: string };
+  notes?: string;
+  fields?: { label: string; value: string; secret?: boolean }[];
+}
+
+export interface VaultEntryDetail extends VaultEntry {
+  secret: VaultSecret;
+}
+
+export interface VaultStatus {
+  enabled: boolean;
+  aiEnabled: boolean;
+  exists: boolean;
+  unlocked: boolean;
+  hasRecovery: boolean;
+  hasSharedAccess: boolean;
+  familyVaultInitialised: boolean;
+  entryCount: number;
+}
+
+export interface VaultAccessLogEntry {
+  id: string;
+  entryId: string | null;
+  entryTitle: string;
+  actor: string;
+  action: string;
+  at: string;
+}
+
+export interface VaultEntryInput {
+  scope: VaultScope;
+  title: string;
+  folder?: string | null;
+  username?: string | null;
+  url?: string | null;
+  password?: string | null;
+  totpInput?: string | null;
+  notes?: string | null;
+  fields?: { label: string; value: string; secret?: boolean }[];
+}
+
+export interface VaultEntryPatch extends Partial<Omit<VaultEntryInput, "scope">> {
+  clearTotp?: boolean;
 }
 
 // ---- skills ----
@@ -456,6 +559,8 @@ export interface Settings {
   /** The Kokoro voice used for voice output — editable here. */
   ttsVoice: string;
   serverName: string;
+  /** Whether the assistant may answer with a generated HTML card — admin-toggleable. */
+  cardsEnabled: boolean;
   isAdmin: boolean;
   /** Fields pinned by an env var — read-only in the UI. */
   envLocked: {
@@ -466,6 +571,7 @@ export interface Settings {
     asrModel: boolean;
     ttsVoice: boolean;
     serverName: boolean;
+    cardsEnabled: boolean;
   };
 }
 
@@ -477,6 +583,7 @@ export interface SettingsPatch {
   asrModel?: string;
   ttsVoice?: string;
   serverName?: string;
+  cardsEnabled?: boolean;
 }
 
 // Separate from request() because a file upload must NOT set
@@ -534,12 +641,33 @@ export const api = {
   updateSettings: (patch: SettingsPatch) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(patch) }),
   listOllamaModels: () => request<{ models: string[]; reachable: boolean }>("/ollama/models"),
-  chat: (message: string, images: string[] = [], sessionId?: string, signal?: AbortSignal) =>
-    request<{ reply: string; references?: ChatReference[]; sessionId: string }>("/chat", {
+  chat: (
+    message: string,
+    images: string[] = [],
+    sessionId?: string,
+    signal?: AbortSignal,
+    turnId?: string
+  ) =>
+    request<{
+      reply: string;
+      references?: ChatReference[];
+      steps?: ToolStep[];
+      cards?: Card[];
+      sessionId: string;
+    }>("/chat", {
       method: "POST",
-      body: JSON.stringify({ message, ...(images.length ? { images } : {}), ...(sessionId ? { sessionId } : {}) }),
+      body: JSON.stringify({
+        message,
+        ...(images.length ? { images } : {}),
+        ...(sessionId ? { sessionId } : {}),
+        ...(turnId ? { turnId } : {}),
+      }),
       signal,
     }),
+  /** Poll the tool calls made so far by an in-flight turn (1:1 chat turnId, or
+   *  a family-channel pending message id). */
+  turnSteps: (turnId: string) =>
+    request<{ steps: ToolStep[]; done: boolean }>(`/chat/turns/${encodeURIComponent(turnId)}`),
   listChatSessions: () => request<{ sessions: ChatSession[] }>("/chat/sessions"),
   getChatSessionMessages: (id: string) =>
     request<{ messages: ChatSessionMessage[] }>(`/chat/sessions/${id}/messages`),
@@ -730,6 +858,37 @@ export const api = {
   updateNote: (id: string, patch: { text?: string; color?: string; x?: number; y?: number }) =>
     request<{ note: StickyNote }>(`/notes/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteNote: (id: string) => request<{ note: StickyNote }>(`/notes/${id}`, { method: "DELETE" }),
+  // ---- password vault ----
+  vaultStatus: () => request<VaultStatus>("/vault/status"),
+  vaultSetup: (password: string) =>
+    request<{ ok: true; recoveryCode: string; status: VaultStatus }>("/vault/setup", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+  vaultUnlock: (password: string) =>
+    request<{ ok: true; status: VaultStatus }>("/vault/unlock", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+  vaultLock: () => request<{ ok: true; status: VaultStatus }>("/vault/lock", { method: "POST" }),
+  vaultRecover: (recoveryCode: string, password: string) =>
+    request<{ ok: true; recoveryCode: string; status: VaultStatus }>("/vault/recover", {
+      method: "POST",
+      body: JSON.stringify({ recoveryCode, password }),
+    }),
+  vaultFamilySync: () => request<{ ok: true; granted: number }>("/vault/family/sync", { method: "POST" }),
+  listVaultEntries: () => request<{ entries: VaultEntry[] }>("/vault/entries"),
+  getVaultEntry: (id: string) => request<{ entry: VaultEntryDetail }>(`/vault/entries/${id}`),
+  createVaultEntry: (body: VaultEntryInput) =>
+    request<{ entry: VaultEntry }>("/vault/entries", { method: "POST", body: JSON.stringify(body) }),
+  updateVaultEntry: (id: string, patch: VaultEntryPatch) =>
+    request<{ entry: VaultEntry }>(`/vault/entries/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteVaultEntry: (id: string) =>
+    request<{ deleted: true; entry: VaultEntry }>(`/vault/entries/${id}`, { method: "DELETE" }),
+  vaultTotp: (id: string) =>
+    request<{ code: string; expiresInSeconds: number }>(`/vault/entries/${id}/totp`),
+  vaultAccessLog: () => request<{ entries: VaultAccessLogEntry[] }>("/vault/access-log"),
+
   listTools: () => request<{ tools: Tool[] }>("/tools"),
   buildTool: (prompt: string) =>
     request<{ building: true; prompt: string }>("/tools", { method: "POST", body: JSON.stringify({ prompt }) }),

@@ -119,8 +119,22 @@ class FamilyAgentApi(
         runCatching { sendNoBody("POST", "/auth/logout") }
     }
 
-    suspend fun chat(message: String, images: List<String> = emptyList(), sessionId: String? = null): ChatResponse =
-        json.decodeFromString(send("POST", "/chat", json.encodeToString(ChatRequest(message, images, sessionId))))
+    suspend fun chat(
+        message: String,
+        images: List<String> = emptyList(),
+        sessionId: String? = null,
+        turnId: String? = null,
+    ): ChatResponse =
+        json.decodeFromString(send("POST", "/chat", json.encodeToString(ChatRequest(message, images, sessionId, turnId))))
+
+    /** Poll the tool calls made so far by an in-flight turn. */
+    suspend fun turnSteps(turnId: String): TurnStepsResponse =
+        json.decodeFromString(get("/chat/turns/${turnId.encodeQuery()}"))
+
+    suspend fun getSettings(): ServerSettings = json.decodeFromString(get("/settings"))
+
+    suspend fun setCardsEnabled(enabled: Boolean): ServerSettings =
+        json.decodeFromString(send("PUT", "/settings", json.encodeToString(UpdateSettingsRequest(cardsEnabled = enabled))))
 
     // ---- chat history sessions (private 1:1 assistant chat) ----
     suspend fun listChatSessions(): List<ChatSession> =
@@ -409,6 +423,49 @@ class FamilyAgentApi(
     suspend fun deleteTool(id: String) {
         sendNoBody("DELETE", "/tools/$id")
     }
+
+    // ---- password vault ----
+
+    suspend fun vaultStatus(): VaultStatus = json.decodeFromString(get("/vault/status"))
+
+    suspend fun vaultSetup(password: String): VaultSetupResponse =
+        json.decodeFromString(send("POST", "/vault/setup", json.encodeToString(VaultPasswordRequest(password))))
+
+    suspend fun vaultUnlock(password: String): VaultUnlockResponse =
+        json.decodeFromString(send("POST", "/vault/unlock", json.encodeToString(VaultPasswordRequest(password))))
+
+    suspend fun vaultLock(): VaultUnlockResponse =
+        json.decodeFromString(sendNoBody("POST", "/vault/lock"))
+
+    suspend fun vaultRecover(recoveryCode: String, password: String): VaultSetupResponse =
+        json.decodeFromString(
+            send("POST", "/vault/recover", json.encodeToString(VaultRecoverRequest(recoveryCode, password)))
+        )
+
+    suspend fun vaultFamilySync(): VaultFamilySyncResponse =
+        json.decodeFromString(sendNoBody("POST", "/vault/family/sync"))
+
+    suspend fun listVaultEntries(): List<VaultEntry> =
+        json.decodeFromString<VaultEntriesResponse>(get("/vault/entries")).entries
+
+    suspend fun getVaultEntry(id: String): VaultEntryDetail =
+        json.decodeFromString<VaultEntryDetailResponse>(get("/vault/entries/$id")).entry
+
+    suspend fun createVaultEntry(req: CreateVaultEntryRequest): VaultEntry =
+        json.decodeFromString<VaultEntryResponse>(send("POST", "/vault/entries", json.encodeToString(req))).entry
+
+    suspend fun updateVaultEntry(id: String, req: UpdateVaultEntryRequest): VaultEntry =
+        json.decodeFromString<VaultEntryResponse>(send("PATCH", "/vault/entries/$id", json.encodeToString(req))).entry
+
+    suspend fun deleteVaultEntry(id: String) {
+        sendNoBody("DELETE", "/vault/entries/$id")
+    }
+
+    suspend fun vaultTotp(id: String): VaultTotpResponse =
+        json.decodeFromString(get("/vault/entries/$id/totp"))
+
+    suspend fun vaultAccessLog(): List<VaultAccessLogEntry> =
+        json.decodeFromString<VaultAccessLogResponse>(get("/vault/access-log")).entries
 
     /** Uploads a PDF, photo, or camera scan — the actual "scan a document" path. */
     suspend fun uploadDocument(filename: String, bytes: ByteArray, mimeType: String?): Document =

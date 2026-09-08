@@ -102,6 +102,12 @@ data class HealthResponse(
     val skills: String = "off",
     /** "on" = MCP enabled with ≥1 connected server; "no-servers" = enabled, none; "off". */
     val mcp: String = "off",
+    /** "on" when the password vault feature is enabled — the Vault drawer item hides when "off". */
+    val vault: String = "off",
+    /** Whether the assistant may read the vault via the "/vault" chat command. */
+    val vaultAi: Boolean = false,
+    /** "on" when the assistant may answer with a generated HTML card (render_card). */
+    val cards: String = "off",
 )
 
 @Serializable
@@ -154,13 +160,66 @@ data class ChatRequest(
     val images: List<String> = emptyList(),
     // The persisted chat session to continue; null starts (server-side, lazily) a new one.
     val sessionId: String? = null,
+    // Client-generated id for polling GET /chat/turns/:turnId for live tool-call
+    // visibility while the reply is in flight.
+    val turnId: String? = null,
 )
 
 @Serializable
 data class ChatReference(val type: String, val id: String, val label: String)
 
+/** One tool call the agent made during a turn — see agent-core/src/agents/steps.ts. */
 @Serializable
-data class ChatResponse(val reply: String, val references: List<ChatReference> = emptyList(), val sessionId: String)
+data class ToolStep(
+    val id: String,
+    val tool: String,
+    val subagent: String? = null,
+    val phase: String = "done",
+    val input: kotlinx.serialization.json.JsonElement? = null,
+    val output: String? = null,
+    val error: String? = null,
+    val startedAt: String = "",
+    val endedAt: String? = null,
+    val durationMs: Long? = null,
+)
+
+/** A generated HTML card — see agent-core/src/cards/. `html` is the full sealed
+ *  document for a sandboxed WebView; `fragment` is the raw snippet (for "view code"). */
+@Serializable
+data class Card(
+    val id: String,
+    val title: String,
+    val html: String = "",
+    val fragment: String = "",
+)
+
+@Serializable
+data class ChatResponse(
+    val reply: String,
+    val references: List<ChatReference> = emptyList(),
+    val steps: List<ToolStep> = emptyList(),
+    val cards: List<Card> = emptyList(),
+    val sessionId: String,
+)
+
+// ---- server settings (machine-wide, from GET/PUT /settings) ----
+
+@Serializable
+data class ServerSettings(
+    val serverName: String = "",
+    val cardsEnabled: Boolean = true,
+    val isAdmin: Boolean = false,
+    val envLocked: EnvLocked = EnvLocked(),
+)
+
+@Serializable
+data class EnvLocked(val cardsEnabled: Boolean = false)
+
+@Serializable
+data class UpdateSettingsRequest(val cardsEnabled: Boolean? = null)
+
+@Serializable
+data class TurnStepsResponse(val steps: List<ToolStep> = emptyList(), val done: Boolean = false)
 
 // ---- chat history sessions (private 1:1 assistant chat) ----
 
@@ -181,6 +240,8 @@ data class ChatSessionMessage(
     val body: String,
     val images: List<String> = emptyList(),
     val refs: List<ChatReference> = emptyList(),
+    val steps: List<ToolStep> = emptyList(),
+    val cards: List<Card> = emptyList(),
     val createdAt: String,
 )
 
@@ -290,6 +351,10 @@ data class Message(
     val body: String,
     /** Image attachments as data URIs — same as the 1:1 chat composer. */
     val images: List<String> = emptyList(),
+    /** Tool calls the assistant made for this reply (agent messages). */
+    val steps: List<ToolStep> = emptyList(),
+    /** Generated HTML cards attached to this reply (agent messages). */
+    val cards: List<Card> = emptyList(),
     val pending: Boolean = false,
     val createdAt: String,
 )
@@ -528,3 +593,134 @@ data class McpToolInfo(val server: String, val name: String, val description: St
 
 @Serializable
 data class McpToolsResponse(val tools: List<McpToolInfo> = emptyList())
+
+// ---- password vault ----
+
+@Serializable
+data class VaultStatus(
+    val enabled: Boolean = false,
+    val aiEnabled: Boolean = false,
+    val exists: Boolean = false,
+    val unlocked: Boolean = false,
+    val hasRecovery: Boolean = false,
+    val hasSharedAccess: Boolean = false,
+    val familyVaultInitialised: Boolean = false,
+    val entryCount: Int = 0,
+)
+
+@Serializable
+data class VaultEntry(
+    val id: String,
+    val userId: String = "",
+    val scope: String = "private",
+    val folder: String? = null,
+    val title: String,
+    val username: String? = null,
+    val url: String? = null,
+    val hasTotp: Boolean = false,
+    val createdAt: String = "",
+    val updatedAt: String = "",
+)
+
+@Serializable
+data class VaultTotpConfig(
+    val secret: String = "",
+    val digits: Int = 6,
+    val period: Int = 30,
+    val algorithm: String = "SHA1",
+    val issuer: String? = null,
+)
+
+@Serializable
+data class VaultCustomField(val label: String, val value: String, val secret: Boolean = false)
+
+@Serializable
+data class VaultSecret(
+    val password: String? = null,
+    val totp: VaultTotpConfig? = null,
+    val notes: String? = null,
+    val fields: List<VaultCustomField> = emptyList(),
+)
+
+@Serializable
+data class VaultEntryDetail(
+    val id: String,
+    val userId: String = "",
+    val scope: String = "private",
+    val folder: String? = null,
+    val title: String,
+    val username: String? = null,
+    val url: String? = null,
+    val hasTotp: Boolean = false,
+    val createdAt: String = "",
+    val updatedAt: String = "",
+    val secret: VaultSecret = VaultSecret(),
+)
+
+@Serializable
+data class VaultAccessLogEntry(
+    val id: String,
+    val entryId: String? = null,
+    val entryTitle: String,
+    val actor: String,
+    val action: String,
+    val at: String,
+)
+
+@Serializable
+data class VaultEntriesResponse(val entries: List<VaultEntry> = emptyList())
+
+@Serializable
+data class VaultEntryResponse(val entry: VaultEntry)
+
+@Serializable
+data class VaultEntryDetailResponse(val entry: VaultEntryDetail)
+
+@Serializable
+data class VaultAccessLogResponse(val entries: List<VaultAccessLogEntry> = emptyList())
+
+@Serializable
+data class VaultPasswordRequest(val password: String)
+
+@Serializable
+data class VaultRecoverRequest(val recoveryCode: String, val password: String)
+
+@Serializable
+data class VaultSetupResponse(
+    val ok: Boolean = true,
+    val recoveryCode: String = "",
+    val status: VaultStatus = VaultStatus(),
+)
+
+@Serializable
+data class VaultUnlockResponse(val ok: Boolean = true, val status: VaultStatus = VaultStatus())
+
+@Serializable
+data class VaultFamilySyncResponse(val ok: Boolean = true, val granted: Int = 0)
+
+@Serializable
+data class VaultTotpResponse(val code: String, val expiresInSeconds: Int)
+
+@Serializable
+data class CreateVaultEntryRequest(
+    val scope: String,
+    val title: String,
+    val folder: String? = null,
+    val username: String? = null,
+    val url: String? = null,
+    val password: String? = null,
+    val totpInput: String? = null,
+    val notes: String? = null,
+)
+
+@Serializable
+data class UpdateVaultEntryRequest(
+    val title: String? = null,
+    val folder: String? = null,
+    val username: String? = null,
+    val url: String? = null,
+    val password: String? = null,
+    val totpInput: String? = null,
+    val clearTotp: Boolean? = null,
+    val notes: String? = null,
+)

@@ -79,12 +79,16 @@ private val SLASH_COMMANDS = listOf(
     "calc" to "Compute an exact answer — maths, dates, totals (alias: /compute)",
     "skill" to "Use one of the family's taught skills",
     "connect" to "Use a connected external service (alias: /mcp)",
+    "vault" to "Look up a password or 2FA code (alias: /password)",
 )
 
 @Composable
 fun ChatScreen(
     messages: List<ChatMessage>,
     sending: Boolean,
+    liveSteps: List<app.familyagent.android.data.ToolStep> = emptyList(),
+    onStepsClick: (List<app.familyagent.android.data.ToolStep>) -> Unit = {},
+    onViewCardSource: (app.familyagent.android.data.Card) -> Unit = {},
     voiceEnabled: Boolean,
     transcribing: Boolean,
     ttsEnabled: Boolean = false,
@@ -189,12 +193,15 @@ fun ChatScreen(
                 contentPadding = PaddingValues(vertical = 4.dp),
             ) {
                 items(messages) { msg ->
-                    ChatBubble(msg, onReferenceClick, ttsEnabled, speakingText, speakLoadingText, onSpeak)
+                    ChatBubble(msg, onReferenceClick, ttsEnabled, speakingText, speakLoadingText, onSpeak, onStepsClick, onViewCardSource)
                 }
                 if (sending) {
                     item {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                            TypingDots()
+                        Column(horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            StepsStrip(liveSteps, live = true) { onStepsClick(liveSteps) }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                                TypingDots()
+                            }
                         }
                     }
                 }
@@ -440,6 +447,8 @@ private fun ChatBubble(
     speakingText: String? = null,
     speakLoadingText: String? = null,
     onSpeak: (String) -> Unit = {},
+    onStepsClick: (List<app.familyagent.android.data.ToolStep>) -> Unit = {},
+    onViewCardSource: (app.familyagent.android.data.Card) -> Unit = {},
 ) {
     val isUser = msg.role == "user"
     Column(horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
@@ -510,6 +519,16 @@ private fun ChatBubble(
                     )
                 }
             }
+        }
+    }
+    if (!isUser && msg.steps.isNotEmpty()) {
+        Spacer(Modifier.height(6.dp))
+        StepsStrip(msg.steps, live = false) { onStepsClick(msg.steps) }
+    }
+    if (!isUser && msg.cards.isNotEmpty()) {
+        msg.cards.take(2).forEach { c ->
+            Spacer(Modifier.height(8.dp))
+            CardView(c) { onViewCardSource(c) }
         }
     }
     if (!isUser && msg.text.isNotBlank()) {

@@ -12,6 +12,9 @@ import { makeWorkshopTools, type WorkshopToolDeps } from "./workshopTools.js";
 import { makeComputeTools, type ComputeToolDeps } from "./computeTools.js";
 import { makeSkillTools, type SkillToolDeps } from "./skillTools.js";
 import { makeMcpTools, type McpToolDeps } from "./mcpTools.js";
+import { makeVaultTools, type VaultToolDeps } from "./vaultTools.js";
+import { makeCardTools, type CardToolDeps } from "./cardTools.js";
+import { StepRecorder } from "./steps.js";
 import { config } from "../config.js";
 import { makeFamilyToolTools, type FamilyToolDeps } from "./toolTools.js";
 import type { OnReference } from "./references.js";
@@ -176,6 +179,13 @@ system) through MCP, and this subagent can use their tools. Route "what's on
 my calendar", "add an event", "look that up in <service>", "turn on the …",
 "check <external system> for …" — to it (subagent_type "connections-agent").`;
 
+const PLANNER_CARDS_SECTION = `
+
+You also have a "render_card" tool: answer with a small visual card (an HTML
+snippet the app embeds inline) when a chart, a comparison, a checklist, a
+table, or a diagram would read better than text. Call render_card, then reply
+with one short sentence summarising it — don't also repeat it as a text table.`;
+
 /**
  * The planner system prompt for a user, including ONLY the capability sections
  * for subagents that are actually wired. `PLANNER_PROMPT` (the base) is what
@@ -188,6 +198,7 @@ export function buildPlannerPrompt(caps: {
   shell?: boolean;
   skills?: boolean;
   mcp?: boolean;
+  cards?: boolean;
 }): string {
   let p = PLANNER_PROMPT;
   if (caps.tools) p += PLANNER_TOOLS_SECTION;
@@ -195,6 +206,7 @@ export function buildPlannerPrompt(caps: {
   if (caps.shell) p += PLANNER_WORKSHOP_SECTION;
   if (caps.skills) p += PLANNER_SKILLS_SECTION;
   if (caps.mcp) p += PLANNER_MCP_SECTION;
+  if (caps.cards) p += PLANNER_CARDS_SECTION;
   return p;
 }
 
@@ -408,6 +420,9 @@ export interface FamilyAgentDeps {
   /** External MCP servers — wires the "connections-agent" subagent. Omit to
    *  disable (MCP off, or no servers configured). */
   mcp?: McpToolDeps;
+  /** AI-generated HTML cards — `render_card` bound onto the planner and the
+   *  data-facing subagents. Omit to disable (config.cardsEnabled off). */
+  cards?: CardToolDeps;
 }
 
 /**
@@ -487,6 +502,9 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
     ? makeComputeTools({ logActivity: (a, ac, d) => store.logActivity(a, ac, d) })
     : [];
   const skillTools = deps.skills ? makeSkillTools(deps.skills) : [];
+  // `render_card` — a leaf tool like run_code, bound on the planner and on the
+  // subagents that hold chartable data (document / research / connections).
+  const cardTools = deps.cards ? makeCardTools(deps.cards) : [];
 
   return createDeepAgent({
     name: "family-planner",
@@ -499,8 +517,9 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
       shell: !!deps.shell,
       skills: !!deps.skills,
       mcp: !!deps.mcp,
+      cards: !!deps.cards,
     }),
-    tools: [...computeTools, ...skillTools],
+    tools: [...computeTools, ...skillTools, ...cardTools],
     // deepagents bakes in generic ls/read_file/write_file tools for the
     // agent's own "working memory" filesystem. A 3B-class model reliably
     // confused those with our domain concept of "documents" — asked "what
@@ -529,8 +548,13 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
         systemPrompt: DOCUMENT_AGENT_PROMPT,
         model,
         // + run_code so it can do maths on a value it read off a document
-        // (days until a due date, total of line items) without a round-trip.
-        tools: [...makeDocumentTools(store, deps.onReference, deps.getEmbedder), ...computeTools],
+        // (days until a due date, total of line items) without a round-trip,
+        // + render_card so "chart this bill" doesn't need a round-trip either.
+        tools: [
+          ...makeDocumentTools(store, deps.onReference, deps.getEmbedder),
+          ...computeTools,
+          ...cardTools,
+        ],
       },
       {
         name: "builder-agent",
@@ -564,7 +588,10 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
                 "Searches the public web and reads pages to answer questions about current facts — weather, opening hours, phone numbers, prices, news, how-to steps.",
               systemPrompt: RESEARCH_AGENT_PROMPT,
               model,
-              tools: makeWebTools({ logActivity: deps.web.logActivity, onReference: deps.onReference }),
+              tools: [
+                ...makeWebTools({ logActivity: deps.web.logActivity, onReference: deps.onReference }),
+                ...cardTools,
+              ],
             },
           ]
         : []),
@@ -605,7 +632,7 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
                 "Uses tools from external services the family has connected (a calendar, a knowledge base, home automation, a company system…) via MCP — to look something up or take an action there.",
               systemPrompt: CONNECTIONS_AGENT_PROMPT,
               model,
-              tools: makeMcpTools(deps.mcp),
+              tools: [...makeMcpTools(deps.mcp), ...cardTools],
             },
           ]
         : []),
@@ -788,6 +815,41 @@ export function buildFamilyConnectionsAgent(deps: McpToolDeps) {
   });
 }
 
+const VAULT_AGENT_PROMPT = `You look things up in the family's password vault for
+the person you are talking to — their own saved logins plus the shared family
+vault. You have exactly three tools:
+- search_vault: find an entry by site/account name. Returns names and ids only.
+- get_password: return the username + password for ONE entry.
+- get_totp_code: return the current 6-digit two-factor code for ONE entry.
+
+Rules:
+- Only fetch a password or a code when the person's own message clearly asked
+  for it ("what's my Netflix password", "give me the 2FA code for the bank").
+- Always search_vault first to get the exact entry id, then call get_password /
+  get_totp_code with that id. If several entries match, ask which one — do not
+  guess.
+- You cannot add, edit, or delete entries. If asked, say those are done on the
+  Vault screen.
+- Report exactly what the tool returns. Never invent a password or a code.
+
+Example — "what's the wifi password?": call search_vault with query "wifi", then
+get_password with the matching id, then state the password plainly.`;
+
+/** The "/vault" (aliases "/password", "/2fa") forced turn. Read-only vault
+ *  lookups, one specialist, private 1:1 chat only — never wired as a planner
+ *  subagent and never reachable from a family channel. See
+ *  docs/DECISIONS.md → "Password vault". */
+export function buildFamilyVaultAgent(deps: VaultToolDeps) {
+  return createDeepAgent({
+    name: "family-vault-direct",
+    model: createLocalModel(),
+    systemPrompt: VAULT_AGENT_PROMPT,
+    permissions: [{ operations: ["read", "write"], paths: ["/**"], mode: "deny" }],
+    middleware: [createFilesystemMiddleware({ tools: ["read_file"] })],
+    tools: makeVaultTools(deps),
+  });
+}
+
 // A malformed final message that never resolved into clean prose — the
 // model tried to emit a tool call but the generation broke down into raw
 // syntax fragments instead of going through an actual tool_calls field.
@@ -823,14 +885,17 @@ const LOOKS_LIKE_REFUSAL = new RegExp(
  *  createDeepAgent instance without fighting its generics. */
 export interface InvokableAgent {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  invoke: (input: { messages: any[] }) => Promise<{ messages: { content: unknown }[] }>;
+  invoke: (input: { messages: any[] }, config?: Record<string, unknown>) => Promise<{ messages: { content: unknown }[] }>;
 }
 
 export async function askFamilyAgent(
   agent: InvokableAgent,
   message: string,
   images: string[] = [],
-  history: { role: "user" | "assistant"; content: string }[] = []
+  history: { role: "user" | "assistant"; content: string }[] = [],
+  /** Optional: capture every tool call this turn makes, for the chat UI's
+   *  "show me what happened under the hood" panel. See agents/steps.ts. */
+  recorder?: StepRecorder
 ): Promise<string> {
   // Multimodal turn: gemma4:e2b (the default) takes text + images. The
   // planner sees them directly and can answer about a photo/screenshot, or
@@ -847,11 +912,13 @@ export async function askFamilyAgent(
   // multiply the wait for no real benefit). Empty for a brand-new session, so
   // this is a strict extension of the old single-message shape.
   const messages = [...history, { role: "user", content }];
+  const invokeConfig = recorder ? { callbacks: [recorder] } : undefined;
   let lastRefusal = "";
   for (let attempt = 1; attempt <= 2; attempt++) {
+    recorder?.reset(); // the final step list reflects the attempt that answered
     let result: Awaited<ReturnType<InvokableAgent["invoke"]>>;
     try {
-      result = await agent.invoke({ messages });
+      result = await agent.invoke({ messages }, invokeConfig);
     } catch (err) {
       // The small model sometimes tries to delegate to a subagent that isn't
       // wired for this server (web access off, tools off, …). deepagents'
@@ -899,7 +966,8 @@ export type ForcedAgentKind =
   | "workshop"
   | "calc"
   | "skill"
-  | "connect";
+  | "connect"
+  | "vault";
 
 // A keyword right after "/" picks the agent; "search" is a hand-typeable
 // alias for "find" and "remind" for "schedule" (not offered as separate
@@ -922,6 +990,12 @@ const FORCED_AGENT_KEYWORDS: Record<string, ForcedAgentKind> = {
   skill: "skill",
   connect: "connect",
   mcp: "connect",
+  vault: "vault",
+  password: "vault",
+  passwords: "vault",
+  "2fa": "vault",
+  otp: "vault",
+  totp: "vault",
 };
 
 export interface ForcedAgentCommand {
@@ -969,7 +1043,8 @@ export async function askFamilyAgentInChannel(
   agent: FamilyAgent,
   transcript: string,
   latestMessage: string,
-  images: string[] = []
+  images: string[] = [],
+  recorder?: StepRecorder
 ): Promise<string> {
   const wrapped = `You are one participant in a family group chat. Here is the recent conversation:
 
@@ -979,5 +1054,8 @@ The latest message mentioned you (@agent):
 ${latestMessage}
 ${images.length ? "\nThe latest message also attached the image(s) below.\n" : ""}
 Reply as a single chat message — short, friendly, and directly useful. Do not prefix your reply with your name.`;
-  return askFamilyAgent(agent, wrapped, images);
+  return askFamilyAgent(agent, wrapped, images, [], recorder);
 }
+
+export { StepRecorder } from "./steps.js";
+export type { AgentStep, StepPhase } from "./steps.js";

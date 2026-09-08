@@ -28,12 +28,18 @@ import {
   type ChatReference,
   type ChatSession,
   type ChatSessionMessage,
+  type ToolStep,
+  type Card,
   type Routine,
   type RoutineRun,
   type RoutineTriggerInput,
   type RoutineAgentKind,
   type Skill,
   type McpServer,
+  type VaultEntry,
+  type VaultEntryDetail,
+  type VaultStatus,
+  type VaultEntryInput,
 } from "./api.js";
 import { startRecording, type Recording } from "./audio.js";
 import { atmosphereBusy, atmosphereWelcome } from "./atmosphere.js";
@@ -74,6 +80,7 @@ function showView(name: string) {
   // Stop any view-scoped polling loops the previous view started.
   if (name !== "messages") stopMessagePolling();
   if (name !== "board") stopBoardPolling();
+  if (name !== "vault") stopVaultTotpTimer();
   if (name === "chat") {
     void refreshChatSessions();
     void refreshTools().then((tools) => {
@@ -96,6 +103,7 @@ function showView(name: string) {
     });
   }
   if (name === "activity") void refreshActivity();
+  if (name === "vault") void renderVault();
   if (name === "routines") void refreshRoutines();
   if (name === "skills") void refreshSkills();
   if (name === "family") void refreshUsers();
@@ -188,6 +196,12 @@ let mcpMode: NonNullable<Health["mcp"]> = "off";
 let webEnabled = false;
 let shellEnabled = false;
 let computeEnabled = true;
+// Mirrors /health.vault / .vaultAi — hides the Vault nav item, gates /vault.
+let vaultEnabled = false;
+let vaultAiEnabled = false;
+const navVault = document.getElementById("nav-vault") as HTMLButtonElement;
+// Mirrors /health.cards — whether the assistant may attach generated HTML cards.
+let cardsEnabled = false;
 
 async function refreshStatus() {
   try {
@@ -210,6 +224,10 @@ async function refreshStatus() {
     webEnabled = health.web === "on";
     shellEnabled = health.shell === "on";
     computeEnabled = health.compute !== false;
+    vaultEnabled = health.vault === "on";
+    vaultAiEnabled = health.vaultAi === true;
+    navVault.hidden = !vaultEnabled;
+    cardsEnabled = health.cards === "on";
     const meaningOpt = documentSearchMode.querySelector<HTMLOptionElement>('option[value="semantic"]');
     if (meaningOpt) {
       meaningOpt.textContent = semanticSearchOff ? "By meaning (needs a model)" : "By meaning";
@@ -265,6 +283,7 @@ const SLASH_COMMANDS: SlashEntry[] = [
   { name: "calc", description: "Compute an exact answer — maths, dates, totals (alias: /compute)" },
   { name: "skill", description: "Use one of the family's taught skills" },
   { name: "connect", description: "Use a connected external service (alias: /mcp)" },
+  { name: "vault", description: "Look up a password or 2FA code (alias: /password)" },
 ];
 // Populated (from the same /tools list the Tools view already fetches) when
 // the Chat view is entered; only ready, server-kind tools are offered — a
@@ -928,17 +947,27 @@ interface SlashController {
   clear: () => void;
   /** The committed command name (e.g. "calc"), or null. */
   getCommand: () => string | null;
+  /** True once an "@agent" mention chip is committed (Messages composer only). */
+  hasMention: () => boolean;
 }
+// Rows the menu can offer: a "/" command / tool, or the "@agent" mention. The
+// mention rides the same chip + autocomplete plumbing so it reads identically
+// to a slash command — it's just triggered by "@" instead of "/".
+type SlashRow = SlashEntry & { mention?: boolean };
+const MENTION_NAMES = ["agent", "ai", "assistant"];
 function wireSlashMenu(
   input: HTMLTextAreaElement,
   menu: HTMLElement,
   chip: HTMLElement,
   form: HTMLFormElement,
-  onChange: () => void
+  onChange: () => void,
+  opts: { mention?: boolean } = {}
 ): SlashController {
-  let matches: SlashEntry[] = [];
+  const mentionEnabled = opts.mention ?? false;
+  let matches: SlashRow[] = [];
   let highlight = -1;
   let command: string | null = null;
+  let mention = false;
 
   const enabledCommands = () =>
     SLASH_COMMANDS.filter(
@@ -947,7 +976,8 @@ function wireSlashMenu(
         (c.name !== "run" || shellEnabled) &&
         (c.name !== "calc" || computeEnabled) &&
         (c.name !== "skill" || skillsMode !== "off") &&
-        (c.name !== "connect" || mcpMode === "on")
+        (c.name !== "connect" || mcpMode === "on") &&
+        (c.name !== "vault" || (vaultEnabled && vaultAiEnabled))
     );
   const knownName = (name: string) =>
     enabledCommands().some((c) => c.name === name) ||
@@ -960,28 +990,40 @@ function wireSlashMenu(
     highlight = -1;
   };
   const renderChip = () => {
-    if (!command) {
+    if (!command && !mention) {
       chip.hidden = true;
       chip.innerHTML = "";
       return;
     }
-    chip.innerHTML = `<code>/${escapeHtml(command)}</code><button type="button" class="composer-chip-x" aria-label="Remove the /${escapeHtml(command)} command" tabindex="-1">×</button>`;
+    const label = mention ? "@agent" : `/${command}`;
+    chip.innerHTML = `<code>${escapeHtml(label)}</code><button type="button" class="composer-chip-x" aria-label="Remove ${escapeHtml(label)}" tabindex="-1">×</button>`;
     chip.hidden = false;
     chip.querySelector(".composer-chip-x")!.addEventListener("mousedown", (e) => {
       e.preventDefault();
-      removeCommand();
+      removeChip();
     });
   };
   const setCommand = (name: string) => {
     command = name;
+    mention = false;
     renderChip();
     hide();
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
     onChange();
   };
-  const removeCommand = () => {
+  const setMention = () => {
+    mention = true;
     command = null;
+    renderChip();
+    hide();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    onChange();
+  };
+  const removeChip = () => {
+    command = null;
+    mention = false;
     renderChip();
     input.focus();
     onChange();
@@ -995,56 +1037,86 @@ function wireSlashMenu(
       matches.forEach((t, i) => {
         const li = document.createElement("li");
         li.className = "slash-menu-row" + (i === highlight ? " is-active" : "");
-        li.innerHTML = `<span class="slash-menu-row-name">${escapeHtml(t.name)}</span><span class="slash-menu-row-desc">${escapeHtml(t.description)}</span>`;
+        const name = t.mention ? "@agent" : t.name;
+        li.innerHTML = `<span class="slash-menu-row-name">${escapeHtml(name)}</span><span class="slash-menu-row-desc">${escapeHtml(t.description)}</span>`;
         li.addEventListener("mousedown", (e) => {
           // mousedown (not click) so this fires before the textarea blurs.
           e.preventDefault();
           input.value = "";
-          setCommand(t.name);
+          if (t.mention) setMention();
+          else setCommand(t.name);
         });
         menu.appendChild(li);
       });
     }
     menu.hidden = false;
   };
+  const commit = (row: SlashRow) => {
+    input.value = "";
+    if (row.mention) setMention();
+    else setCommand(row.name);
+  };
   const update = () => {
-    // Typed "/name " (with a space) while no command is committed → commit it,
-    // move the rest of the text into the field.
-    if (!command) {
+    if (!command && !mention) {
+      // Typed "/name " (with a space) → commit it, move the rest into the field.
       const typed = /^\/(\S+)[ \t]([\s\S]*)$/.exec(input.value);
       if (typed && knownName(typed[1].toLowerCase())) {
         input.value = typed[2];
         setCommand(typed[1].toLowerCase());
         return;
       }
+      // Same for "@agent " — a committed mention chip.
+      if (mentionEnabled) {
+        const at = /^@([A-Za-z]+)[ \t]([\s\S]*)$/.exec(input.value);
+        if (at && MENTION_NAMES.includes(at[1].toLowerCase())) {
+          input.value = at[2];
+          setMention();
+          return;
+        }
+      }
     }
-    // A live autocomplete only while the whole field is "/" + a partial word
-    // and nothing is committed yet.
-    const m = command ? null : /^\/([^\s]*)$/.exec(input.value);
-    if (!m) {
+    // A live autocomplete only while the whole field is a "/"- or "@"-prefixed
+    // partial word and nothing is committed yet.
+    const committed = command || mention;
+    const slashM = committed ? null : /^\/([^\s]*)$/.exec(input.value);
+    const atM = committed || !mentionEnabled ? null : /^@([A-Za-z]*)$/.exec(input.value);
+    if (!slashM && !atM) {
       hide();
       return;
     }
-    const query = m[1].toLowerCase();
-    const toolEntries: SlashEntry[] = slashTools
-      .filter((t) => t.kind === "server" && t.status === "ready")
-      .map((t) => ({ name: t.name, description: t.description }));
-    matches = [...enabledCommands(), ...toolEntries].filter((e) => e.name.toLowerCase().includes(query));
+    if (atM) {
+      const q = atM[1].toLowerCase();
+      matches = [{ name: "agent", description: "Bring in the assistant", mention: true }].filter((r) =>
+        r.name.includes(q)
+      );
+      // A stray "@name" that isn't heading for @agent is just text — don't
+      // pop an empty menu over it (unlike "/", where an empty match is a hint).
+      if (matches.length === 0) {
+        hide();
+        return;
+      }
+    } else {
+      const query = slashM![1].toLowerCase();
+      const toolEntries: SlashRow[] = slashTools
+        .filter((t) => t.kind === "server" && t.status === "ready")
+        .map((t) => ({ name: t.name, description: t.description }));
+      matches = [...enabledCommands(), ...toolEntries].filter((e) => e.name.toLowerCase().includes(query));
+    }
     highlight = matches.length ? 0 : -1;
     render();
   };
   input.addEventListener("input", update);
   input.addEventListener("keydown", (e) => {
     // Backspace at the very start of an otherwise-untouched caret drops the
-    // whole command chip — never a partial "/comman".
+    // whole chip — never a partial "/comman" or "@age".
     if (
       e.key === "Backspace" &&
-      command &&
+      (command || mention) &&
       input.selectionStart === 0 &&
       input.selectionEnd === 0
     ) {
       e.preventDefault();
-      removeCommand();
+      removeChip();
       return;
     }
     if (!menu.hidden && matches.length) {
@@ -1062,8 +1134,7 @@ function wireSlashMenu(
       }
       if (e.key === "Enter" && !e.isComposing) {
         e.preventDefault();
-        input.value = "";
-        setCommand(matches[highlight].name);
+        commit(matches[highlight]);
         return;
       }
       if (e.key === "Escape") {
@@ -1082,10 +1153,12 @@ function wireSlashMenu(
     hide,
     clear: () => {
       command = null;
+      mention = false;
       renderChip();
       hide();
     },
     getCommand: () => command,
+    hasMention: () => mention,
   };
 }
 
@@ -1194,6 +1267,8 @@ async function openChatSession(id: string) {
     if (m.role === "user") appendUserMessage(m.body, m.images);
     else {
       const bubble = appendBubble("assistant", m.body);
+      if (m.steps?.length) attachStepsStrip(bubble, m.steps);
+      attachCards(bubble, m.cards);
       if (m.refs.length) appendReferences(bubble, m.refs);
       appendBubbleActions(bubble, m.body);
     }
@@ -1232,7 +1307,7 @@ function startNewChat() {
 }
 chatNewBtn.addEventListener("click", startNewChat);
 
-function slashHelpHtml(): string {
+function slashHelpHtml(opts: { mention?: boolean } = {}): string {
   const commandRows = SLASH_COMMANDS.map(
     (c) => `<p class="side-panel-hint"><code>/${escapeHtml(c.name)}</code> — ${escapeHtml(c.description)}</p>`
   ).join("");
@@ -1240,9 +1315,14 @@ function slashHelpHtml(): string {
     .filter((t) => t.kind === "server" && t.status === "ready")
     .map((t) => `<p class="side-panel-hint"><code>/${escapeHtml(t.name)}</code> — ${escapeHtml(t.description)}</p>`)
     .join("");
+  const mentionBlock = opts.mention
+    ? `<p class="side-panel-hint"><strong>Bring in the assistant</strong></p>
+       <p class="side-panel-hint"><code>@agent</code> — pull the assistant into the conversation for that message (aliases <code>@ai</code>, <code>@assistant</code>).</p>`
+    : "";
   return `
     <p class="side-panel-summary">Start a message with "/" to skip the assistant's own routing and send that turn
     straight to one specialist — useful when it doesn't otherwise pick the right one.</p>
+    ${mentionBlock}
     <p class="side-panel-hint"><strong>Commands</strong></p>
     ${commandRows}
     <p class="side-panel-hint"><strong>Or one of the family's tools, by name</strong></p>
@@ -1272,24 +1352,51 @@ chatForm.addEventListener("submit", async (e) => {
   chatSlash.clear();
   chatTray.clear();
   appendUserMessage(shown, images);
+  // A live strip of the tool calls the agent makes, polled while the reply is
+  // in flight; it settles in place above the answer when the turn finishes.
+  const turnId = (crypto.randomUUID?.() ?? `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const strip = makeStepsStrip();
+  renderStepsStrip(strip, [], true);
+  chatLog.appendChild(strip);
   const pending = appendTypingIndicator();
   chatAbort = new AbortController();
   setChatPending(true);
+  let stopPoll = false;
+  const poll = async () => {
+    while (!stopPoll) {
+      try {
+        const { steps, done } = await api.turnSteps(turnId);
+        if (!stopPoll && steps.length) renderStepsStrip(strip, steps, !done);
+        if (done) return;
+      } catch {
+        /* turn not registered yet, or already swept — keep trying briefly */
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  };
+  void poll();
   try {
-    const { reply, references, sessionId } = await api.chat(
+    const { reply, references, steps, cards, sessionId } = await api.chat(
       message,
       images,
       activeChatSessionId ?? undefined,
-      chatAbort.signal
+      chatAbort.signal,
+      turnId
     );
+    stopPoll = true;
     pending.remove();
+    if (steps && steps.length) renderStepsStrip(strip, steps, false);
+    else strip.remove();
     const bubble = appendBubble("assistant", reply);
+    attachCards(bubble, cards);
     if (references?.length) appendReferences(bubble, references);
     const speakBtn = appendBubbleActions(bubble, reply);
     if ((autoRead || speakReply) && speakBtn) speakBtn.click();
     activeChatSessionId = sessionId;
     void refreshChatSessions();
   } catch (err) {
+    stopPoll = true;
+    strip.remove();
     pending.remove();
     if (err instanceof DOMException && err.name === "AbortError") {
       appendBubble("system", "Stopped.");
@@ -3557,6 +3664,8 @@ const settingsTtsVoiceSelect = document.getElementById("settings-tts-voice-selec
 const settingsTtsForm = document.getElementById("settings-tts-form") as HTMLFormElement;
 const settingsTtsStatusEl = document.getElementById("settings-tts-status")!;
 const settingsAutoReadCheckbox = document.getElementById("settings-auto-read") as HTMLInputElement;
+const settingsCardsCheckbox = document.getElementById("settings-cards-checkbox") as HTMLInputElement;
+const settingsCardsStatusEl = document.getElementById("settings-cards-status")!;
 const settingsServerNameInput = document.getElementById("settings-servername-input") as HTMLInputElement;
 const settingsServerNameForm = document.getElementById("settings-servername-form") as HTMLFormElement;
 const settingsServerNameStatusEl = document.getElementById("settings-servername-status")!;
@@ -3670,6 +3779,16 @@ async function refreshSettings() {
       fillVoiceSelect(settingsTtsVoiceSelect, settings.ttsVoice);
     }
     settingsAutoReadCheckbox.checked = autoRead;
+    if (document.activeElement !== settingsCardsCheckbox) {
+      settingsCardsCheckbox.checked = settings.cardsEnabled;
+    }
+    const cardsLock = settings.envLocked.cardsEnabled || !settings.isAdmin;
+    settingsCardsCheckbox.disabled = cardsLock;
+    settingsCardsStatusEl.textContent = settings.envLocked.cardsEnabled
+      ? "Pinned by FAMILY_AGENT_CARDS on the server."
+      : !settings.isAdmin
+        ? "Only an admin can change this."
+        : "";
     if (document.activeElement !== settingsOllamaUrlInput) {
       settingsOllamaUrlInput.value = settings.ollamaBaseUrl;
     }
@@ -3792,6 +3911,16 @@ settingsAutoReadCheckbox.addEventListener("change", () => {
   } catch {
     /* private mode */
   }
+});
+
+settingsCardsCheckbox.addEventListener("change", () => {
+  // refreshStatus() (called by saveSetting) re-reads /health and updates the
+  // module `cardsEnabled` flag.
+  void saveSetting(
+    { cardsEnabled: settingsCardsCheckbox.checked },
+    settingsCardsStatusEl,
+    (s) => `Saved — visual cards are ${s.cardsEnabled ? "on" : "off"}`
+  );
 });
 
 settingsServerNameForm.addEventListener("submit", (e) => {
@@ -4197,7 +4326,9 @@ const messageExpandBtn = document.getElementById("message-expand-btn") as HTMLBu
 const messageSlashMenu = document.getElementById("message-slash-menu")!;
 const messageSlashChip = document.getElementById("message-slash-chip")!;
 const messageHelpBtn = document.getElementById("message-help-btn") as HTMLButtonElement;
-messageHelpBtn.addEventListener("click", () => openSidePanel("Slash commands", slashHelpHtml()));
+messageHelpBtn.addEventListener("click", () =>
+  openSidePanel("Commands & @agent", slashHelpHtml({ mention: true }))
+);
 
 const messageTray = makeImageTray(messageAttachmentsEl, appendMessageError);
 messageAttachBtn.addEventListener("click", () => messageImageInput.click());
@@ -4215,7 +4346,8 @@ const messageSlash = wireSlashMenu(
   messageSlashMenu,
   messageSlashChip,
   messageForm,
-  messageGrow.refresh
+  messageGrow.refresh,
+  { mention: true }
 );
 // Push-to-talk in a family channel: auto-send, and speak the agent's reply
 // back when it lands (it arrives via the poll loop, so renderMessage does it).
@@ -4301,6 +4433,8 @@ function renderMessage(m: Message) {
     if (existing && !m.pending) {
       existing.classList.remove("is-pending");
       existing.querySelector(".msg-body")!.innerHTML = renderMarkdown(m.body);
+      updateMessageStepsStrip(existing, m.steps ?? [], false);
+      attachMessageCards(existing, m.cards);
       if (!existing.querySelector(".msg-actions")) existing.appendChild(msgActionsRow(m.body));
       if (agentReply) maybeSpeakAgentReply(existing);
     }
@@ -4330,6 +4464,20 @@ function renderMessage(m: Message) {
     }
     el.querySelector(".msg-body")!.insertAdjacentElement("beforebegin", grid);
   }
+  // Tool-call visibility: a strip below the assistant's reply — live while
+  // pending (polled off the message id, which is the turnId server-side).
+  if (agent) {
+    const strip = makeStepsStrip();
+    strip.classList.add("steps-strip--msg");
+    el.querySelector(".msg-body")!.insertAdjacentElement("afterend", strip);
+    if (m.pending) {
+      renderStepsStrip(strip, [], true);
+      void pollMessageSteps(m.id, strip);
+    } else {
+      updateMessageStepsStrip(el, m.steps ?? [], false);
+      attachMessageCards(el, m.cards);
+    }
+  }
   // Copy + read-aloud on the assistant's replies (the Markdown-rendered ones).
   if (agentReply) el.appendChild(msgActionsRow(m.body));
   messageLog.appendChild(el);
@@ -4341,6 +4489,7 @@ async function openChannel(id: string) {
   activeChannelId = id;
   lastMessageTs = null;
   renderedMessageIds = new Set();
+  messageStepPolls.clear();
   messageTray.clear();
   messageInput.value = "";
   messageGrow.reset();
@@ -4482,18 +4631,21 @@ messageForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const typed = messageInput.value.trim();
   const cmd = messageSlash.getCommand();
+  const mention = messageSlash.hasMention();
   const images = messageTray.images.slice();
-  if ((!typed && !images.length && !cmd) || !activeChannelId) return;
-  // The server requires a non-empty body; "/cmd rest", or the text, or an
-  // image-only stand-in.
+  if ((!typed && !images.length && !cmd && !mention) || !activeChannelId) return;
+  // The server requires a non-empty body; "/cmd rest", "@agent rest", the plain
+  // text, or an image-only stand-in.
   const body = cmd
     ? `/${cmd} ${typed}`.trimEnd()
+    : mention
+    ? `@agent ${typed}`.trimEnd()
     : typed || (images.length > 1 ? "(shared images)" : "(shared an image)");
   messageInput.value = "";
   messageGrow.reset();
   messageSlash.clear();
   messageTray.clear();
-  const mentionAgent = /(^|[^\w@])@(agent|ai|assistant)\b/i.test(body);
+  const mentionAgent = mention || /(^|[^\w@])@(agent|ai|assistant)\b/i.test(body);
   try {
     await api.postMessage(activeChannelId, body, mentionAgent, images);
     await pollActiveChannel();
@@ -4567,6 +4719,520 @@ function clampToBoard(x: number, y: number): { x: number; y: number } {
   const maxX = Math.max(0, noteBoard.clientWidth - NOTE_W);
   const maxY = Math.max(0, noteBoard.clientHeight - NOTE_H);
   return { x: Math.min(Math.max(0, x), maxX), y: Math.min(Math.max(0, y), maxY) };
+}
+
+// ---------- vault ----------
+const vaultBody = document.getElementById("vault-body")!;
+let vaultStatusCache: VaultStatus | null = null;
+let vaultEntries: VaultEntry[] = [];
+let vaultSelectedId: string | null = null;
+let vaultSearchTerm = "";
+let vaultTotpTimer: number | null = null;
+
+function stopVaultTotpTimer() {
+  if (vaultTotpTimer !== null) {
+    clearInterval(vaultTotpTimer);
+    vaultTotpTimer = null;
+  }
+}
+
+async function copyToClipboard(text: string, label: string, btn?: HTMLButtonElement) {
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) {
+      const prev = btn.textContent;
+      btn.textContent = "Copied";
+      setTimeout(() => {
+        if (btn.isConnected) btn.textContent = prev;
+      }, 1400);
+    }
+    // Clear it from the clipboard after 30s so a password doesn't linger there.
+    setTimeout(() => {
+      navigator.clipboard.readText().then(
+        (cur) => {
+          if (cur === text) navigator.clipboard.writeText("").catch(() => {});
+        },
+        () => {}
+      );
+    }, 30_000);
+  } catch {
+    /* clipboard blocked — nothing we can do from the webview */
+  }
+  void label;
+}
+
+function genPassword(len = 20): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*-_=+";
+  const buf = new Uint32Array(len);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, (n) => alphabet[n % alphabet.length]).join("");
+}
+
+async function renderVault(): Promise<void> {
+  stopVaultTotpTimer();
+  try {
+    vaultStatusCache = await api.vaultStatus();
+  } catch (err) {
+    vaultBody.innerHTML = `<div class="settings-section"><p class="settings-hint">Couldn't reach the vault: ${escapeHtml(
+      err instanceof Error ? err.message : String(err)
+    )}</p></div>`;
+    return;
+  }
+  const s = vaultStatusCache;
+  if (!s.enabled) {
+    vaultBody.innerHTML = `<div class="settings-section"><p class="settings-hint">The password vault isn't turned on for this server. An admin can enable it with <code>FAMILY_AGENT_VAULT=1</code>.</p></div>`;
+    return;
+  }
+  if (!s.exists) return renderVaultSetup();
+  if (!s.unlocked) return renderVaultUnlock();
+  await renderVaultUnlocked();
+}
+
+function vaultGate(title: string, hint: string, inner: string): string {
+  return `<div class="vault-gate"><div class="vault-gate-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div><h2>${escapeHtml(
+    title
+  )}</h2><p class="settings-hint">${hint}</p>${inner}</div>`;
+}
+
+function renderVaultSetup() {
+  vaultBody.innerHTML = vaultGate(
+    "Set up your vault",
+    "Your vault is encrypted with a key derived from your account password. Confirm your password to create it — you'll get a one-time recovery code to keep somewhere safe.",
+    `<form id="vault-setup-form" class="inline-form vault-form">
+       <input type="password" id="vault-setup-pw" placeholder="Your account password" autocomplete="current-password" required />
+       <button type="submit" class="btn-primary">Create vault</button>
+     </form>
+     <p class="vault-msg" id="vault-setup-msg"></p>`
+  );
+  const form = document.getElementById("vault-setup-form") as HTMLFormElement;
+  const msg = document.getElementById("vault-setup-msg")!;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const pw = (document.getElementById("vault-setup-pw") as HTMLInputElement).value;
+    msg.textContent = "Creating…";
+    try {
+      const { recoveryCode } = await api.vaultSetup(pw);
+      renderVaultRecoveryCode(recoveryCode, "Your vault is ready.");
+    } catch (err) {
+      msg.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
+}
+
+function renderVaultRecoveryCode(code: string, lead: string) {
+  vaultBody.innerHTML = vaultGate(
+    "Save your recovery code",
+    `${escapeHtml(lead)} If you ever forget your password (or an admin resets it), this is the <strong>only</strong> way back into your vault. Write it down now — it isn't shown again.`,
+    `<div class="vault-recovery-code">${escapeHtml(code)}</div>
+     <div class="inline-form">
+       <button type="button" class="btn-primary" id="vault-recovery-copy">Copy</button>
+       <button type="button" id="vault-recovery-done">I've saved it</button>
+     </div>`
+  );
+  document.getElementById("vault-recovery-copy")!.addEventListener("click", (e) => {
+    void copyToClipboard(code, "recovery code", e.currentTarget as HTMLButtonElement);
+  });
+  document.getElementById("vault-recovery-done")!.addEventListener("click", () => void renderVault());
+}
+
+function renderVaultUnlock() {
+  vaultBody.innerHTML = vaultGate(
+    "Vault locked",
+    "Enter your account password to unlock the vault for this session. It re-locks automatically after 15 minutes of inactivity.",
+    `<form id="vault-unlock-form" class="inline-form vault-form">
+       <input type="password" id="vault-unlock-pw" placeholder="Your account password" autocomplete="current-password" required />
+       <button type="submit" class="btn-primary">Unlock</button>
+     </form>
+     <p class="vault-msg" id="vault-unlock-msg"></p>
+     <button type="button" class="link-btn" id="vault-use-recovery">Use a recovery code instead</button>`
+  );
+  const form = document.getElementById("vault-unlock-form") as HTMLFormElement;
+  const msg = document.getElementById("vault-unlock-msg")!;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const pw = (document.getElementById("vault-unlock-pw") as HTMLInputElement).value;
+    msg.textContent = "Unlocking…";
+    try {
+      await api.vaultUnlock(pw);
+      void renderVault();
+    } catch (err) {
+      msg.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
+  document.getElementById("vault-use-recovery")!.addEventListener("click", renderVaultRecover);
+}
+
+function renderVaultRecover() {
+  vaultBody.innerHTML = vaultGate(
+    "Recover your vault",
+    "Enter your recovery code and your current account password. The vault re-secures under that password and you'll get a fresh recovery code.",
+    `<form id="vault-recover-form" class="vault-form">
+       <input type="text" id="vault-recover-code" placeholder="Recovery code (XXXXX-XXXXX-XXXXX-XXXXX)" autocomplete="off" required />
+       <input type="password" id="vault-recover-pw" placeholder="Your current account password" autocomplete="current-password" required />
+       <div class="inline-form">
+         <button type="submit" class="btn-primary">Recover</button>
+         <button type="button" id="vault-recover-cancel">Back</button>
+       </div>
+     </form>
+     <p class="vault-msg" id="vault-recover-msg"></p>`
+  );
+  const form = document.getElementById("vault-recover-form") as HTMLFormElement;
+  const msg = document.getElementById("vault-recover-msg")!;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const code = (document.getElementById("vault-recover-code") as HTMLInputElement).value;
+    const pw = (document.getElementById("vault-recover-pw") as HTMLInputElement).value;
+    msg.textContent = "Recovering…";
+    try {
+      const { recoveryCode } = await api.vaultRecover(code, pw);
+      renderVaultRecoveryCode(recoveryCode, "Vault recovered.");
+    } catch (err) {
+      msg.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
+  document.getElementById("vault-recover-cancel")!.addEventListener("click", renderVaultUnlock);
+}
+
+async function renderVaultUnlocked(): Promise<void> {
+  try {
+    vaultEntries = (await api.listVaultEntries()).entries;
+  } catch (err) {
+    if (err instanceof Error && /lock/i.test(err.message)) return void renderVault();
+    vaultBody.innerHTML = `<p class="vault-msg">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`;
+    return;
+  }
+  const s = vaultStatusCache!;
+  const isAdmin = currentUser?.role === "admin";
+  const q = vaultSearchTerm.toLowerCase().trim();
+  const shown = q
+    ? vaultEntries.filter((e) =>
+        [e.title, e.username ?? "", e.url ?? "", e.folder ?? ""].some((f) => f.toLowerCase().includes(q))
+      )
+    : vaultEntries;
+
+  vaultBody.innerHTML = `
+    <div class="vault-toolbar">
+      <input type="search" id="vault-search" placeholder="Search entries…" value="${escapeHtml(vaultSearchTerm)}" />
+      <button type="button" id="vault-new-btn" class="btn-primary">+ New entry</button>
+      <button type="button" id="vault-lock-btn">Lock now</button>
+      ${
+        isAdmin && s.familyVaultInitialised
+          ? `<button type="button" id="vault-sync-btn" title="Give every family member access to the shared vault">Grant shared access</button>`
+          : ""
+      }
+      <button type="button" id="vault-log-btn">Access log</button>
+    </div>
+    ${
+      !s.hasSharedAccess
+        ? `<p class="settings-hint vault-shared-note">You don't have access to the shared family vault yet${
+            isAdmin ? " — click “Grant shared access”." : " — ask a family admin to grant it."
+          }</p>`
+        : ""
+    }
+    <div class="vault-layout">
+      <div class="vault-list" id="vault-list">${renderVaultList(shown)}</div>
+      <div class="vault-detail" id="vault-detail"></div>
+    </div>`;
+
+  (document.getElementById("vault-search") as HTMLInputElement).addEventListener("input", (e) => {
+    vaultSearchTerm = (e.target as HTMLInputElement).value;
+    document.getElementById("vault-list")!.innerHTML = renderVaultList(
+      vaultSearchTerm.trim()
+        ? vaultEntries.filter((x) =>
+            [x.title, x.username ?? "", x.url ?? "", x.folder ?? ""].some((f) =>
+              f.toLowerCase().includes(vaultSearchTerm.toLowerCase().trim())
+            )
+          )
+        : vaultEntries
+    );
+    wireVaultListRows();
+  });
+  document.getElementById("vault-new-btn")!.addEventListener("click", () => openVaultEditor(null));
+  document.getElementById("vault-lock-btn")!.addEventListener("click", async () => {
+    await api.vaultLock().catch(() => {});
+    void renderVault();
+  });
+  document.getElementById("vault-sync-btn")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    btn.disabled = true;
+    try {
+      const { granted } = await api.vaultFamilySync();
+      btn.textContent = granted ? `Granted ${granted}` : "Everyone has access";
+    } catch (err) {
+      btn.textContent = err instanceof Error ? err.message : "Failed";
+    }
+    setTimeout(() => void renderVault(), 1200);
+  });
+  document.getElementById("vault-log-btn")!.addEventListener("click", renderVaultAccessLog);
+  wireVaultListRows();
+
+  if (vaultSelectedId && vaultEntries.some((e) => e.id === vaultSelectedId)) {
+    void showVaultDetail(vaultSelectedId);
+  }
+}
+
+function renderVaultList(entries: VaultEntry[]): string {
+  if (entries.length === 0) {
+    return `<p class="settings-hint" style="padding:12px">${
+      vaultEntries.length === 0 ? "No entries yet. Add your first with “+ New entry”." : "Nothing matches that search."
+    }</p>`;
+  }
+  const groups = new Map<string, VaultEntry[]>();
+  for (const e of entries) {
+    const key = e.folder ?? "";
+    (groups.get(key) ?? groups.set(key, []).get(key)!).push(e);
+  }
+  let html = "";
+  for (const [folder, items] of groups) {
+    if (folder) html += `<div class="vault-folder">${escapeHtml(folder)}</div>`;
+    for (const e of items) {
+      html += `<button type="button" class="vault-row${
+        e.id === vaultSelectedId ? " is-selected" : ""
+      }" data-id="${e.id}">
+        <span class="vault-row-title">${escapeHtml(e.title)}</span>
+        <span class="vault-row-sub">${escapeHtml(e.username ?? e.url ?? "")}</span>
+        <span class="vault-row-badges">${e.scope === "shared" ? '<span class="vault-badge">shared</span>' : ""}${
+        e.hasTotp ? '<span class="vault-badge vault-badge-2fa">2FA</span>' : ""
+      }</span>
+      </button>`;
+    }
+  }
+  return html;
+}
+
+function wireVaultListRows() {
+  for (const row of vaultBody.querySelectorAll<HTMLButtonElement>(".vault-row")) {
+    row.addEventListener("click", () => void showVaultDetail(row.dataset.id!));
+  }
+}
+
+async function showVaultDetail(id: string) {
+  stopVaultTotpTimer();
+  vaultSelectedId = id;
+  for (const row of vaultBody.querySelectorAll<HTMLElement>(".vault-row")) {
+    row.classList.toggle("is-selected", row.dataset.id === id);
+  }
+  const panel = document.getElementById("vault-detail");
+  if (!panel) return;
+  panel.innerHTML = `<p class="settings-hint">Loading…</p>`;
+  let detail: VaultEntryDetail;
+  try {
+    detail = (await api.getVaultEntry(id)).entry;
+  } catch (err) {
+    if (err instanceof Error && /lock/i.test(err.message)) return renderVault();
+    panel.innerHTML = `<p class="vault-msg">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`;
+    return;
+  }
+  const rowsHtml: string[] = [];
+  rowsHtml.push(vaultFieldRow("Title", detail.title));
+  if (detail.folder) rowsHtml.push(vaultFieldRow("Folder", detail.folder));
+  if (detail.username) rowsHtml.push(vaultFieldRow("Username", detail.username, { copy: true }));
+  if (detail.url) rowsHtml.push(vaultFieldRow("Website", detail.url, { link: true }));
+  if (detail.secret.password) rowsHtml.push(vaultFieldRow("Password", detail.secret.password, { secret: true, copy: true }));
+  if (detail.hasTotp) {
+    rowsHtml.push(
+      `<div class="vault-field"><span class="vault-field-label">2FA code</span><span class="vault-field-value" id="vault-totp-value">······</span><span class="vault-totp-ring" id="vault-totp-ring"></span></div>`
+    );
+  }
+  if (detail.secret.notes) rowsHtml.push(vaultFieldRow("Notes", detail.secret.notes, { multiline: true }));
+  for (const f of detail.secret.fields ?? []) {
+    rowsHtml.push(vaultFieldRow(f.label, f.value, { secret: f.secret, copy: true }));
+  }
+
+  panel.innerHTML = `
+    <div class="vault-detail-head">
+      <h3>${escapeHtml(detail.title)}${detail.scope === "shared" ? ' <span class="vault-badge">shared</span>' : ""}</h3>
+      <div class="inline-form">
+        <button type="button" id="vault-edit-btn">Edit</button>
+        <button type="button" id="vault-del-btn" class="btn-danger">Delete</button>
+      </div>
+    </div>
+    ${rowsHtml.join("")}
+    <p class="vault-detail-meta">Updated ${escapeHtml(relativeTime(detail.updatedAt))}</p>`;
+
+  for (const btn of panel.querySelectorAll<HTMLButtonElement>("[data-reveal]")) {
+    btn.addEventListener("click", () => {
+      const valEl = btn.previousElementSibling as HTMLElement;
+      const shown = btn.dataset.shown === "1";
+      valEl.textContent = shown ? "••••••••••" : (btn.dataset.reveal ?? "");
+      btn.dataset.shown = shown ? "0" : "1";
+      btn.textContent = shown ? "Show" : "Hide";
+    });
+  }
+  for (const btn of panel.querySelectorAll<HTMLButtonElement>("[data-copy]")) {
+    btn.addEventListener("click", () => void copyToClipboard(btn.dataset.copy ?? "", "value", btn));
+  }
+  panel.querySelector<HTMLAnchorElement>(".vault-field-link")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    const href = (e.currentTarget as HTMLAnchorElement).dataset.href ?? "";
+    if (href) window.open(href.includes("://") ? href : `https://${href}`, "_blank", "noopener");
+  });
+  document.getElementById("vault-edit-btn")!.addEventListener("click", () => openVaultEditor(detail));
+  document.getElementById("vault-del-btn")!.addEventListener("click", async () => {
+    if (!confirm(`Delete the vault entry "${detail.title}"?`)) return;
+    await api.deleteVaultEntry(id).catch(() => {});
+    vaultSelectedId = null;
+    void renderVault();
+  });
+
+  if (detail.hasTotp) startVaultTotp(id);
+}
+
+function vaultFieldRow(
+  label: string,
+  value: string,
+  opts: { secret?: boolean; copy?: boolean; link?: boolean; multiline?: boolean } = {}
+): string {
+  const valDisplay = opts.secret ? "••••••••••" : escapeHtml(value);
+  const valCell = opts.link
+    ? `<a href="#" class="vault-field-value vault-field-link" data-href="${escapeHtml(value)}">${escapeHtml(value)}</a>`
+    : `<span class="vault-field-value${opts.multiline ? " vault-field-multiline" : ""}">${valDisplay}</span>`;
+  const revealBtn = opts.secret
+    ? `<button type="button" class="vault-mini-btn" data-reveal="${escapeHtml(value)}" data-shown="0">Show</button>`
+    : "";
+  const copyBtn = opts.copy
+    ? `<button type="button" class="vault-mini-btn" data-copy="${escapeHtml(value)}">Copy</button>`
+    : "";
+  return `<div class="vault-field"><span class="vault-field-label">${escapeHtml(
+    label
+  )}</span>${valCell}${revealBtn}${copyBtn}</div>`;
+}
+
+function startVaultTotp(id: string) {
+  const tick = async () => {
+    const valEl = document.getElementById("vault-totp-value");
+    const ringEl = document.getElementById("vault-totp-ring");
+    if (!valEl) {
+      stopVaultTotpTimer();
+      return;
+    }
+    try {
+      const { code, expiresInSeconds } = await api.vaultTotp(id);
+      valEl.textContent = `${code.slice(0, 3)} ${code.slice(3)}`;
+      if (ringEl) ringEl.textContent = `${expiresInSeconds}s`;
+    } catch {
+      /* leave the last value */
+    }
+  };
+  void tick();
+  vaultTotpTimer = window.setInterval(tick, 1000);
+}
+
+async function renderVaultAccessLog() {
+  let entries: Awaited<ReturnType<typeof api.vaultAccessLog>>["entries"] = [];
+  try {
+    entries = (await api.vaultAccessLog()).entries;
+  } catch {
+    /* ignore */
+  }
+  const label: Record<string, string> = {
+    reveal_password: "revealed the password for",
+    reveal_totp: "read the 2FA code for",
+    create: "added",
+    update: "edited",
+    delete: "removed",
+  };
+  vaultBody.innerHTML = `
+    <div class="vault-toolbar"><button type="button" id="vault-log-back">← Back to vault</button></div>
+    <p class="settings-hint">Every time a password or 2FA code is read — by you or by the assistant.</p>
+    <ul class="activity-list">${
+      entries.length === 0
+        ? '<li class="activity-row">Nothing yet.</li>'
+        : entries
+            .map(
+              (e) =>
+                `<li class="activity-row"><span class="activity-actor">${
+                  e.actor === "vault-agent" ? "Assistant" : "You"
+                }</span> ${escapeHtml(label[e.action] ?? e.action)} <strong>${escapeHtml(
+                  e.entryTitle
+                )}</strong> <span class="activity-ts">${escapeHtml(relativeTime(e.at))}</span></li>`
+            )
+            .join("")
+    }</ul>`;
+  document.getElementById("vault-log-back")!.addEventListener("click", () => void renderVault());
+}
+
+function openVaultEditor(existing: VaultEntryDetail | null) {
+  const s = vaultStatusCache!;
+  const e = existing;
+  const canShare = s.hasSharedAccess;
+  vaultBody.innerHTML = `
+    <form id="vault-editor" class="vault-editor">
+      <h3>${e ? "Edit entry" : "New entry"}</h3>
+      <label>Title<input type="text" id="ve-title" value="${escapeHtml(e?.title ?? "")}" required /></label>
+      <label>Folder <span class="vault-opt">(optional)</span><input type="text" id="ve-folder" value="${escapeHtml(
+        e?.folder ?? ""
+      )}" placeholder="e.g. Streaming, Banking" /></label>
+      <label>Username / email<input type="text" id="ve-username" value="${escapeHtml(
+        e?.username ?? ""
+      )}" autocomplete="off" /></label>
+      <label>Website<input type="text" id="ve-url" value="${escapeHtml(e?.url ?? "")}" placeholder="https://…" /></label>
+      <label>Password
+        <span class="vault-pw-row">
+          <input type="text" id="ve-password" value="${escapeHtml(e?.secret.password ?? "")}" autocomplete="off" />
+          <button type="button" id="ve-gen">Generate</button>
+        </span>
+      </label>
+      <label>Two-factor setup <span class="vault-opt">(paste an otpauth:// link or the secret key)</span>
+        <input type="text" id="ve-totp" placeholder="${
+          e?.hasTotp ? "•••• already set — paste a new one to replace" : "otpauth://totp/… or JBSW Y3DP…"
+        }" autocomplete="off" />
+      </label>
+      ${
+        e?.hasTotp
+          ? `<label class="vault-check"><input type="checkbox" id="ve-cleartotp" /> Remove the existing two-factor code</label>`
+          : ""
+      }
+      <label>Notes<textarea id="ve-notes" rows="3">${escapeHtml(e?.secret.notes ?? "")}</textarea></label>
+      <label>Scope
+        <select id="ve-scope" ${e ? "disabled" : ""}>
+          <option value="private" ${e?.scope === "shared" ? "" : "selected"}>Private — only me</option>
+          <option value="shared" ${e?.scope === "shared" ? "selected" : ""} ${
+    canShare || e?.scope === "shared" ? "" : "disabled"
+  }>Shared — the whole family</option>
+        </select>
+      </label>
+      <div class="inline-form">
+        <button type="submit" class="btn-primary">${e ? "Save" : "Create"}</button>
+        <button type="button" id="ve-cancel">Cancel</button>
+      </div>
+      <p class="vault-msg" id="ve-msg"></p>
+    </form>`;
+
+  document.getElementById("ve-gen")!.addEventListener("click", () => {
+    (document.getElementById("ve-password") as HTMLInputElement).value = genPassword();
+  });
+  document.getElementById("ve-cancel")!.addEventListener("click", () => void renderVault());
+  (document.getElementById("vault-editor") as HTMLFormElement).addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const msg = document.getElementById("ve-msg")!;
+    const val = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement).value.trim();
+    const totpInput = val("ve-totp");
+    const clearTotp = (document.getElementById("ve-cleartotp") as HTMLInputElement | null)?.checked ?? false;
+    const body = {
+      title: val("ve-title"),
+      folder: val("ve-folder") || null,
+      username: val("ve-username") || null,
+      url: val("ve-url") || null,
+      password: val("ve-password") || null,
+      notes: val("ve-notes") || null,
+      totpInput: totpInput || undefined,
+    };
+    msg.textContent = "Saving…";
+    try {
+      if (e) {
+        await api.updateVaultEntry(e.id, { ...body, clearTotp: clearTotp || undefined });
+        vaultSelectedId = e.id;
+      } else {
+        const scope = (document.getElementById("ve-scope") as HTMLSelectElement).value as "private" | "shared";
+        const created = await api.createVaultEntry({ ...body, scope } as VaultEntryInput);
+        vaultSelectedId = created.entry.id;
+      }
+      void renderVault();
+    } catch (err) {
+      msg.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
 }
 
 function renderBoard() {
@@ -4805,15 +5471,24 @@ function teardownPanelContent() {
   panelObjectUrls = [];
 }
 
+let sidePanelCloseTimer: number | undefined;
+
 function closeSidePanel() {
   teardownPanelContent();
-  sidePanel.hidden = true;
-  sidePanel.classList.remove("is-open", "side-panel--wide");
-  sidePanelBody.innerHTML = "";
+  // Slide the floating panel back out (matching the rail's animated hide),
+  // then take it out of the layout once the transition has run.
+  sidePanel.classList.remove("is-open");
+  window.clearTimeout(sidePanelCloseTimer);
+  sidePanelCloseTimer = window.setTimeout(() => {
+    sidePanel.hidden = true;
+    sidePanel.classList.remove("side-panel--wide");
+    sidePanelBody.innerHTML = "";
+  }, 420);
 }
 
 function openSidePanel(title: string, bodyHtml: string, opts: { wide?: boolean } = {}) {
   teardownPanelContent();
+  window.clearTimeout(sidePanelCloseTimer);
   sidePanelTitle.textContent = title;
   sidePanelBody.innerHTML = bodyHtml;
   sidePanel.classList.toggle("side-panel--wide", opts.wide === true);
@@ -4982,6 +5657,323 @@ function appendReferences(afterEl: HTMLElement, references: ChatReference[]) {
   }
   afterEl.insertAdjacentElement("afterend", wrap);
   chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+// ---------- tool-call steps (what the assistant did under the hood) ----------
+// Every tool the agent calls in a turn is captured server-side (see
+// agent-core/src/agents/steps.ts). The chat + messages UI shows a live strip of
+// those calls; clicking it opens the side panel with the full arguments and
+// results. See docs/DECISIONS.md → "Tool-call visibility".
+
+const STEP_VERBS: Record<string, string> = {
+  task: "Delegated",
+  search_documents: "Searched documents",
+  list_documents: "Listed documents",
+  read_document: "Read a document",
+  extract_document_fields: "Extracted document fields",
+  search_tasks: "Searched tasks",
+  list_tasks: "Listed tasks",
+  create_task: "Created a task",
+  complete_task: "Completed a task",
+  update_task: "Updated a task",
+  list_sticky_notes: "Read the notes board",
+  add_sticky_note: "Pinned a note",
+  run_code: "Ran a calculation",
+  web_search: "Searched the web",
+  open_page: "Opened a web page",
+  current_datetime: "Checked the date",
+  list_family_tools: "Listed the family's tools",
+  describe_family_tool: "Inspected a tool",
+  call_family_tool: "Used a family tool",
+  list_skills: "Listed skills",
+  use_skill: "Loaded a skill",
+  run_skill_script: "Ran a skill script",
+  list_mcp_tools: "Listed connected-service tools",
+  describe_mcp_tool: "Inspected a connected tool",
+  call_mcp_tool: "Called a connected service",
+  start_build: "Started a build",
+  improve_tool: "Started a tool improvement",
+  list_tools: "Listed tools",
+};
+
+function stepVerb(step: ToolStep): string {
+  if (step.tool === "task" && step.subagent) return `Delegated to ${step.subagent}`;
+  return STEP_VERBS[step.tool] ?? step.tool.replace(/_/g, " ");
+}
+
+function stepArgHint(step: ToolStep): string {
+  const i = step.input as Record<string, unknown> | string | null;
+  if (i == null) return "";
+  if (typeof i === "string") return i.replace(/\s+/g, " ").slice(0, 64);
+  if (typeof i !== "object") return String(i);
+  // A prominent free-text field reads best as the hint.
+  const pick = (i.query ?? i.description ?? i.title ?? i.name ?? i.code ?? i.text ?? i.instruction) as unknown;
+  if (typeof pick === "string" && pick.trim()) return pick.replace(/\s+/g, " ").slice(0, 64);
+  // Otherwise show the primitive key=value pairs.
+  const pairs = Object.entries(i)
+    .filter(([, v]) => v == null || ["string", "number", "boolean"].includes(typeof v))
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(", ");
+  return pairs.slice(0, 64) || Object.keys(i).join(", ");
+}
+
+/** Render a tool's arguments readably: multi-line string fields (code, a long
+ *  instruction) as their own block; everything else as compact JSON. */
+function renderStepInput(input: unknown): string {
+  if (input == null) return `<pre class="side-panel-text">(no arguments)</pre>`;
+  if (typeof input === "string") return `<pre class="side-panel-text">${escapeHtml(input)}</pre>`;
+  if (typeof input !== "object") return `<pre class="side-panel-text">${escapeHtml(String(input))}</pre>`;
+  const entries = Object.entries(input as Record<string, unknown>);
+  const blocks: string[] = [];
+  const rest: Record<string, unknown> = {};
+  for (const [k, val] of entries) {
+    if (typeof val === "string" && (val.includes("\n") || val.length > 80)) {
+      blocks.push(
+        `<div class="step-item-label">${escapeHtml(k)}</div><pre class="side-panel-text">${escapeHtml(val)}</pre>`
+      );
+    } else {
+      rest[k] = val;
+    }
+  }
+  if (Object.keys(rest).length) {
+    blocks.unshift(`<pre class="side-panel-text">${escapeHtml(JSON.stringify(rest, null, 2))}</pre>`);
+  }
+  return blocks.join("") || `<pre class="side-panel-text">(no arguments)</pre>`;
+}
+
+/** A row-of-pills strip summarising the tool calls; click to open full detail. */
+function makeStepsStrip(): HTMLElement {
+  const strip = document.createElement("div");
+  strip.className = "steps-strip";
+  strip.setAttribute("role", "button");
+  strip.tabIndex = 0;
+  strip.title = "See exactly what the assistant did";
+  return strip;
+}
+
+function renderStepsStrip(strip: HTMLElement, steps: ToolStep[], live: boolean): void {
+  const running = steps.some((s) => s.phase === "running");
+  const errored = steps.some((s) => s.phase === "error");
+  strip.classList.toggle("is-live", live && (running || steps.length === 0));
+  const head =
+    live && (running || steps.length === 0)
+      ? `<span class="steps-strip-spinner"></span><span>Working${
+          steps.length ? ` — ${steps.length} tool call${steps.length > 1 ? "s" : ""} so far` : "…"
+        }</span>`
+      : `<span class="steps-strip-icon">${errored ? "!" : "✓"}</span><span>${steps.length} tool call${
+          steps.length === 1 ? "" : "s"
+        }</span>`;
+  const pills = steps
+    .map((s) => {
+      const cls = `step-pill step-pill--${s.phase}`;
+      const hint = stepArgHint(s);
+      return `<span class="${cls}"><span class="step-pill-dot"></span>${escapeHtml(stepVerb(s))}${
+        hint ? `<span class="step-pill-hint">${escapeHtml(hint)}</span>` : ""
+      }</span>`;
+    })
+    .join("");
+  strip.innerHTML = `<div class="steps-strip-head">${head}</div>${
+    pills ? `<div class="steps-strip-pills">${pills}</div>` : ""
+  }`;
+  strip.onclick = () => openStepsPanel(steps);
+  strip.onkeydown = (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openStepsPanel(steps);
+    }
+  };
+}
+
+function openStepsPanel(steps: ToolStep[]): void {
+  const items = steps
+    .map((s, idx) => {
+      const dur = s.durationMs != null ? `${s.durationMs < 1000 ? `${s.durationMs}ms` : `${(s.durationMs / 1000).toFixed(1)}s`}` : "";
+      const badge =
+        s.phase === "running"
+          ? '<span class="step-item-badge step-item-badge--running">running</span>'
+          : s.phase === "error"
+            ? '<span class="step-item-badge step-item-badge--error">error</span>'
+            : "";
+      return `<div class="step-item step-item--${s.phase}">
+        <div class="step-item-head">
+          <span class="step-item-n">${idx + 1}</span>
+          <span class="step-item-tool">${escapeHtml(stepVerb(s))}</span>
+          <code class="step-item-name">${escapeHtml(s.tool)}</code>
+          ${badge}
+          ${dur ? `<span class="step-item-time">${dur}</span>` : ""}
+        </div>
+        <div class="step-item-label">Called with</div>
+        ${renderStepInput(s.input)}
+        ${
+          s.error
+            ? `<div class="step-item-label step-item-label--err">Error</div><pre class="side-panel-text">${escapeHtml(s.error)}</pre>`
+            : s.output != null
+              ? `<div class="step-item-label">Returned</div><pre class="side-panel-text">${escapeHtml(s.output || "(empty)")}</pre>`
+              : ""
+        }
+      </div>`;
+    })
+    .join("");
+  openSidePanel(
+    "Under the hood",
+    `<p class="side-panel-hint">Every tool the assistant called for this reply, in order — the exact arguments it passed and what came back.</p>
+     <div class="step-detail">${items || '<p class="side-panel-hint">No tools were called — the assistant answered directly.</p>'}</div>`
+  );
+}
+
+/** Attach a steps strip right before `bubble` (so it reads: what I did → answer).
+ *  Returns the strip so a live poll can keep updating it. */
+function attachStepsStrip(bubble: HTMLElement, steps: ToolStep[]): HTMLElement {
+  const strip = makeStepsStrip();
+  renderStepsStrip(strip, steps, false);
+  bubble.insertAdjacentElement("beforebegin", strip);
+  return strip;
+}
+
+// ---------- generated HTML cards ----------
+// The model wrote a snippet; the server wrapped it into a sealed document
+// (opaque origin + a no-network CSP — see agent-core/src/cards/). We drop it
+// into a fully sandboxed iframe (allow-scripts only — NO allow-same-origin, so
+// it can't reach the app, localStorage, or the network) and size it from the
+// height it reports back. See docs/DECISIONS.md → "AI-generated HTML cards".
+
+const CARD_MIN_H = 60;
+const CARD_MAX_H = 560;
+const CARD_MAX_H_EXPANDED = 1000;
+
+function renderCard(card: Card): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "chat-card";
+  wrap.innerHTML = `
+    <div class="chat-card-head">
+      <span class="chat-card-badge" title="Written by the assistant and run in a sealed sandbox — no network, no access to the app">✨ Generated</span>
+      <span class="chat-card-title">${escapeHtml(card.title)}</span>
+      <button type="button" class="chat-card-code" title="View the snippet">Code</button>
+    </div>
+    <div class="chat-card-frame"></div>`;
+  const frameHost = wrap.querySelector(".chat-card-frame") as HTMLElement;
+
+  const iframe = document.createElement("iframe");
+  iframe.className = "chat-card-iframe";
+  // allow-scripts ONLY — no allow-same-origin => opaque origin.
+  iframe.setAttribute("sandbox", "allow-scripts");
+  iframe.setAttribute("referrerpolicy", "no-referrer");
+  iframe.setAttribute("loading", "lazy");
+  iframe.setAttribute("scrolling", "no");
+  iframe.style.height = `${CARD_MIN_H}px`;
+  // Set as a property (not the attribute) so the DOM handles escaping.
+  iframe.srcdoc = card.html;
+  frameHost.appendChild(iframe);
+
+  let expanded = false;
+  let lastReportedH = CARD_MIN_H;
+  const applyHeight = () => {
+    const cap = expanded ? CARD_MAX_H_EXPANDED : CARD_MAX_H;
+    const target = Math.min(cap, Math.max(CARD_MIN_H, Math.round(lastReportedH)));
+    iframe.style.height = `${target}px`;
+    wrap.classList.toggle("is-clamped", lastReportedH > target + 4);
+  };
+  const onMessage = (e: MessageEvent) => {
+    if (e.source !== iframe.contentWindow) return; // only this frame
+    const d = e.data;
+    if (!d || typeof d !== "object") return;
+    if (d.type === "card-height" && typeof d.h === "number") {
+      lastReportedH = d.h;
+      applyHeight();
+    } else if (d.type === "card-error") {
+      wrap.classList.add("has-error");
+    }
+  };
+  window.addEventListener("message", onMessage);
+  // Tear the listener down once the card leaves the DOM (chat cleared / view
+  // switch) so old frames' height messages can't touch a detached node.
+  const obs = new MutationObserver(() => {
+    if (!wrap.isConnected) {
+      window.removeEventListener("message", onMessage);
+      obs.disconnect();
+    }
+  });
+  setTimeout(() => obs.observe(document.body, { childList: true, subtree: true }), 0);
+
+  wrap.querySelector(".chat-card-code")!.addEventListener("click", () => {
+    openSidePanel(
+      `Card source · ${card.title}`,
+      `<p class="side-panel-hint">The HTML the assistant wrote. It runs sandboxed — no network, no access to the app.</p>
+       <pre class="side-panel-text">${escapeHtml(card.fragment)}</pre>`
+    );
+  });
+
+  // A card taller than the clamp gets a "Show all" toggle in its footer.
+  const moreBtn = document.createElement("button");
+  moreBtn.type = "button";
+  moreBtn.className = "chat-card-more";
+  moreBtn.textContent = "Show all";
+  moreBtn.addEventListener("click", () => {
+    expanded = !expanded;
+    moreBtn.textContent = expanded ? "Show less" : "Show all";
+    applyHeight();
+  });
+  wrap.appendChild(moreBtn);
+
+  return wrap;
+}
+
+/** Attach the reply's card(s) directly after the bubble (1:1 chat). */
+function attachCards(bubble: HTMLElement, cards: Card[] | undefined): void {
+  if (!cards?.length) return;
+  let anchor: HTMLElement = bubble;
+  for (const card of cards.slice(0, 2)) {
+    const el = renderCard(card);
+    anchor.insertAdjacentElement("afterend", el);
+    anchor = el;
+  }
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+/** Attach the reply's card(s) inside a family-channel message element (once). */
+function attachMessageCards(msgEl: HTMLElement, cards: Card[] | undefined): void {
+  if (!cards?.length || msgEl.querySelector(".chat-card")) return;
+  const after = msgEl.querySelector<HTMLElement>(".steps-strip") ?? msgEl.querySelector<HTMLElement>(".msg-body");
+  let anchor: HTMLElement | null = after;
+  for (const card of cards.slice(0, 2)) {
+    const el = renderCard(card);
+    el.classList.add("chat-card--msg");
+    (anchor ?? msgEl).insertAdjacentElement(anchor ? "afterend" : "beforeend", el);
+    anchor = el;
+  }
+}
+
+// ---- steps in the Messages (family channel) view ----
+// The pending agent message's id doubles as the turnId server-side.
+const messageStepPolls = new Set<string>();
+
+function updateMessageStepsStrip(msgEl: HTMLElement, steps: ToolStep[], live: boolean): void {
+  const strip = msgEl.querySelector<HTMLElement>(".steps-strip");
+  if (!strip) return;
+  if (steps.length === 0 && !live) {
+    strip.remove();
+    return;
+  }
+  renderStepsStrip(strip, steps, live);
+}
+
+async function pollMessageSteps(messageId: string, strip: HTMLElement): Promise<void> {
+  if (messageStepPolls.has(messageId)) return;
+  messageStepPolls.add(messageId);
+  try {
+    while (messageStepPolls.has(messageId) && strip.isConnected) {
+      try {
+        const { steps, done } = await api.turnSteps(messageId);
+        if (steps.length) renderStepsStrip(strip, steps, !done);
+        if (done) return;
+      } catch {
+        /* not registered yet / already swept */
+      }
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+  } finally {
+    messageStepPolls.delete(messageId);
+  }
 }
 
 void boot();

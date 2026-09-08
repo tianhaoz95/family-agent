@@ -64,6 +64,9 @@ desktop style".
   `docs/DECISIONS.md` → "Web access and shell/file-processing".
 - *Optional, for the web capability*: set `FAMILY_AGENT_WEB_SEARCH_PROVIDER` to `searxng`
   (+ `_URL`), `tavily`/`brave` (+ `_API_KEY`), or `ddg` (no setup, best from a home connection).
+- *Optional, for the password vault* (`FAMILY_AGENT_VAULT=1`): no extra deps — the crypto is
+  Node's built-in `node:crypto`. `FAMILY_AGENT_VAULT_AI=0` keeps the vault but denies the
+  assistant. See "Password vault" below.
 - Android toolchain (JDK 17, Android SDK) lives in `.toolchains/` at the repo root, gitignored and
   machine-local — see `docs/BUILD_LOG.md`'s "android" section if it's missing and needs
   reinstalling.
@@ -422,6 +425,37 @@ Android a "History" button on `ChatScreen` navigating to `ChatSessionsScreen.kt`
 (`chatsessions` route, not a drawer `Destination`), reopening a row loads that
 session's messages back into the same `ChatScreen` via `AppViewModel.openChatSession`.
 
+**Tool-call visibility.** Every tool the agent calls in a turn (including a
+subagent's) is captured by a `StepRecorder` (`agents/steps.ts`, a LangChain
+`BaseCallbackHandler` passed to `agent.invoke`) and shown under the reply as a
+live strip; clicking it opens the side panel with each call's exact arguments
+and result. Live transport is a client-supplied `turnId` on `POST /chat` + an
+in-memory turn map polled via `GET /chat/turns/:turnId` (the family-channel
+`@agent` reply reuses the pending message id as the turnId). The final `steps`
+are persisted on `chat_messages.steps` / `messages.steps` (JSON, like `refs`)
+for replay. **Vault turns pass no recorder** — a step output would leak the
+secret. Desktop `makeStepsStrip`/`openStepsPanel` in `main.ts`; Android
+`StepsStrip` in `ui/Components.kt` + `DetailContent.Steps`. See
+`docs/DECISIONS.md` → "Tool-call visibility".
+
+**Generated HTML cards (`render_card`).** When `config.cardsEnabled` (the first
+**boolean toggle in the desktop Settings page**, admin-only, persisted; env
+`FAMILY_AGENT_CARDS=0` forces off + env-locks; `/health.cards`), the assistant
+has a leaf `render_card({ title, html })` tool (planner + document/research/
+connections subagents) — it answers with a small self-contained HTML/JS
+snippet (a chart, checklist, diagram) the clients embed inline. The snippet
+runs in an `<iframe sandbox="allow-scripts">` (**no** `allow-same-origin` =>
+opaque origin, no app/localStorage access) with a `default-src 'none'`,
+no-`connect-src` CSP (no network at all). Server stores only the fragment
+(`chat_messages.cards` / `messages.cards`, JSON) and wraps it — CSP + a trimmed
+`HOUSE_STYLE` + a `CARD_RUNTIME` (measurement + error trap + a small `Card`
+SVG-chart helper) — at read time (`cards/wrap.ts`). Per-user `chatCards`
+collector like `chatRefs`; capped 2/reply. Android renders it in an isolated
+`WebView` (`loadDataWithBaseURL(null, …)`, all network blocked,
+`@JavascriptInterface postHeight`). Desktop `renderCard` in `main.ts` +
+`.chat-card` CSS; Android `ui/CardWebView.kt` + `DetailContent.CardSource`.
+Tests: `test/cards.test.ts`. See `docs/DECISIONS.md` → "AI-generated HTML cards".
+
 ## "/" forces a chat turn to one specialist agent
 
 The planner's own decision to delegate to a subagent (see `PLANNER_PROMPT`'s
@@ -480,8 +514,15 @@ wrapper); the textarea then holds only the message. Backspace at caret 0
 deletes the whole chip at once (never a half "/comman"). On submit the wire
 form is rebuilt as `/${cmd} ${text}` (and shown that way in the transcript
 bubble, keeping the wrench flag). All of this lives in the shared
-`wireSlashMenu(input, menu, chip, form, onChange)` helper — Chat and Messages
-call it the same way. A "?" button (next to "+ New" in Chat, in the
+`wireSlashMenu(input, menu, chip, form, onChange, { mention? })` helper — Chat
+and Messages call it the same way. In **Messages only** (`{ mention: true }`)
+the same chip + autocomplete plumbing also handles **`@agent`** (aliases `@ai`
+/ `@assistant`): typing `@agent ` or picking it from the `@` popup lifts an
+`@agent` pill exactly like a `/` command, mutually exclusive with a slash chip;
+on submit the body is rebuilt as `@agent ${text}` and `mentionAgent: true` is
+sent. On Android the same pill + `@` popup lives in `ConversationScreen`'s
+composer (`MentionChip`, `MENTION_LIFT`), a backspace-on-empty drops it whole.
+A "?" button (next to "+ New" in Chat, in the
 conversation head in Messages) opens the reference-preview side panel
 (`openSidePanel()`) with the same list explained. Android: `ChatScreen.kt`
 renders matches as a card above the composer (the `input` state is a
@@ -721,13 +762,72 @@ which is agent-core being an MCP *server* for generated tools).
 
 Tests: `test/skills.test.ts`, `test/mcp.test.ts`.
 
+## Password vault (vault/*, vault-agent, `/vault`)
+
+A per-user encrypted store for **passwords + TOTP seeds**, optionally shared
+across the family, that the local assistant can read out on request. OFF by
+default: `FAMILY_AGENT_VAULT=1` enables it, `FAMILY_AGENT_VAULT_AI=0` keeps the
+vault but denies the assistant — an operator env switch like
+`FAMILY_AGENT_WEB`/`_SHELL`/`_MCP`, not a Settings toggle, because it holds the
+family's most sensitive data. `/health.vault` (`"on"|"off"`) + `.vaultAi` gate
+both clients' Vault screen and the `/vault` command.
+
+- `agent-core/src/vault/crypto.ts` — hand-rolled envelope (same call as
+  `auth.ts`'s scrypt, `mcp/client.ts`'s JSON-RPC): scrypt KDF, AES-256-GCM for
+  entry secrets + key-wrapping, X25519 seal (ECDH + HKDF + AES-GCM) for the
+  shared family key. `vault/totp.ts` — RFC 6238 + `otpauth://` parsing, ~1 KB,
+  tested against the RFC vectors.
+- **Key model.** Per-user random DEK, stored wrapped under (a) a key derived
+  from the login password and (b) a one-time recovery code shown at setup. An
+  X25519 keypair (private key encrypted under the DEK) opens the sealed family
+  key. Private entries encrypted under the DEK, shared entries under the family
+  key. Entry `title`/`username`/`url` are **plaintext columns** (so the list +
+  search work locked); only the secret blob (password, TOTP seed, notes,
+  custom fields) is encrypted. A stolen `family-agent.db` yields no secret.
+- **`VaultKeyring`** (`vault/keyring.ts`, process-wide like `ToolSupervisor`)
+  holds the DEK + private key in memory per user, only between an unlock and an
+  idle timeout (15 min) / explicit lock / sign-out / process exit. `POST
+  /auth/login` best-effort auto-unlocks; a restart drops it, so the next vault
+  call `423`s and the client calls `POST /vault/unlock`. Admin password reset →
+  user unlocks with the recovery code (`POST /vault/recover`, re-wraps + issues
+  a fresh code). `VaultService` (`vault/service.ts`) ties store + crypto +
+  keyring together — nothing else touches a data key.
+- **Shared vault** mirrors the sticky board (`scope='shared'`, any member r/w).
+  `POST /vault/family/sync` (admin, own vault unlocked) seals the family key to
+  every member using only their stored public keys — no need for each member to
+  be present. Setup opportunistically syncs if an admin is unlocked.
+- **AI access is forced-turn only, NOT a planner subagent.** `/vault` (aliases
+  `/password`, `/2fa`) → `buildFamilyVaultAgent` with three **read-only** tools
+  (`search_vault`, `get_password`, `get_totp_code`). Never in the planner's
+  `subagents`; refused in a family channel (`runForcedAgentTurn(..., inChannel)`).
+  The assistant can't create/edit/delete — that's a human action on the Vault
+  screen. Not a routine action agent.
+- **Transcript redaction.** A `/vault` turn's live reply keeps the secret; the
+  copy written to `chat_messages` (and replayed as history) has every revealed
+  value replaced with a placeholder (`redactSecrets` in `server.ts`, fed by an
+  `onReveal` collector). **Audit:** the assistant's `get_password`/
+  `get_totp_code` + every create/edit/delete write a `vault_access_log` row
+  with the entry title, never the value; the Vault screen shows it. The
+  screen's once-a-second `GET /vault/entries/:id/totp` poll (`actor: "user"`)
+  is deliberately not logged.
+- DB: `vault_keys` (base `Store` — family provisioning reads all public keys) /
+  `vault_entries` + `vault_access_log` (`ScopedStore`), all new `CREATE TABLE
+  IF NOT EXISTS`. Routes: `GET /vault/status`, `POST /vault/{setup,unlock,lock,
+  recover}`, `POST /vault/family/sync` (admin), `GET/POST /vault/entries`,
+  `GET/PATCH/DELETE /vault/entries/:id`, `GET /vault/entries/:id/totp`, `GET
+  /vault/access-log`. Desktop `#view-vault` (`renderVault` in `main.ts`);
+  Android `Destination.Vault` / `VaultScreen.kt`. Tests: `test/vault.test.ts`,
+  `test/vault.routes.test.ts`. See `docs/DECISIONS.md` → "Password vault".
+
 ## Scope notes
 
 Ten subagents ship: `task-agent`, `document-agent`, `builder-agent`,
 `notes-agent`, `tools-agent`, `routine-agent`, `research-agent` (web access
 on), `workshop-agent` (file processing on), `skill-agent` (skills, default on),
 and `connections-agent` (MCP on) — plus `run_code`, a leaf tool
-on the planner + `document-agent` (see "Code sandbox" above). `builder-agent`
+on the planner + `document-agent` (see "Code sandbox" above). The
+**`vault-agent`** (`FAMILY_AGENT_VAULT=1`) is forced-turn-only (`/vault`) and
+never wired as a planner subagent — see "Password vault" above. `builder-agent`
 generates small self-contained web tools (`agent-core/src/tools/*`, and a "Tools" screen in
 both apps) — see `docs/STATUS.md` for the architecture. A build starts with a **plan pass**
 (`planTool` / `PLAN_SYSTEM`): the model decides `{ needsBackend, operations }` for the ask

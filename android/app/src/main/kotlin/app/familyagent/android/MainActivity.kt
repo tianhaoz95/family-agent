@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Hub
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.School
@@ -62,6 +63,7 @@ import app.familyagent.android.data.ServerDiscovery
 import app.familyagent.android.data.SettingsStore
 import app.familyagent.android.ui.ActivityScreen
 import app.familyagent.android.ui.AtmosphereBackground
+import app.familyagent.android.ui.VaultScreen
 import app.familyagent.android.ui.BoardScreen
 import app.familyagent.android.ui.ChatScreen
 import app.familyagent.android.ui.ChatSessionsScreen
@@ -93,6 +95,7 @@ private enum class Destination(val route: String, val label: String, val icon: a
     Routines("routines", "Routines", Icons.Rounded.Schedule),
     Skills("skills", "Skills", Icons.Rounded.School),
     Connections("connections", "Connections", Icons.Rounded.Hub),
+    Vault("vault", "Vault", Icons.Rounded.Lock),
     Activity("activity", "Activity", Icons.Rounded.History),
     Settings("settings", "Settings", Icons.Rounded.Settings),
 }
@@ -183,6 +186,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
             Destination.Routines -> viewModel.refreshRoutines()
             Destination.Skills -> viewModel.refreshSkills()
             Destination.Connections -> viewModel.refreshConnections()
+            Destination.Vault -> viewModel.refreshVault()
             Destination.Activity -> viewModel.refreshActivity()
             else -> {}
         }
@@ -201,6 +205,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                 skillsEnabled = state.skillsMode != "off",
                 connectionsEnabled = state.mcpMode != "off" &&
                     (state.auth as? AuthState.Authenticated)?.user?.role == "admin",
+                vaultEnabled = state.vaultMode == "on",
                 onSelect = { dest ->
                     scope.launch { drawerState.close() }
                     val alreadyHere = currentDestination?.hierarchy?.any { it.route == dest.route } == true
@@ -236,6 +241,9 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                     ChatScreen(
                         messages = state.chatMessages,
                         sending = state.chatSending,
+                        liveSteps = state.chatLiveSteps,
+                        onStepsClick = viewModel::showStepsDetail,
+                        onViewCardSource = viewModel::showCardSource,
                         voiceEnabled = state.voiceEnabled,
                         transcribing = state.chatTranscribing,
                         ttsEnabled = state.ttsEnabled,
@@ -288,6 +296,8 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         messages = state.channelMessages,
                         sending = state.channelSending,
                         currentUserId = (state.auth as? AuthState.Authenticated)?.user?.id ?: "",
+                        onStepsClick = viewModel::showStepsDetail,
+                        onViewCardSource = viewModel::showCardSource,
                         ttsEnabled = state.ttsEnabled,
                         voiceEnabled = state.voiceEnabled,
                         transcribing = state.channelTranscribing,
@@ -403,10 +413,36 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onDelete = viewModel::deleteMcpServer,
                     )
                 }
+                composable(Destination.Vault.route) {
+                    VaultScreen(
+                        enabled = state.vaultMode == "on",
+                        status = state.vaultStatus,
+                        entries = state.vaultEntries,
+                        detail = state.vaultDetail,
+                        accessLog = state.vaultAccessLog,
+                        recoveryCode = state.vaultRecoveryCode,
+                        statusMsg = state.vaultStatusMsg,
+                        isAdmin = (state.auth as? AuthState.Authenticated)?.user?.role == "admin",
+                        onRefresh = viewModel::refreshVault,
+                        onSetup = viewModel::vaultSetup,
+                        onUnlock = viewModel::vaultUnlock,
+                        onLock = viewModel::vaultLock,
+                        onRecover = viewModel::vaultRecover,
+                        onFamilySync = viewModel::vaultFamilySync,
+                        onDismissRecoveryCode = viewModel::dismissVaultRecoveryCode,
+                        onOpenEntry = viewModel::openVaultEntry,
+                        onCloseEntry = viewModel::closeVaultEntry,
+                        onSave = viewModel::saveVaultEntry,
+                        onDelete = viewModel::deleteVaultEntry,
+                        onLoadAccessLog = viewModel::loadVaultAccessLog,
+                        getTotp = viewModel::vaultCurrentTotp,
+                    )
+                }
                 composable(Destination.Activity.route) {
                     ActivityScreen(state.activity)
                 }
                 composable(Destination.Settings.route) {
+                    LaunchedEffect(Unit) { viewModel.refreshServerSettings() }
                     SettingsScreen(
                         serverUrl = state.serverUrl,
                         connection = state.connection,
@@ -415,6 +451,8 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         ttsEnabled = state.ttsEnabled,
                         autoRead = state.autoRead,
                         onSetAutoRead = viewModel::setAutoRead,
+                        serverSettings = state.serverSettings,
+                        onSetCardsEnabled = viewModel::setCardsEnabled,
                         onSave = viewModel::setServerUrl,
                         onSignOut = viewModel::signOut,
                     )
@@ -474,6 +512,7 @@ private fun AppDrawer(
     routinesEnabled: Boolean,
     skillsEnabled: Boolean,
     connectionsEnabled: Boolean,
+    vaultEnabled: Boolean,
     onSelect: (Destination) -> Unit,
 ) {
     // Opaque, not glass: Android has no cheap backdrop blur, so a translucent
@@ -507,6 +546,7 @@ private fun AppDrawer(
                 if (dest == Destination.Routines && !routinesEnabled) return@forEach
                 if (dest == Destination.Skills && !skillsEnabled) return@forEach
                 if (dest == Destination.Connections && !connectionsEnabled) return@forEach
+                if (dest == Destination.Vault && !vaultEnabled) return@forEach
                 val selected = current?.hierarchy?.any { it.route == dest.route } == true
                 NavigationDrawerItem(
                     label = {

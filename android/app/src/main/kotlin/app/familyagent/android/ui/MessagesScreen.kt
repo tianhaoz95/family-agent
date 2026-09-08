@@ -29,6 +29,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -173,12 +178,55 @@ private fun NewConversationForm(
     }
 }
 
+// "@agent" (aliases "@ai" / "@assistant") pulls the assistant into a family
+// conversation — same trigger the server checks (mentionsAgent, agent-core).
+// In the composer it rides the same chip affordance a "/" command gets in Chat.
+private val MENTION_NAMES = listOf("agent", "ai", "assistant")
+private val MENTION_LIFT = Regex("^@([A-Za-z]+)[ \\t]([\\s\\S]*)$")
+
+/** The committed "@agent" pill shown to the left of the composer field. */
+@Composable
+private fun MentionChip(onRemove: () -> Unit) {
+    Row(
+        Modifier
+            .padding(end = 6.dp)
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "@agent",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+        Spacer(Modifier.width(2.dp))
+        Box(
+            Modifier
+                .size(18.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Rounded.Close,
+                contentDescription = "Remove @agent",
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(13.dp),
+            )
+        }
+    }
+}
+
 @Composable
 fun ConversationScreen(
     channel: Channel?,
     messages: List<Message>,
     sending: Boolean,
     currentUserId: String,
+    onStepsClick: (List<app.familyagent.android.data.ToolStep>) -> Unit = {},
+    onViewCardSource: (app.familyagent.android.data.Card) -> Unit = {},
     ttsEnabled: Boolean = false,
     voiceEnabled: Boolean = false,
     transcribing: Boolean = false,
@@ -192,6 +240,7 @@ fun ConversationScreen(
     onBack: () -> Unit,
 ) {
     var input by remember { mutableStateOf("") }
+    var mentionChip by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var attached by remember { mutableStateOf<List<String>>(emptyList()) }
     val listState = rememberLazyListState()
@@ -210,10 +259,23 @@ fun ConversationScreen(
         ActivityResultContracts.PickMultipleVisualMedia(MAX_MESSAGE_IMAGES),
     ) { uris -> if (uris.isNotEmpty()) addUris(uris) }
 
+    // Type "@agent " (or pick it from the popup) and the mention lifts out of
+    // the field into a pill; the field then holds only the message.
+    fun onInput(v: String) {
+        val m = if (!mentionChip) MENTION_LIFT.find(v) else null
+        if (m != null && m.groupValues[1].lowercase() in MENTION_NAMES) {
+            mentionChip = true
+            input = m.groupValues[2]
+        } else {
+            input = v
+        }
+    }
     val submit = {
-        if ((input.isNotBlank() || attached.isNotEmpty()) && !sending) {
-            onSend(input.trim(), attached)
+        if ((input.isNotBlank() || attached.isNotEmpty() || mentionChip) && !sending) {
+            val body = if (mentionChip) "@agent ${input.trim()}".trimEnd() else input.trim()
+            onSend(body, attached)
             input = ""
+            mentionChip = false
             attached = emptyList()
         }
     }
@@ -270,7 +332,7 @@ fun ConversationScreen(
             items(messages, key = { it.id }) { m ->
                 MessageBubble(
                     m, own = m.senderId == currentUserId, channel,
-                    ttsEnabled, speakingText, speakLoadingText, onSpeak,
+                    ttsEnabled, speakingText, speakLoadingText, onSpeak, onStepsClick, onViewCardSource,
                 )
             }
         }
@@ -302,6 +364,32 @@ fun ConversationScreen(
                             Icon(Icons.Rounded.Close, contentDescription = "Remove", tint = Color.White, modifier = Modifier.size(12.dp))
                         }
                     }
+                }
+            }
+        }
+
+        // "@" autocomplete — only while "@" + a partial word is still being
+        // typed (no space yet), and no mention is committed. One row: @agent.
+        val atQuery = input.takeIf {
+            !mentionChip && it.startsWith("@") && !it.drop(1).contains(" ")
+        }?.drop(1)
+        if (atQuery != null && "agent".contains(atQuery, ignoreCase = true)) {
+            Spacer(Modifier.height(8.dp))
+            AppCard {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            mentionChip = true
+                            input = ""
+                        },
+                ) {
+                    Text("@agent", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Bring in the assistant",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppAccents.textSecondary,
+                    )
                 }
             }
         }
@@ -343,13 +431,29 @@ fun ConversationScreen(
                     onVoiceSend = onVoiceSend,
                 )
             }
+            if (mentionChip) MentionChip(onRemove = { mentionChip = false })
             TextField(
                 value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
+                onValueChange = { onInput(it) },
+                modifier = Modifier
+                    .weight(1f)
+                    .onPreviewKeyEvent { e ->
+                        // Backspace on an empty field drops the whole @agent
+                        // pill at once — never a partial "@age".
+                        if (e.type == KeyEventType.KeyDown &&
+                            e.key == Key.Backspace &&
+                            mentionChip &&
+                            input.isEmpty()
+                        ) {
+                            mentionChip = false
+                            true
+                        } else {
+                            false
+                        }
+                    },
                 placeholder = {
                     Text(
-                        "Message, or @agent",
+                        if (mentionChip) "Message the assistant" else "Message, or @agent",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -366,7 +470,7 @@ fun ConversationScreen(
             )
             FilledIconButton(
                 onClick = submit,
-                enabled = (input.isNotBlank() || attached.isNotEmpty()) && !sending,
+                enabled = (input.isNotBlank() || attached.isNotEmpty() || mentionChip) && !sending,
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.size(46.dp),
             ) {
@@ -387,6 +491,8 @@ private fun MessageBubble(
     speakingText: String? = null,
     speakLoadingText: String? = null,
     onSpeak: (String) -> Unit = {},
+    onStepsClick: (List<app.familyagent.android.data.ToolStep>) -> Unit = {},
+    onViewCardSource: (app.familyagent.android.data.Card) -> Unit = {},
 ) {
     val agent = msg.senderId == AGENT_SENDER_ID
     val senderName = when {
@@ -452,6 +558,16 @@ private fun MessageBubble(
                         color = if (own) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.bodyLarge,
                     )
+                }
+            }
+            if (agent && msg.steps.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                StepsStrip(msg.steps, live = false) { onStepsClick(msg.steps) }
+            }
+            if (agent && msg.cards.isNotEmpty()) {
+                msg.cards.take(2).forEach { c ->
+                    Spacer(Modifier.height(8.dp))
+                    CardView(c) { onViewCardSource(c) }
                 }
             }
             if (agent && !msg.pending && msg.body.isNotBlank()) {

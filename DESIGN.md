@@ -469,6 +469,12 @@ changes is depth and motion. This overrides three of the "Don't"s above **for
 - **Floating cards.** `--shadow-sm` is now a real soft, warm-tinted shadow
   (was `none`); container cards carry it and list rows lift (`translateY(-2px)`
   + `--shadow-hover`) on hover. `--shadow-pop` for menus / the side panel.
+- **Floating side panel.** `#side-panel` (document preview, chat references,
+  tool-call detail) is the right-hand mirror of the rail: `position: fixed`,
+  14 px inset on all sides, `--r-xl` corners, `--glass-strong` +
+  `--glass-blur`, `--shadow-pop`, `z-index: 60`; slides out on close over
+  `--dur-lg` then unmounts. `--glass-strong` (not the rail's `--glass`)
+  because it carries long-form reading content.
 - **Rounder corners.** `--r-md` 8→11, `--r-lg` 12→16, `--r-xl` 12→22. Pills
   unchanged.
 - **Springier motion.** `--ease-out` / `--ease-spring` curves; `--dur-lg`

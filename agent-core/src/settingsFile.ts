@@ -23,9 +23,12 @@ export interface PersistedSettings {
   ollamaBaseUrl?: string;
   /** Display name for this master node — shown on login and in LAN discovery. */
   serverName?: string;
+  /** Whether the assistant may answer with a generated HTML card (render_card). */
+  cardsEnabled?: boolean;
 }
 
 const STRING_KEYS: (keyof PersistedSettings)[] = ["ocrModel", "asrModel", "ttsVoice", "embedModel", "model", "ollamaBaseUrl", "serverName"];
+const BOOL_KEYS: (keyof PersistedSettings)[] = ["cardsEnabled"];
 
 function settingsPath(dataDir: string): string {
   return `${dataDir}/settings.json`;
@@ -36,7 +39,10 @@ export function readPersistedSettings(dataDir: string): PersistedSettings {
     const parsed = JSON.parse(readFileSync(settingsPath(dataDir), "utf8")) as Record<string, unknown>;
     const out: PersistedSettings = {};
     for (const key of STRING_KEYS) {
-      if (typeof parsed[key] === "string") out[key] = parsed[key] as string;
+      if (typeof parsed[key] === "string") (out as Record<string, unknown>)[key] = parsed[key];
+    }
+    for (const key of BOOL_KEYS) {
+      if (typeof parsed[key] === "boolean") (out as Record<string, unknown>)[key] = parsed[key];
     }
     return out;
   } catch {

@@ -150,6 +150,40 @@ the legacy in-repo `agent-core/data/`):
 
 A proper `agent-core` reset command is a worthwhile follow-up.
 
+**Password vault + a reset:** `reset-password.sh` (or a second admin's reset)
+severs the vault's login key — that user's `vault_keys` row is still encrypted
+under the *old* password. They sign in with the new password, then on the Vault
+screen enter their **recovery code** (shown once at vault setup); that re-wraps
+the vault under the new password and issues a fresh code. Without the recovery
+code the vault contents are unrecoverable by design. See `docs/DECISIONS.md` →
+"Password vault".
+
+## Password vault
+
+`FAMILY_AGENT_VAULT=1` turns on a per-user encrypted store for passwords + TOTP
+seeds, with an optional shared family vault, that the local assistant can read
+out via `/vault` in a private chat ("what's my Netflix password", "the 2FA code
+for the bank"). `FAMILY_AGENT_VAULT_AI=0` keeps the vault but denies the
+assistant. Off by default — it changes the security posture, so it's an env
+switch, not a Settings toggle. Crypto is `node:crypto` only (scrypt + AES-GCM +
+X25519), hand-rolled in `agent-core/src/vault/`. A stolen `family-agent.db`
+yields entry titles/usernames but no secret. First use: open the **Vault**
+screen (desktop or Android), confirm your account password, save the one-time
+recovery code. Full design + every non-obvious call: `docs/DECISIONS.md` →
+"Password vault"; contract summary in `CLAUDE.md` → "Password vault".
+
+## Visual cards in chat
+
+The assistant can answer with a small generated **chart / checklist / diagram**
+— an HTML+JS snippet it writes, embedded inline in the chat and family channels.
+**On by default; toggle it off** in the desktop or Android Settings ("Visual
+cards in chat") for a strictly text-only, more predictable experience
+(generated code is less stable than text). `FAMILY_AGENT_CARDS=0` on the server
+forces it off. Each card runs in a sealed sandbox — opaque-origin iframe /
+`null`-base WebView, a `default-src 'none'` no-network CSP — so it can't reach
+the app, your data, or the network. Full design: `docs/DECISIONS.md` →
+"AI-generated HTML cards"; contract in `CLAUDE.md` → "Generated HTML cards".
+
 ## Desktop opens to a blank window
 
 If a previous run left an orphaned `node dist/server.js` holding port 4174 (the

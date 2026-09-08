@@ -64,6 +64,24 @@ conversation, which have their own top-left back/close controls. The active
 drawer item uses the desktop's `accent-soft` background + `accent` text/icon
 (was a filled indigo pill).
 
+The **Vault** drawer item (`Destination.Vault`, `ui/VaultScreen.kt`) appears
+only when `/health.vault == "on"` — same gating pattern as Routines / Skills /
+Connections. It's a lock gate (`AppCard` with a password field) → an entry list
+of `AppCard`s → a `ModalBottomSheet` detail (reveal / copy / ticking 2FA) and a
+second sheet for the add/edit form, reusing `DetailSheet.kt`'s pattern. All
+crypto is server-side; the screen only ever holds decrypted values while the
+vault is unlocked. See `docs/DECISIONS.md` → "Password vault".
+
+**Generated cards** (`ui/CardWebView.kt`) render inline in `ChatBubble` /
+`MessageBubble` when a reply carries one and `/health.cards == "on"`: a card
+chrome (`Surface` + "✨" badge + "Code" → `DetailContent.CardSource` sheet)
+around an isolated `WebView` — `loadDataWithBaseURL(null, …)` for an opaque
+origin, all network killed at `shouldInterceptRequest`, height via a single
+`@JavascriptInterface`, animated with `animateDpAsState`, "Show all" past a
+520 dp clamp. The Settings screen gains a `Switch` for the machine-wide
+toggle (`GET/PUT /settings`, admin + env-lock gated). See `docs/DECISIONS.md`
+→ "AI-generated HTML cards".
+
 ## Nunito
 
 `res/font/nunito_variable.ttf` is still bundled but no longer referenced — kept

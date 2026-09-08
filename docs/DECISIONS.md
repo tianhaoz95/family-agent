@@ -1994,3 +1994,257 @@ No webfont (offline, no external URLs) — `Inter` in the stack degrades to
 `system-ui`. The `wrapFragment` fallback page got the canvas + ink colours too.
 `iterateTool`'s "smallest edit, keep everything else" instruction means an
 existing pre-`HOUSE_STYLE` tool isn't force-restyled on an improve.
+
+## Password vault (encrypted credential + TOTP store the assistant can read)
+
+A new feature (added after the autonomous build): a per-user, optionally
+family-shared store for passwords and TOTP seeds that the **local** assistant
+can read out on request ("what's my Netflix password", "give me the 2FA code
+for the bank"). Because inference is entirely local, this stays private in a
+way a cloud password manager's AI never could. Full brainstorm/eval is in the
+git history; the shipped shape and every non-obvious call:
+
+**Off by default, operator env switch — not a Settings toggle.**
+`FAMILY_AGENT_VAULT=1` enables it; `FAMILY_AGENT_VAULT_AI=0` keeps the vault
+but denies the assistant. Same reasoning as `FAMILY_AGENT_WEB`/`_SHELL`/`_MCP`:
+it holds the family's most sensitive data and changes the security posture, so
+it shouldn't be flippable from the in-app UI. `/health.vault` (`"on"|"off"`)
+and `.vaultAi` gate the Vault screen and the `/vault` command in both clients.
+
+**Crypto is hand-rolled in `agent-core/src/vault/crypto.ts`** — scrypt KDF
+(same cost as `auth.ts`), AES-256-GCM AEAD for entry secrets and key-wrapping,
+X25519 seal (ECDH + HKDF-SHA256 + AES-GCM) for the shared family key. Rolled
+rather than pulled from a library for the same reasons as `auth.ts`'s scrypt
+format and `mcp/client.ts`'s JSON-RPC: it's a small standard construction, it
+matches the codebase's minimal-deps personality, and it stays auditable in one
+file. RFC 6238 TOTP + `otpauth://` parsing is likewise ~1 KB hand-rolled
+(`vault/totp.ts`), tested against the RFC's own vectors.
+
+**Key model.** Each user has a random 256-bit data-encryption key (DEK),
+stored **wrapped** two ways: under a key derived from their login password, and
+under a one-time recovery code shown once at setup. An X25519 keypair (private
+key encrypted under the DEK) exists only to open the sealed shared "family"
+key. Private entries are encrypted under the DEK; shared entries under the
+family key. The **only** thing in `family-agent.db` a stolen copy yields is
+entry titles / usernames / URLs (kept plaintext so the list and search work
+locked) — never a password or seed.
+
+**Unlock lifecycle.** `VaultKeyring` (`vault/keyring.ts`) holds the DEK +
+private key in memory, per user, only between an unlock and an idle timeout
+(15 min), an explicit lock, sign-out, or process exit. `POST /auth/login`
+best-effort auto-unlocks with the password it already has; a server restart
+drops the keyring, so the next vault call returns `423` and the client
+re-unlocks (`POST /vault/unlock`). After an admin password reset the login KEK
+no longer fits — the user unlocks with their recovery code
+(`POST /vault/recover`), which re-wraps the vault under the new password and
+issues a fresh code. A self-service password change re-wraps in place if the
+vault is unlocked.
+
+**Shared family vault.** Mirrors the sticky-note board: `scope='shared'` is
+readable/editable by any member. Because the family key is sealed with public
+keys, an admin whose own vault is unlocked can grant it to every other member
+using only their stored public keys (`POST /vault/family/sync`) — no need for
+each member to be present. Setup also opportunistically syncs if an admin is
+unlocked at that moment.
+
+**AI access is forced-turn only — deliberately NOT a planner subagent.**
+`/vault` (aliases `/password`, `/2fa`) runs a `buildFamilyVaultAgent` with
+three read-only tools (`search_vault`, `get_password`, `get_totp_code`) and
+nothing else. It is never in the planner's `subagents` array and is refused in
+a family channel (`runForcedAgentTurn(..., inChannel=true)`), so a poisoned
+document can't pivot the planner into it and a shared-channel `@agent` can't
+leak a shared credential into a transcript everyone sees. The assistant cannot
+create/edit/delete entries — that's a deliberate human action on the Vault
+screen. A v2 could wire it onto the planner behind its own flag.
+
+**Transcript redaction.** A `/vault` turn's answer contains a real secret. The
+live HTTP reply keeps it; the copy written to `chat_messages` (and later
+replayed as history) has every revealed value replaced with a placeholder
+(`redactSecrets` in `server.ts`, fed by an `onReveal` collector like
+`chatRefs`). A secret must not linger in a persisted transcript.
+
+**Audit.** The assistant's `get_password` / `get_totp_code`, plus every
+create / edit / delete, write a `vault_access_log` row with the entry title but
+never the value. The Vault screen surfaces it ("Assistant read the 2FA code for
+GitHub"). The Vault screen polls `GET /vault/entries/:id/totp` once a second to
+show the ticking code — `actor: "user"` reads there are deliberately **not**
+logged, or they'd bury the rows that matter.
+
+**Not done in v1 (candidates for later):** browser autofill (the actually-hard
+part of a password manager — explicitly out of scope), metadata-at-rest
+encryption (title/username left plaintext for locked search — a stolen DB
+reveals "they bank at X" but no secret), planner-level AI access, a separate
+vault passphrase distinct from the login password, OS-notification on assistant
+reveals.
+
+DB: `vault_keys` / `vault_entries` / `vault_access_log`, all new `CREATE TABLE
+IF NOT EXISTS` (no column migrations). `vault_entries` + `vault_access_log` are
+per-user on `ScopedStore`; `vault_keys` is on the base `Store` (family
+provisioning reads every member's public key). Routes: `GET /vault/status`,
+`POST /vault/{setup,unlock,lock,recover}`, `POST /vault/family/sync` (admin),
+`GET/POST /vault/entries`, `GET/PATCH/DELETE /vault/entries/:id`,
+`GET /vault/entries/:id/totp`, `GET /vault/access-log`. Tests:
+`test/vault.test.ts` (crypto/TOTP/service, incl. the RFC 6238 vectors and
+private-vs-shared isolation), `test/vault.routes.test.ts` (HTTP contract,
+locked `423`, cross-member isolation, recovery-after-reset).
+
+## Tool-call visibility (a live "what the assistant did" strip)
+
+The chat + messages UI now shows, under each assistant reply, a strip of the
+tool calls the agent made to get there — searched documents, ran code,
+delegated to a subagent, called a connected service — updating **live** while
+the reply is still being composed. Clicking the strip opens the side panel
+with the exact arguments each tool was passed and what it returned.
+
+**Capture is a LangChain callback handler, not per-tool wiring.**
+`agent-core/src/agents/steps.ts` — `StepRecorder extends BaseCallbackHandler`,
+passed as `{ callbacks: [recorder] }` to `agent.invoke`. `handleToolStart` /
+`handleToolEnd` / `handleToolError` fire for the planner's own tools **and**
+for a subagent's tools (the `task` delegation call and the subagent's calls
+both surface). We keep it a **flat chronological list**, not a tree: the
+`task` step (labelled with its `subagent_type`) followed by that subagent's
+calls, in run order, reads clearly without the complexity of walking the
+parent-run chain. Inputs arrive as a JSON string or an object depending on the
+tool — normalised; outputs come back as a plain string, a serialized
+`ToolMessage`, or a deepagents `Command` — `extractToolOutput` digs out the
+human-meaningful text. Caps: 60 steps, 2 KB input, 4 KB output per step.
+`askFamilyAgent` calls `recorder.reset()` before each retry so the final list
+is the attempt that answered.
+
+**Live transport: a client-supplied turnId + poll, not SSE.** `POST /chat`
+takes an optional `turnId` (the client generates a UUID); the server keeps an
+in-memory `Map<turnId, { userId, steps, done }>` (swept ~5 min after done) that
+the recorder's `onUpdate` writes into, and `GET /chat/turns/:turnId` returns
+`{ steps, done }`, scoped to the turn's user. The client fires the POST, then
+polls the GET every ~1 s until the POST resolves (or `done`). No streaming
+endpoint, no restructuring `/chat` into the async shape the family channel
+uses — the blocking request already works, this just adds a side channel for
+progress. For a **family channel** `@agent` reply (already async) the pending
+message id *is* the turnId, so the same endpoint + poll covers it.
+
+**Persistence for replay.** The final `steps` are stored on the assistant
+row — `chat_messages.steps` / `messages.steps`, JSON, same shape as `refs` —
+so re-opening a past session (or scrolling a channel) shows the strip too.
+
+**Vault turns are excluded.** `runForcedAgentTurn` passes no recorder for
+`forced.kind === "vault"` — a step's output would carry the password / 2FA
+code, defeating the transcript redaction.
+
+**Not logged: the `GET /vault/entries/:id/totp` poll.** Unrelated but noticed
+here — that endpoint is polled once a second by the Vault screen, so
+`actor: "user"` reads are not written to `vault_access_log` (only the
+assistant's `get_totp_code` is). See "Password vault" above.
+
+Desktop: `makeStepsStrip` / `renderStepsStrip` / `openStepsPanel` in `main.ts`,
+`.steps-strip` + `.step-item` CSS. Android: `StepsStrip` in `ui/Components.kt`,
+`DetailContent.Steps` → `DetailSheet.kt`. Tests: `test/steps.test.ts`
+(recorder callbacks + the `/chat/turns/:id` HTTP contract with a mocked agent).
+
+## Side panel is a floating glass card, matching the rail
+
+The right-hand detail panel (`#side-panel` — document preview, chat
+references, and now the tool-call detail) was a full-height docked sidebar
+(`position: absolute`, square corners, hairline `border-left`). It's now the
+mirror image of the left rail (`.rail`): `position: fixed` with a 14 px inset
+on all four sides, `--r-xl` corners, `--glass-strong` background +
+`--glass-blur`, `--shadow-pop`, `z-index: 60`, and it slides out on close
+(`--dur-lg` transition, then `hidden` after 420 ms) instead of snapping. The
+two edges of the app now read as one system. `--glass-strong` (0.82) rather
+than the rail's `--glass` (0.66) because the panel carries long-form reading
+content (document text, JSON) where legibility beats translucency.
+
+## AI-generated HTML cards in chat (render_card)
+
+The assistant can now answer with a **card** — a small self-contained HTML/JS
+snippet it writes, which the UI embeds inline in the chat and family-channel
+replies. "Show me the water bill vs. last year" → a bar chart. "Plan the
+camping trip" → a checklist with checkboxes. "Who owes whom?" → a little
+money-flow diagram. It is the open-ended visual-output complement to `run_code`
+(compute a value) and the builder tools (a persistent interactive app).
+
+**Generated code, not a fixed catalog — deliberately.** An earlier proposal
+was a `render_card({ kind, data })` tool where the model fills a schema
+(`chart` / `stat` / `table` / …) and *we* render. Rejected: a family helper's
+asks are open-ended, a `kind` enum can't anticipate a colour-coded meal grid
+or an animated countdown, and betting against model capability is a losing
+long-term bet (users already run 30B–120B models locally; the 2B dev model is
+an artifact of this machine, not a design constraint). The tool takes a raw
+HTML fragment.
+
+**Off by default is NOT the choice — on by default, one toggle to turn off.**
+Generated code is less stable than text, so `cardsEnabled` is the **first
+boolean machine setting** exposed in the desktop Settings page (admin-only,
+persisted to `settings.json`, env override `FAMILY_AGENT_CARDS=0`, `envLocked`
+when the env var is set). Default **on**; an admin flips it off for a
+guaranteed-stable text-only experience. When off, `render_card` is not wired
+into any agent, so the model can't even attempt a card. `/health.cards` =
+`"on" | "off"`; both clients hide the render path when off.
+
+**Security: a sealed, opaque-origin sandbox.** The card runs in an
+`<iframe sandbox="allow-scripts">` — crucially **without** `allow-same-origin`,
+so it gets a unique opaque origin and cannot touch `window.parent`, the app's
+`localStorage` (the bearer token is untouchable), or cookies. The wrapped
+document carries an inline CSP: `default-src 'none'; script-src 'unsafe-inline';
+style-src 'unsafe-inline'; img-src data: blob:; font-src data:` — no
+`connect-src`, so it falls back to `'none'` and **every network primitive
+(`fetch`, `XHR`, `WebSocket`, `sendBeacon`) is dead**; `img-src` has no remote
+scheme, so there's no `<img>` beacon exfil either. `sandbox` (by omission) also
+blocks top navigation, popups, `alert`/`confirm` (no thread-blocking dialogs),
+form submission, and nested remote frames. Content is set via the
+`iframe.srcdoc` *property* (not the attribute) so there's no attribute-injection
+breakout. Net: nothing leaves the box and the box can't reach the app — a
+tighter boundary than the existing builder-tools iframe (which needs
+`allow-same-origin` + `connect-src 'self'` for its backend). Residual risks are
+annoyance-tier: CPU (mitigated by lazy-mount on scroll-into-view, a concurrent-
+card cap, and a parent→iframe ping/pong watchdog) and drawing something
+misleading (mitigated by non-removable "✨ Generated" card chrome, visual
+inset, and a height cap so a card can't impersonate app UI). Prompt injection
+(a poisoned document steering the model) can make a card *display*
+misinformation but not *do* anything — the same ceiling ("a wrong answer")
+already accepted for research-agent / connections-agent.
+
+**Android: an inline WebView, isolated the same way.** No way around a WebView
+for arbitrary HTML. `AndroidView { WebView }` in the message `LazyColumn`,
+`loadDataWithBaseURL(null, html, …)` → `null` base = opaque origin (same
+isolation as the iframe). `blockNetworkLoads = true` + a
+`WebViewClient.shouldInterceptRequest` that returns an empty response for
+everything (hard network kill), navigation blocked, `domStorageEnabled = false`,
+no file/content access, plus the same CSP meta in the HTML. Height comes back
+over one `@JavascriptInterface` method (`postHeight(int)` — minimal surface on
+API 17+). Lazy-inflated near-visible, capped, with an "expand" to full screen
+for tall cards. The `postHeight` value is treated as **dp directly** — Android
+WebView keeps 1 CSS px ≈ 1 dp, so running it through a display-density
+conversion (as the first cut did) divides the height by ~2.75 and clips every
+card to a third of its size (caught on an emulator during the Android runtime
+pass, not by inspection).
+
+**The document pipeline.** The model provides only a `<body>` fragment
+(`render_card({ title, html })`, html ≤ 32 KB). The server **stores just the
+fragment** (`chat_messages.cards` / `messages.cards`, JSON like `refs`/`steps`)
+and wraps it at read time (`cards/wrap.ts` — doctype, the CSP meta, a trimmed
+`HOUSE_STYLE` card variant reused from `builder.ts`, and a `CARD_RUNTIME`
+script), so the wrapper can evolve without re-storing old cards. The runtime
+provides: measurement (`ResizeObserver` → `postMessage({type:'card-height'})` /
+`AndroidCard.postHeight`), a `window.onerror` trap → a graceful in-card
+fallback + a `card-error` message to the host, and a small optional `Card`
+helper (`Card.palette`, `Card.money`, `Card.lineChart`/`Card.barChart` — SVG,
+~80 lines) that lifts a weak model's floor without caging a capable one. The
+tool validates the fragment (size, `new Function()` syntax check on any
+`<script>`) and returns an error string for the model to self-repair, same
+loop as `builder-agent`.
+
+**Wiring.** `render_card` is a leaf tool (not a subagent), bound on the planner and on the
+data-facing subagents (`document-agent`, `research-agent`, `connections-agent`)
+— whichever holds the data can draw. (The `/find` / `/calc` forced-turn
+specialists don't get it in v1 — a one-line follow-up.) Per-user `chatCards` collector (`Map<userId, Card[]>`, the
+`chatRefs` pattern); `/chat` returns `cards`, the family channel writes them in
+`resolvePendingAgentMessage`. The card *accompanies* the text reply (the tool
+tells the model to still write a one-sentence summary). Rendered below the
+bubble, above the steps strip. `render_card` also shows up in the steps strip
+as a normal tool call ("Made a card").
+
+Files: `agent-core/src/cards/{wrap,runtime}.ts`, `agents/cardTools.ts`,
+`config.ts` (`cardsEnabled`), `settingsFile.ts` (boolean support). Desktop:
+`renderCard()` in `main.ts` + `.chat-card` CSS + a Settings toggle. Android:
+`CardWebView` composable + `DetailContent.CardSource` + a Settings toggle.
+Tests: `test/cards.test.ts`.

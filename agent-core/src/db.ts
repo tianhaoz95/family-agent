@@ -10,6 +10,8 @@ import type {
   RoutineRunTrigger,
   RoutineRunStatus,
 } from "./routines.js";
+import type { AgentStep } from "./agents/steps.js";
+import type { CardRecord } from "./cards/wrap.js";
 
 // Short, unambiguous ids (Crockford base32, no 0/O/1/I/L confusion) — small
 // local models reliably garble long UUIDs when copying them into tool
@@ -279,6 +281,10 @@ export interface MessageRecord {
   body: string;
   /** Image attachments as data URIs — same as the 1:1 chat composer. */
   images: string[];
+  /** Tool calls the assistant made for this reply — agent messages only. */
+  steps: AgentStep[];
+  /** Generated HTML cards attached to this reply — agent messages only. */
+  cards: CardRecord[];
   /** True while the agent's reply is still being generated (body is ""). */
   pending: boolean;
   createdAt: string;
@@ -318,6 +324,10 @@ export interface ChatSessionMessageRecord {
   images: string[];
   /** Reference chips resolved for that reply — assistant turns only. */
   refs: ChatReference[];
+  /** Tool calls the assistant made for that reply — assistant turns only. */
+  steps: AgentStep[];
+  /** Generated HTML cards attached to that reply — assistant turns only. */
+  cards: CardRecord[];
   createdAt: string;
 }
 
@@ -371,6 +381,47 @@ export interface RoutineRunRecord {
   trigger: RoutineRunTrigger;
   output: string | null;
   error: string | null;
+}
+
+// ---- password vault ----
+export type VaultScope = "private" | "shared";
+
+/** The per-user key-wrapping row. Blobs are raw bytes (see vault/crypto.ts). */
+export interface VaultKeysRow {
+  userId: string;
+  kdfParams: string;
+  kdfSalt: Buffer;
+  dekWrappedLogin: Buffer;
+  recoverySalt: Buffer | null;
+  dekWrappedRecovery: Buffer | null;
+  publicKey: Buffer;
+  privateKeyWrapped: Buffer;
+  familyKeySealed: Buffer | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A vault entry's non-secret metadata — safe to list without unlocking. */
+export interface VaultEntryRecord {
+  id: string;
+  userId: string;
+  scope: VaultScope;
+  folder: string | null;
+  title: string;
+  username: string | null;
+  url: string | null;
+  hasTotp: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VaultAccessLogRecord {
+  id: string;
+  entryId: string | null;
+  entryTitle: string;
+  actor: string;
+  action: string;
+  at: string;
 }
 
 const SCHEMA = `
@@ -467,6 +518,8 @@ CREATE TABLE IF NOT EXISTS messages (
   body TEXT NOT NULL,
   pending INTEGER NOT NULL DEFAULT 0,
   images TEXT,
+  steps TEXT,
+  cards TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -504,6 +557,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   body TEXT NOT NULL,
   images TEXT,
   refs TEXT,
+  steps TEXT,
+  cards TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, created_at);
@@ -556,6 +611,62 @@ CREATE TABLE IF NOT EXISTS routine_runs (
   error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_routine_runs_routine ON routine_runs(routine_id, started_at);
+
+-- ---- password vault ----
+-- One wrapping row per user: the data-encryption key (dek) wrapped under a key
+-- derived from their login password, and again under a one-time recovery code;
+-- an X25519 keypair (private key encrypted under the dek) used only to open the
+-- sealed shared "family" key. Nothing here is usable without the login password
+-- or the recovery code — a stolen DB file leaks none of it. See
+-- agent-core/src/vault/crypto.ts and docs/DECISIONS.md.
+CREATE TABLE IF NOT EXISTS vault_keys (
+  user_id TEXT PRIMARY KEY,
+  kdf_params TEXT NOT NULL,
+  kdf_salt BLOB NOT NULL,
+  dek_wrapped_login BLOB NOT NULL,
+  recovery_salt BLOB,
+  dek_wrapped_recovery BLOB,
+  public_key BLOB NOT NULL,
+  private_key_wrapped BLOB NOT NULL,
+  family_key_sealed BLOB,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- One credential / TOTP entry. Title / username / url stay as plaintext columns
+-- so the list and search work without unlocking; the actual secret (password,
+-- TOTP seed, notes, custom fields) is one AES-256-GCM blob keyed by the owner's
+-- dek (scope='private') or the family key (scope='shared').
+CREATE TABLE IF NOT EXISTS vault_entries (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'private',
+  folder TEXT,
+  title TEXT NOT NULL,
+  username TEXT,
+  url TEXT,
+  has_totp INTEGER NOT NULL DEFAULT 0,
+  secret BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vault_entries_user ON vault_entries(user_id, scope);
+CREATE INDEX IF NOT EXISTS idx_vault_entries_scope ON vault_entries(scope);
+
+-- Every reveal of a password or TOTP code (by a person or by the assistant) is
+-- logged here with the entry title but NEVER the value — the Vault screen shows
+-- it so a family member can see when the assistant last read one of their
+-- secrets.
+CREATE TABLE IF NOT EXISTS vault_access_log (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  entry_id TEXT,
+  entry_title TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vault_access_log_user ON vault_access_log(user_id, at);
 `;
 
 // Columns added after a release. `CREATE TABLE IF NOT EXISTS` is a no-op
@@ -589,6 +700,12 @@ const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   // Multimodal family chat: a message can carry image attachments (JSON array
   // of data URIs), the same way the 1:1 chat composer does.
   { table: "messages", column: "images", ddl: "ALTER TABLE messages ADD COLUMN images TEXT" },
+  // Tool-call visibility: an agent reply carries the list of tool calls it made.
+  { table: "messages", column: "steps", ddl: "ALTER TABLE messages ADD COLUMN steps TEXT" },
+  { table: "chat_messages", column: "steps", ddl: "ALTER TABLE chat_messages ADD COLUMN steps TEXT" },
+  // Generated HTML cards: an agent reply can carry inline card fragments.
+  { table: "messages", column: "cards", ddl: "ALTER TABLE messages ADD COLUMN cards TEXT" },
+  { table: "chat_messages", column: "cards", ddl: "ALTER TABLE chat_messages ADD COLUMN cards TEXT" },
   // Original-file preview: uploads keep their bytes on disk; this records the
   // MIME so the preview route can serve the right Content-Type.
   { table: "documents", column: "original_mime", ddl: "ALTER TABLE documents ADD COLUMN original_mime TEXT" },
@@ -906,6 +1023,9 @@ export class Store {
       "chat_sessions",
       "routines",
       "routine_runs",
+      "vault_entries",
+      "vault_access_log",
+      "vault_keys",
     ] as const) {
       this.db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).run(id);
     }
@@ -1137,6 +1257,8 @@ export class Store {
       senderId,
       body,
       images,
+      steps: [],
+      cards: [],
       pending: false,
       createdAt: new Date().toISOString(),
     };
@@ -1163,6 +1285,8 @@ export class Store {
       senderId: AGENT_SENDER_ID,
       body: "",
       images: [],
+      steps: [],
+      cards: [],
       pending: true,
       createdAt: new Date().toISOString(),
     };
@@ -1174,10 +1298,20 @@ export class Store {
     return rec;
   }
 
-  resolvePendingAgentMessage(messageId: string, body: string): void {
+  resolvePendingAgentMessage(
+    messageId: string,
+    body: string,
+    steps: AgentStep[] = [],
+    cards: CardRecord[] = []
+  ): void {
     this.db
-      .prepare("UPDATE messages SET body = ?, pending = 0 WHERE id = ?")
-      .run(body, messageId);
+      .prepare("UPDATE messages SET body = ?, pending = 0, steps = ?, cards = ? WHERE id = ?")
+      .run(
+        body,
+        steps.length ? JSON.stringify(steps) : null,
+        cards.length ? JSON.stringify(cards) : null,
+        messageId
+      );
   }
 
   /** Any agent messages left "pending" by a killed process will never finish. */
@@ -1217,6 +1351,95 @@ export class Store {
       moved += Number(info.changes ?? 0);
     }
     return moved;
+  }
+
+  // ---- password vault: key-wrapping rows ----
+  // These live on the base Store, not ScopedStore: provisioning the shared
+  // "family" key for a new member reads every member's public key, and the
+  // login/bootstrap routes touch a user's row before a ScopedStore for them
+  // is in hand.
+
+  getVaultKeys(userId: string): VaultKeysRow | undefined {
+    const r = this.db.prepare("SELECT * FROM vault_keys WHERE user_id = ?").get(userId) as any;
+    return r ? rowToVaultKeys(r) : undefined;
+  }
+
+  hasVaultSetup(): boolean {
+    return !!this.db.prepare("SELECT 1 FROM vault_keys LIMIT 1").get();
+  }
+
+  /** True once any member holds the sealed family key (i.e. the shared vault
+   *  has been initialised). */
+  hasFamilyVaultKey(): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM vault_keys WHERE family_key_sealed IS NOT NULL LIMIT 1")
+      .get();
+  }
+
+  insertVaultKeys(row: VaultKeysRow): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO vault_keys
+          (user_id, kdf_params, kdf_salt, dek_wrapped_login, recovery_salt, dek_wrapped_recovery,
+           public_key, private_key_wrapped, family_key_sealed, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        row.userId,
+        row.kdfParams,
+        row.kdfSalt,
+        row.dekWrappedLogin,
+        row.recoverySalt,
+        row.dekWrappedRecovery,
+        row.publicKey,
+        row.privateKeyWrapped,
+        row.familyKeySealed,
+        row.createdAt ?? now,
+        now
+      );
+  }
+
+  setVaultLoginWrap(
+    userId: string,
+    fields: { kdfParams: string; kdfSalt: Buffer; dekWrappedLogin: Buffer }
+  ): void {
+    this.db
+      .prepare(
+        "UPDATE vault_keys SET kdf_params = ?, kdf_salt = ?, dek_wrapped_login = ?, updated_at = ? WHERE user_id = ?"
+      )
+      .run(fields.kdfParams, fields.kdfSalt, fields.dekWrappedLogin, new Date().toISOString(), userId);
+  }
+
+  setVaultRecoveryWrap(
+    userId: string,
+    fields: { recoverySalt: Buffer; dekWrappedRecovery: Buffer }
+  ): void {
+    this.db
+      .prepare(
+        "UPDATE vault_keys SET recovery_salt = ?, dek_wrapped_recovery = ?, updated_at = ? WHERE user_id = ?"
+      )
+      .run(fields.recoverySalt, fields.dekWrappedRecovery, new Date().toISOString(), userId);
+  }
+
+  setVaultFamilySeal(userId: string, sealed: Buffer): void {
+    this.db
+      .prepare("UPDATE vault_keys SET family_key_sealed = ?, updated_at = ? WHERE user_id = ?")
+      .run(sealed, new Date().toISOString(), userId);
+  }
+
+  /** {userId, publicKey, hasFamilyKey} for every provisioned vault — drives
+   *  VaultService.syncFamilyKeys. */
+  listVaultPublicKeys(): { userId: string; publicKey: Buffer; hasFamilyKey: boolean }[] {
+    return (
+      this.db
+        .prepare("SELECT user_id, public_key, family_key_sealed FROM vault_keys")
+        .all() as any[]
+    ).map((r) => ({
+      userId: r.user_id,
+      publicKey: toBuf(r.public_key),
+      hasFamilyKey: r.family_key_sealed != null,
+    }));
   }
 
   // ---- sessions ----
@@ -2197,6 +2420,177 @@ export class ScopedStore {
     return note;
   }
 
+  // ---- password vault entries ----
+  // Metadata columns (title/username/url) are plaintext so the list works
+  // locked; `secret` is opaque bytes to the store — the caller (VaultService)
+  // holds the key and does the crypto. "private" scope is `AND user_id = ?`;
+  // "shared" is the family vault, readable/editable by any member (author
+  // tracked in user_id), mirroring the sticky-note board.
+
+  listVaultEntries(): VaultEntryRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, user_id, scope, folder, title, username, url, has_totp, created_at, updated_at
+         FROM vault_entries
+         WHERE scope = 'shared' OR (scope = 'private' AND user_id = ?)
+         ORDER BY LOWER(COALESCE(folder, '')), LOWER(title)`
+      )
+      .all(this.userId) as any[];
+    return rows.map(rowToVaultEntry);
+  }
+
+  private vaultEntryRow(id: string): any | undefined {
+    const r = this.db.prepare("SELECT * FROM vault_entries WHERE id = ?").get(id) as any;
+    if (!r) return undefined;
+    if (r.scope === "private" && r.user_id !== this.userId) return undefined;
+    return r;
+  }
+
+  getVaultEntryMeta(id: string): VaultEntryRecord | undefined {
+    const r = this.vaultEntryRow(id);
+    return r ? rowToVaultEntry(r) : undefined;
+  }
+
+  /** The opaque secret blob for an entry the caller may see, or undefined. */
+  getVaultSecretBlob(id: string): { meta: VaultEntryRecord; blob: Buffer } | undefined {
+    const r = this.vaultEntryRow(id);
+    if (!r) return undefined;
+    return { meta: rowToVaultEntry(r), blob: toBuf(r.secret) };
+  }
+
+  countVaultEntries(): number {
+    return Number(
+      (
+        this.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM vault_entries WHERE scope = 'shared' OR (scope = 'private' AND user_id = ?)"
+          )
+          .get(this.userId) as any
+      ).n
+    );
+  }
+
+  createVaultEntry(input: {
+    scope: VaultScope;
+    folder?: string | null;
+    title: string;
+    username?: string | null;
+    url?: string | null;
+    hasTotp: boolean;
+    secret: Buffer;
+  }): VaultEntryRecord {
+    const now = new Date().toISOString();
+    const rec: VaultEntryRecord = {
+      id: shortId(),
+      userId: this.userId,
+      scope: input.scope,
+      folder: input.folder?.trim() || null,
+      title: input.title.trim(),
+      username: input.username?.trim() || null,
+      url: input.url?.trim() || null,
+      hasTotp: input.hasTotp,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO vault_entries
+          (id, user_id, scope, folder, title, username, url, has_totp, secret, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        rec.id,
+        rec.userId,
+        rec.scope,
+        rec.folder,
+        rec.title,
+        rec.username,
+        rec.url,
+        rec.hasTotp ? 1 : 0,
+        input.secret,
+        rec.createdAt,
+        rec.updatedAt
+      );
+    this.logActivity("user", "vault.entry.created", `Added ${rec.scope} vault entry "${rec.title}"`);
+    this.logVaultAccess("user", "create", { id: rec.id, title: rec.title });
+    return rec;
+  }
+
+  updateVaultEntry(
+    id: string,
+    patch: {
+      folder?: string | null;
+      title?: string;
+      username?: string | null;
+      url?: string | null;
+      scope?: VaultScope;
+      hasTotp?: boolean;
+      secret?: Buffer;
+    }
+  ): VaultEntryRecord | undefined {
+    const r = this.vaultEntryRow(id);
+    if (!r) return undefined;
+    const sets: string[] = [];
+    const values: (string | number | Buffer | null)[] = [];
+    const put = (col: string, v: string | number | Buffer | null) => {
+      sets.push(`${col} = ?`);
+      values.push(v);
+    };
+    if (patch.folder !== undefined) put("folder", patch.folder?.trim() || null);
+    if (patch.title !== undefined) put("title", patch.title.trim());
+    if (patch.username !== undefined) put("username", patch.username?.trim() || null);
+    if (patch.url !== undefined) put("url", patch.url?.trim() || null);
+    if (patch.scope !== undefined) put("scope", patch.scope);
+    if (patch.hasTotp !== undefined) put("has_totp", patch.hasTotp ? 1 : 0);
+    if (patch.secret !== undefined) put("secret", patch.secret);
+    if (sets.length === 0) return rowToVaultEntry(r);
+    put("updated_at", new Date().toISOString());
+    this.db.prepare(`UPDATE vault_entries SET ${sets.join(", ")} WHERE id = ?`).run(...values, id);
+    const updated = this.getVaultEntryMeta(id)!;
+    this.logActivity("user", "vault.entry.updated", `Edited vault entry "${updated.title}"`);
+    this.logVaultAccess("user", "update", { id, title: updated.title });
+    return updated;
+  }
+
+  deleteVaultEntry(id: string): VaultEntryRecord | undefined {
+    const r = this.vaultEntryRow(id);
+    if (!r) return undefined;
+    const meta = rowToVaultEntry(r);
+    this.db.prepare("DELETE FROM vault_entries WHERE id = ?").run(id);
+    this.logActivity("user", "vault.entry.deleted", `Removed vault entry "${meta.title}"`);
+    this.logVaultAccess("user", "delete", { id, title: meta.title });
+    return meta;
+  }
+
+  logVaultAccess(
+    actor: string,
+    action: string,
+    entry: { id: string | null; title: string }
+  ): void {
+    this.db
+      .prepare(
+        "INSERT INTO vault_access_log (id, user_id, entry_id, entry_title, actor, action, at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run(randomUUID(), this.userId, entry.id, entry.title, actor, action, new Date().toISOString());
+  }
+
+  listVaultAccessLog(limit = 100): VaultAccessLogRecord[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT id, entry_id, entry_title, actor, action, at FROM vault_access_log WHERE user_id = ? ORDER BY at DESC LIMIT ?"
+        )
+        .all(this.userId, Math.min(Math.max(limit, 1), 500)) as any[]
+    ).map((r) => ({
+      id: r.id,
+      entryId: r.entry_id,
+      entryTitle: r.entry_title,
+      actor: r.actor,
+      action: r.action,
+      at: r.at,
+    }));
+  }
+
   // ---- chat sessions (private assistant chat history) ----
   createChatSession(firstMessageForTitle: string): ChatSessionRecord {
     const now = new Date().toISOString();
@@ -2264,13 +2658,15 @@ export class ScopedStore {
     role: "user" | "assistant",
     body: string,
     images: string[] = [],
-    refs: ChatReference[] = []
+    refs: ChatReference[] = [],
+    steps: AgentStep[] = [],
+    cards: CardRecord[] = []
   ): ChatSessionMessageRecord {
     const now = new Date().toISOString();
-    const rec: ChatSessionMessageRecord = { id: shortId(), sessionId, role, body, images, refs, createdAt: now };
+    const rec: ChatSessionMessageRecord = { id: shortId(), sessionId, role, body, images, refs, steps, cards, createdAt: now };
     this.db
       .prepare(
-        "INSERT INTO chat_messages (id, session_id, user_id, role, body, images, refs, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO chat_messages (id, session_id, user_id, role, body, images, refs, steps, cards, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       )
       .run(
         rec.id,
@@ -2280,6 +2676,8 @@ export class ScopedStore {
         rec.body,
         images.length ? JSON.stringify(images) : null,
         refs.length ? JSON.stringify(refs) : null,
+        steps.length ? JSON.stringify(steps) : null,
+        cards.length ? JSON.stringify(cards) : null,
         rec.createdAt
       );
     this.db
@@ -2492,6 +2890,46 @@ function titleFromMessage(message: string): string {
   return flat.length > 60 ? `${flat.slice(0, 60).trimEnd()}…` : flat;
 }
 
+/** node:sqlite hands a BLOB back as a Uint8Array whose buffer may be pooled;
+ *  copy into a standalone Buffer before anything holds onto it. */
+function toBuf(v: unknown): Buffer {
+  if (Buffer.isBuffer(v)) return v;
+  if (v instanceof Uint8Array) return Buffer.from(v);
+  if (v == null) return Buffer.alloc(0);
+  throw new Error("expected a BLOB");
+}
+
+function rowToVaultKeys(r: any): VaultKeysRow {
+  return {
+    userId: r.user_id,
+    kdfParams: r.kdf_params,
+    kdfSalt: toBuf(r.kdf_salt),
+    dekWrappedLogin: toBuf(r.dek_wrapped_login),
+    recoverySalt: r.recovery_salt != null ? toBuf(r.recovery_salt) : null,
+    dekWrappedRecovery: r.dek_wrapped_recovery != null ? toBuf(r.dek_wrapped_recovery) : null,
+    publicKey: toBuf(r.public_key),
+    privateKeyWrapped: toBuf(r.private_key_wrapped),
+    familyKeySealed: r.family_key_sealed != null ? toBuf(r.family_key_sealed) : null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function rowToVaultEntry(r: any): VaultEntryRecord {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    scope: r.scope === "shared" ? "shared" : "private",
+    folder: r.folder ?? null,
+    title: r.title,
+    username: r.username ?? null,
+    url: r.url ?? null,
+    hasTotp: !!r.has_totp,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
 function rowToUser(r: any): UserRecord {
   return {
     id: r.id,
@@ -2561,9 +2999,21 @@ function rowToMessage(r: any): MessageRecord {
     senderId: r.sender_id,
     body: r.body,
     images: parseImages(r.images),
+    steps: parseSteps(r.steps),
+    cards: parseCards(r.cards),
     pending: !!r.pending,
     createdAt: r.created_at,
   };
+}
+
+function parseCards(raw: unknown): CardRecord[] {
+  if (typeof raw !== "string" || raw.length === 0) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? (v as CardRecord[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function parseImages(raw: unknown): string[] {
@@ -2571,6 +3021,16 @@ function parseImages(raw: unknown): string[] {
   try {
     const v = JSON.parse(raw);
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseSteps(raw: unknown): AgentStep[] {
+  if (typeof raw !== "string" || raw.length === 0) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? (v as AgentStep[]) : [];
   } catch {
     return [];
   }
@@ -2606,6 +3066,8 @@ function rowToChatSessionMessage(r: any): ChatSessionMessageRecord {
     body: r.body,
     images: parseImages(r.images),
     refs: parseRefs(r.refs),
+    steps: parseSteps(r.steps),
+    cards: parseCards(r.cards),
     createdAt: r.created_at,
   };
 }

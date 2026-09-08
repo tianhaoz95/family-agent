@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.ConnectionStatus
+import app.familyagent.android.data.ServerSettings
 import app.familyagent.android.ui.theme.AppAccents
 
 @Composable
@@ -19,6 +20,8 @@ fun SettingsScreen(
     ttsEnabled: Boolean = false,
     autoRead: Boolean = false,
     onSetAutoRead: (Boolean) -> Unit = {},
+    serverSettings: ServerSettings? = null,
+    onSetCardsEnabled: (Boolean) -> Unit = {},
     onSave: (String) -> Unit,
     onSignOut: () -> Unit,
 ) {
@@ -45,6 +48,36 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
+            }
+        }
+
+        if (serverSettings != null) {
+            Spacer(Modifier.height(18.dp))
+            SectionLabel("Assistant")
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = serverSettings.cardsEnabled,
+                    onCheckedChange = onSetCardsEnabled,
+                    enabled = serverSettings.isAdmin && !serverSettings.envLocked.cardsEnabled,
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Show visual cards",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        when {
+                            serverSettings.envLocked.cardsEnabled -> "Pinned by the server (FAMILY_AGENT_CARDS)."
+                            !serverSettings.isAdmin -> "Only an admin can change this."
+                            else -> "Charts, checklists, diagrams the assistant writes and runs in a sealed sandbox. Off = text only."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppAccents.textSecondary,
+                    )
+                }
             }
         }
 

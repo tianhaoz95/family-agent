@@ -26,8 +26,15 @@ import app.familyagent.android.data.Task
 import app.familyagent.android.data.Tool
 import app.familyagent.android.data.UnauthorizedException
 import app.familyagent.android.data.User
+import app.familyagent.android.data.CreateVaultEntryRequest
+import app.familyagent.android.data.UpdateVaultEntryRequest
+import app.familyagent.android.data.VaultAccessLogEntry
+import app.familyagent.android.data.VaultEntry
+import app.familyagent.android.data.VaultEntryDetail
+import app.familyagent.android.data.VaultStatus
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,6 +65,10 @@ data class ChatMessage(
     val text: String,
     val images: List<String> = emptyList(),
     val references: List<app.familyagent.android.data.ChatReference> = emptyList(),
+    /** Tool calls the assistant made for this reply — see agents/steps.ts. */
+    val steps: List<app.familyagent.android.data.ToolStep> = emptyList(),
+    /** Generated HTML cards attached to this reply — see agent-core/src/cards/. */
+    val cards: List<app.familyagent.android.data.Card> = emptyList(),
 )
 
 /** What the detail bottom-sheet is currently showing (a referenced item or a doc preview). */
@@ -66,6 +77,10 @@ sealed interface DetailContent {
     data class DocumentDetail(val doc: Document, val pdfBytes: ByteArray? = null) : DetailContent
     data class TaskDetail(val task: Task) : DetailContent
     data class Failed(val message: String) : DetailContent
+    /** "Under the hood" — the tool calls behind one assistant reply. */
+    data class Steps(val steps: List<app.familyagent.android.data.ToolStep>) : DetailContent
+    /** The raw HTML a generated card was written from. */
+    data class CardSource(val title: String, val fragment: String) : DetailContent
 }
 
 @Immutable
@@ -75,6 +90,8 @@ data class AppUiState(
     val connection: ConnectionStatus = ConnectionStatus.Connecting,
     val chatMessages: List<ChatMessage> = emptyList(),
     val chatSending: Boolean = false,
+    /** Tool calls made so far by the in-flight chat turn (live, while sending). */
+    val chatLiveSteps: List<app.familyagent.android.data.ToolStep> = emptyList(),
     /** The persisted session behind [chatMessages]; null until the first turn of a
      *  fresh conversation gets a reply and the server hands one back. */
     val activeChatSessionId: String? = null,
@@ -141,8 +158,26 @@ data class AppUiState(
     val mcpMode: String = "off",
     val mcpServers: List<McpServer> = emptyList(),
     val mcpStatus: String? = null,
+    // ---- generated HTML cards ----
+    /** /health.cards: "on" when the assistant may attach generated cards. */
+    val cardsMode: String = "off",
+    /** Loaded when the Settings screen opens — for the admin toggle. */
+    val serverSettings: app.familyagent.android.data.ServerSettings? = null,
     /** Non-null while the detail bottom-sheet is open. */
     val detail: DetailContent? = null,
+    // ---- password vault ----
+    /** /health.vault: "on" | "off". "off" hides the Vault drawer item + /vault. */
+    val vaultMode: String = "off",
+    val vaultAiEnabled: Boolean = false,
+    val vaultStatus: VaultStatus? = null,
+    val vaultEntries: List<VaultEntry> = emptyList(),
+    /** The entry whose detail sheet is open (decrypted), or null. */
+    val vaultDetail: VaultEntryDetail? = null,
+    val vaultAccessLog: List<VaultAccessLogEntry> = emptyList(),
+    /** Transient one-liner shown on the Vault screen. */
+    val vaultStatusMsg: String? = null,
+    /** A one-time recovery code to show once, then clear. */
+    val vaultRecoveryCode: String? = null,
 ) {
     /** Total unread across every conversation — drives the nav badge. */
     val totalUnread: Int get() = channels.sumOf { it.unreadCount }
@@ -288,6 +323,9 @@ class AppViewModel(
                         routinesEnabled = h.routinesEnabled,
                         skillsMode = h.skills,
                         mcpMode = h.mcp,
+                        vaultMode = h.vault,
+                        vaultAiEnabled = h.vaultAi,
+                        cardsMode = h.cards,
                     )
                 }
                 .onFailure {
@@ -339,19 +377,33 @@ class AppViewModel(
         val prompt = message.ifBlank { "What's in this image?" }
         viewModelScope.launch {
             val withUser = _state.value.chatMessages + ChatMessage("user", message, images)
-            _state.value = _state.value.copy(chatMessages = withUser, chatSending = true)
+            _state.value = _state.value.copy(chatMessages = withUser, chatSending = true, chatLiveSteps = emptyList())
             val sessionId = _state.value.activeChatSessionId
-            val assistant = apiCall { api.chat(prompt, images, sessionId) }
+            val turnId = java.util.UUID.randomUUID().toString()
+            // Poll tool calls while the reply is in flight, for live visibility.
+            val poll = launch {
+                while (isActive) {
+                    val r = runCatching { api.turnSteps(turnId) }.getOrNull()
+                    if (r != null && r.steps.isNotEmpty()) {
+                        _state.value = _state.value.copy(chatLiveSteps = r.steps)
+                    }
+                    if (r?.done == true) break
+                    delay(1000)
+                }
+            }
+            val assistant = apiCall { api.chat(prompt, images, sessionId, turnId) }
                 .fold(
                     onSuccess = {
                         _state.value = _state.value.copy(activeChatSessionId = it.sessionId)
-                        ChatMessage("assistant", it.reply, references = it.references)
+                        ChatMessage("assistant", it.reply, references = it.references, steps = it.steps, cards = it.cards)
                     },
                     onFailure = { ChatMessage("assistant", "Error: ${it.message}") },
                 )
+            poll.cancel()
             _state.value = _state.value.copy(
                 chatMessages = withUser + assistant,
                 chatSending = false,
+                chatLiveSteps = emptyList(),
             )
             // Speak the reply when auto-read is on, or when this turn came in by
             // voice (push-to-talk) — the user chose to talk, so talk back.
@@ -492,7 +544,7 @@ class AppViewModel(
                 _state.value = _state.value.copy(
                     activeChatSessionId = id,
                     chatMessages = messages.map {
-                        ChatMessage(role = it.role, text = it.body, images = it.images, references = it.refs)
+                        ChatMessage(role = it.role, text = it.body, images = it.images, references = it.refs, steps = it.steps, cards = it.cards)
                     },
                 )
             }
@@ -1003,6 +1055,151 @@ class AppViewModel(
         }
     }
 
+    // ---- password vault ----
+    // Thin wrapper over /vault/*. All crypto is server-side; the app only ever
+    // sees decrypted values for entries the signed-in user may read, and only
+    // while their vault is unlocked (in-memory, server-side).
+
+    fun refreshVault() {
+        if (_state.value.vaultMode != "on") return
+        viewModelScope.launch {
+            apiCall { api.vaultStatus() }.onSuccess { st ->
+                _state.value = _state.value.copy(vaultStatus = st)
+                if (st.unlocked) {
+                    apiCall { api.listVaultEntries() }
+                        .onSuccess { _state.value = _state.value.copy(vaultEntries = it, vaultStatusMsg = null) }
+                        .onFailure { _state.value = _state.value.copy(vaultStatusMsg = it.message) }
+                }
+            }
+        }
+    }
+
+    private fun vaultBusy(msg: String?) {
+        _state.value = _state.value.copy(vaultStatusMsg = msg)
+    }
+
+    fun vaultSetup(password: String) {
+        vaultBusy("Creating…")
+        viewModelScope.launch {
+            apiCall { api.vaultSetup(password) }
+                .onSuccess {
+                    _state.value = _state.value.copy(
+                        vaultStatus = it.status,
+                        vaultRecoveryCode = it.recoveryCode,
+                        vaultStatusMsg = null,
+                    )
+                    refreshVault()
+                }
+                .onFailure { vaultBusy(it.message ?: "Setup failed.") }
+        }
+    }
+
+    fun vaultUnlock(password: String) {
+        vaultBusy("Unlocking…")
+        viewModelScope.launch {
+            apiCall { api.vaultUnlock(password) }
+                .onSuccess {
+                    _state.value = _state.value.copy(vaultStatus = it.status, vaultStatusMsg = null)
+                    refreshVault()
+                }
+                .onFailure { vaultBusy(it.message ?: "Wrong password.") }
+        }
+    }
+
+    fun vaultLock() {
+        viewModelScope.launch {
+            apiCall { api.vaultLock() }.onSuccess {
+                _state.value = _state.value.copy(
+                    vaultStatus = it.status, vaultEntries = emptyList(), vaultDetail = null,
+                )
+            }
+        }
+    }
+
+    fun vaultRecover(recoveryCode: String, password: String) {
+        vaultBusy("Recovering…")
+        viewModelScope.launch {
+            apiCall { api.vaultRecover(recoveryCode, password) }
+                .onSuccess {
+                    _state.value = _state.value.copy(
+                        vaultStatus = it.status,
+                        vaultRecoveryCode = it.recoveryCode,
+                        vaultStatusMsg = null,
+                    )
+                    refreshVault()
+                }
+                .onFailure { vaultBusy(it.message ?: "Recovery failed.") }
+        }
+    }
+
+    fun vaultFamilySync() {
+        viewModelScope.launch {
+            apiCall { api.vaultFamilySync() }
+                .onSuccess {
+                    vaultBusy(if (it.granted > 0) "Granted access to ${it.granted} member(s)." else "Everyone already has access.")
+                    refreshVault()
+                }
+                .onFailure { vaultBusy(it.message ?: "Sync failed.") }
+        }
+    }
+
+    fun dismissVaultRecoveryCode() {
+        _state.value = _state.value.copy(vaultRecoveryCode = null)
+    }
+
+    fun openVaultEntry(id: String) {
+        viewModelScope.launch {
+            apiCall { api.getVaultEntry(id) }
+                .onSuccess { _state.value = _state.value.copy(vaultDetail = it) }
+                .onFailure { vaultBusy(it.message) }
+        }
+    }
+
+    fun closeVaultEntry() {
+        _state.value = _state.value.copy(vaultDetail = null)
+    }
+
+    suspend fun vaultCurrentTotp(id: String): Pair<String, Int>? =
+        apiCall { api.vaultTotp(id) }.getOrNull()?.let { it.code to it.expiresInSeconds }
+
+    fun saveVaultEntry(
+        id: String?,
+        req: CreateVaultEntryRequest?,
+        patch: UpdateVaultEntryRequest?,
+        onDone: () -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        viewModelScope.launch {
+            val call =
+                if (id == null && req != null) apiCall { api.createVaultEntry(req) }
+                else if (id != null && patch != null) apiCall { api.updateVaultEntry(id, patch) }
+                else { onError("nothing to save"); return@launch }
+            call
+                .onSuccess {
+                    onDone()
+                    if (id != null) openVaultEntry(id)
+                    refreshVault()
+                }
+                .onFailure { onError(it.message ?: "Could not save.") }
+        }
+    }
+
+    fun deleteVaultEntry(id: String) {
+        _state.value = _state.value.copy(
+            vaultEntries = _state.value.vaultEntries.filterNot { it.id == id },
+            vaultDetail = null,
+        )
+        viewModelScope.launch { apiCall { api.deleteVaultEntry(id) }.onSuccess { refreshVault() } }
+    }
+
+    fun loadVaultAccessLog() {
+        viewModelScope.launch {
+            apiCall { api.vaultAccessLog() }.onSuccess {
+                _state.value = _state.value.copy(vaultAccessLog = it)
+            }
+        }
+    }
+
     // ---- skills ----
     // All the skill logic (markdown parsing, sandboxed scripts) is in agent-core;
     // this is a thin CRUD wrapper over GET/POST/PATCH/DELETE /skills.
@@ -1103,6 +1300,28 @@ class AppViewModel(
     }
 
     // ---- detail bottom-sheet (referenced items + document preview) ----
+
+    fun showStepsDetail(steps: List<app.familyagent.android.data.ToolStep>) {
+        _state.value = _state.value.copy(detail = DetailContent.Steps(steps))
+    }
+
+    fun showCardSource(card: app.familyagent.android.data.Card) {
+        _state.value = _state.value.copy(detail = DetailContent.CardSource(card.title, card.fragment))
+    }
+
+    fun refreshServerSettings() {
+        viewModelScope.launch {
+            apiCall { api.getSettings() }.onSuccess { _state.value = _state.value.copy(serverSettings = it) }
+        }
+    }
+
+    fun setCardsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            apiCall { api.setCardsEnabled(enabled) }.onSuccess {
+                _state.value = _state.value.copy(serverSettings = it, cardsMode = if (it.cardsEnabled) "on" else "off")
+            }
+        }
+    }
 
     fun openDocumentDetail(id: String) {
         _state.value = _state.value.copy(detail = DetailContent.Loading)

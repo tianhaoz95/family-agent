@@ -35,6 +35,7 @@ export const envLocked = {
   ttsVoice: process.env.FAMILY_AGENT_TTS_VOICE !== undefined,
   embedModel: process.env.FAMILY_AGENT_EMBED_MODEL !== undefined,
   serverName: process.env.FAMILY_AGENT_SERVER_NAME !== undefined,
+  cardsEnabled: process.env.FAMILY_AGENT_CARDS !== undefined,
 } as const;
 
 export const config = {
@@ -224,6 +225,33 @@ export const config = {
   mcpServersSeed: process.env.FAMILY_AGENT_MCP_SERVERS ?? "",
   mcpCallTimeoutMs: Number(process.env.FAMILY_AGENT_MCP_TIMEOUT_MS ?? 30_000),
   mcpMaxResultChars: Number(process.env.FAMILY_AGENT_MCP_MAX_RESULT ?? 8_000),
+
+  // ---- password vault ----
+  // A per-user encrypted store for passwords + TOTP seeds (optionally shared
+  // across the family) that the local assistant can read out on request. OFF
+  // by default: it holds the family's most sensitive data and it changes the
+  // security posture, so it's an operator env switch like FAMILY_AGENT_WEB /
+  // _SHELL / _MCP, not a Settings-page toggle. FAMILY_AGENT_VAULT=1 enables it.
+  vaultEnabled: process.env.FAMILY_AGENT_VAULT === "1",
+  // Whether the assistant may read vault secrets via tool calls (the "/vault"
+  // forced chat turn). Separate switch so a family can keep the vault UI
+  // without giving the AI access. Only consulted when vaultEnabled is on;
+  // defaults on there. FAMILY_AGENT_VAULT_AI=0 turns off just the AI path.
+  vaultAiEnabled: process.env.FAMILY_AGENT_VAULT_AI !== "0",
+  // How long a vault stays unlocked in memory without use before it re-locks.
+  vaultIdleMs: Number(process.env.FAMILY_AGENT_VAULT_IDLE_MS ?? 15 * 60_000),
+
+  // ---- AI-generated HTML cards (render_card) ----
+  // The assistant can answer with a small self-contained HTML/JS snippet the
+  // UI embeds inline (a chart, a checklist, a diagram). Generated code is less
+  // stable than text, so this is the first boolean machine setting an admin
+  // can flip from the desktop Settings page. Default ON; env var
+  // `FAMILY_AGENT_CARDS=0` forces it off (and env-locks the toggle). When off,
+  // `render_card` is not wired into any agent. Precedence: env > persisted > default.
+  cardsEnabled:
+    process.env.FAMILY_AGENT_CARDS !== undefined
+      ? process.env.FAMILY_AGENT_CARDS !== "0"
+      : persisted.cardsEnabled ?? true,
 };
 
 /** The watched folder for one user — their own override, or the derived default. */
