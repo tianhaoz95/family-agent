@@ -33,10 +33,25 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build for the simulator
         run: |
+          set -o pipefail
           xcodebuild -resolvePackageDependencies \
             -project ios/FamilyAgent.xcodeproj -scheme FamilyAgent
+          # The pipe is only to keep the log readable. xcodebuild's own exit
+          # status does not survive a pipe without pipefail, and `|| true` would
+          # swallow it even then — so the explicit grep below is what decides
+          # whether this job passes. Without it the job is green no matter what,
+          # which is worse than having no iOS check at all.
           xcodebuild -project ios/FamilyAgent.xcodeproj -scheme FamilyAgent \
             -configuration Debug -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath /tmp/dd build \
-            CODE_SIGNING_ALLOWED=NO | \
-            grep -E 'error:|warning:|BUILD (FAILED|SUCCEEDED)' || true
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee /tmp/xcodebuild.log \
+            | grep -E 'error:|warning:|BUILD (FAILED|SUCCEEDED)' || true
+          grep -q 'BUILD SUCCEEDED' /tmp/xcodebuild.log
+
+      - name: Fail on any warning
+        run: |
+          if grep -E ' warning: ' /tmp/xcodebuild.log | grep -v 'AppIntents.framework'; then
+            echo "::error::the iOS build produced warnings"
+            exit 1
+          fi
+          echo "no warnings"
