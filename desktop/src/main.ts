@@ -909,12 +909,19 @@ function wireAutoGrow(
     refresh();
     ta.focus();
   };
-  function refresh() {
+  // Size the field to its content. A textarea inside a hidden view reports
+  // scrollHeight 0 — pinning height:0px then would stick (clipping the
+  // placeholder) once the view is shown, so leave it "auto" until it's
+  // on-screen and a later refresh can measure it for real.
+  function sizeToContent() {
     ta.style.height = "auto";
+    if (ta.scrollHeight > 0) ta.style.height = `${ta.scrollHeight}px`;
+  }
+  function refresh() {
     // CSS max-height (3 lines collapsed / ~48vh expanded) does the clamping;
     // scrollHeight is always the full content height, so this is the natural
     // size the field wants.
-    ta.style.height = `${ta.scrollHeight}px`;
+    sizeToContent();
     const overflowing = ta.scrollHeight > threeLineCap() + 1;
     expandBtn.hidden = !(overflowing || expanded);
     if (!overflowing && expanded) setExpanded(false);
@@ -926,8 +933,7 @@ function wireAutoGrow(
       expandBtn.setAttribute("aria-pressed", "false");
       expandBtn.title = "Expand the input";
     }
-    ta.style.height = "auto";
-    ta.style.height = `${ta.scrollHeight}px`;
+    sizeToContent();
     expandBtn.hidden = true;
   }
   expandBtn.addEventListener("click", () => setExpanded(!expanded));
@@ -4491,12 +4497,13 @@ async function openChannel(id: string) {
   renderedMessageIds = new Set();
   messageStepPolls.clear();
   messageTray.clear();
-  messageInput.value = "";
-  messageGrow.reset();
-  messageSlash.clear();
   messageLog.innerHTML = "";
   conversationEmpty.hidden = true;
   conversationEl.hidden = false;
+  // Reveal the composer before measuring it — a hidden textarea can't be sized.
+  messageInput.value = "";
+  messageGrow.reset();
+  messageSlash.clear();
   const channel = channels.find((c) => c.id === id);
   conversationTitle.textContent = channel?.title ?? "Conversation";
   conversationMembers.textContent = (channel?.members ?? []).map((m) => m.displayName).join(", ");
