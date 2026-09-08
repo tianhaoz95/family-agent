@@ -7,21 +7,71 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 /// Holds the agent-core child process so it can be reaped on shutdown.
-/// Dev-only wiring: launches `node dist/server.js` directly from the
-/// workspace via a compile-time path. Packaging this as a bundled sidecar
-/// binary (per docs/architecture "managed download" runtime) is future work
-/// — see docs/DECISIONS.md.
+///
+/// Two wirings, picked at runtime by [`resolve_agent_core`]:
+/// - **dev / local build**: `node <repo>/agent-core/dist/server.js` via the
+///   compile-time `CARGO_MANIFEST_DIR` path — used whenever that path exists.
+/// - **bundled app**: the `node` binary and `agent-core/` tree are shipped as
+///   Tauri resources (see `tauri.conf.json` `bundle.resources` +
+///   `desktop/scripts/prepare-sidecar.sh`) and resolved under
+///   `resource_dir()`, so a distributed `.app`/`.dmg` is self-contained.
 struct AgentCoreProcess(Mutex<Option<Child>>);
 
 /// Ports agent-core binds: the HTTP API and the tools server.
 const AGENT_CORE_PORTS: [u16; 2] = [4173, 4174];
 
-fn agent_core_dir() -> PathBuf {
+/// How to launch the agent-core sidecar for this build.
+struct AgentCoreLaunch {
+    /// The `node` executable (system `node` in dev, the bundled binary in a packaged app).
+    node: PathBuf,
+    /// `dist/server.js` to run.
+    entry: PathBuf,
+    /// Working directory for the child (the `agent-core` root).
+    cwd: PathBuf,
+}
+
+/// Repo checkout path baked in at compile time — present for `tauri dev` and a
+/// `tauri build` run from the same checkout, absent in a `.app` copied elsewhere.
+fn repo_agent_core_dir() -> PathBuf {
     // desktop/src-tauri -> ../../agent-core
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("agent-core")
+}
+
+/// Decide how to launch the sidecar: prefer the bundled resource copy (a real
+/// packaged app), fall back to the repo checkout + system `node` (dev).
+///
+/// `desktop/scripts/prepare-sidecar.sh` stages a production install of
+/// agent-core plus a copy of the `node` binary under
+/// `desktop/src-tauri/sidecar/`, which `tauri.conf.json` ships as
+/// `bundle.resources` — so in a packaged app they land at
+/// `<resource_dir>/sidecar/{agent-core,node}`.
+fn resolve_agent_core(app: &tauri::App) -> AgentCoreLaunch {
+    if let Ok(res_dir) = app.path().resource_dir() {
+        let bundled_core = res_dir.join("sidecar").join("agent-core");
+        let bundled_entry = bundled_core.join("dist").join("server.js");
+        let bundled_node = res_dir.join("sidecar").join("node");
+        if bundled_entry.exists() {
+            let node = if bundled_node.exists() {
+                bundled_node
+            } else {
+                PathBuf::from("node")
+            };
+            return AgentCoreLaunch {
+                node,
+                entry: bundled_entry,
+                cwd: bundled_core,
+            };
+        }
+    }
+    let repo = repo_agent_core_dir();
+    AgentCoreLaunch {
+        node: PathBuf::from("node"),
+        entry: repo.join("dist").join("server.js"),
+        cwd: repo,
+    }
 }
 
 /// Kill any agent-core left listening on our ports from a previous run.
@@ -91,25 +141,46 @@ fn kill_stale_agent_core() {
 /// only reap it if its cmdline actually looks like our sidecar.
 #[cfg(unix)]
 fn is_agent_core_pid(pid: &i32) -> bool {
-    match std::fs::read(format!("/proc/{pid}/cmdline")) {
-        Ok(bytes) => {
-            let cmdline = String::from_utf8_lossy(&bytes);
-            cmdline.contains("agent-core") || cmdline.contains("server.js")
-        }
-        // /proc unavailable (macOS): assume it's ours — the port is ours by convention.
-        Err(_) => true,
+    // Linux: read /proc directly.
+    #[cfg(target_os = "linux")]
+    {
+        return match std::fs::read(format!("/proc/{pid}/cmdline")) {
+            Ok(bytes) => {
+                let cmdline = String::from_utf8_lossy(&bytes);
+                cmdline.contains("agent-core") || cmdline.contains("server.js")
+            }
+            Err(_) => false,
+        };
+    }
+    // macOS: no /proc — ask `ps` for the full command line.
+    #[cfg(target_os = "macos")]
+    {
+        return match Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "command="])
+            .output()
+        {
+            Ok(out) => {
+                let cmdline = String::from_utf8_lossy(&out.stdout);
+                cmdline.contains("agent-core") || cmdline.contains("server.js")
+            }
+            Err(_) => false,
+        };
+    }
+    // Other unix: be conservative and don't signal an unknown process.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        false
     }
 }
 
 #[cfg(not(unix))]
 fn kill_stale_agent_core() {}
 
-fn spawn_agent_core() -> std::io::Result<Child> {
-    let dir = agent_core_dir();
-    let entry = dir.join("dist").join("server.js");
-    let mut cmd = Command::new("node");
-    cmd.arg(entry)
-        .current_dir(&dir)
+fn spawn_agent_core(launch: &AgentCoreLaunch) -> std::io::Result<Child> {
+    let mut cmd = Command::new(&launch.node);
+    cmd.arg(&launch.entry)
+        .current_dir(&launch.cwd)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
@@ -121,7 +192,11 @@ fn spawn_agent_core() -> std::io::Result<Child> {
     // any means, so there is no path that leaks the sidecar. Belt-and-braces
     // with kill_stale_agent_core() above, which cleans up anything that still
     // slipped through from an earlier run.
-    #[cfg(unix)]
+    //
+    // Linux-only: `PR_SET_PDEATHSIG` is a Linux prctl (not in the `libc` crate
+    // on macOS). On macOS the graceful shutdown handlers plus
+    // `kill_stale_agent_core()` at next launch cover sidecar cleanup.
+    #[cfg(target_os = "linux")]
     unsafe {
         use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {
@@ -253,7 +328,13 @@ fn main() {
         .manage(AgentCoreProcess(Mutex::new(None)))
         .setup(|app| {
             kill_stale_agent_core();
-            match spawn_agent_core() {
+            let launch = resolve_agent_core(app);
+            eprintln!(
+                "family-agent-desktop: launching agent-core: {} {}",
+                launch.node.display(),
+                launch.entry.display()
+            );
+            match spawn_agent_core(&launch) {
                 Ok(child) => {
                     let state = app.state::<AgentCoreProcess>();
                     *state.0.lock().unwrap() = Some(child);

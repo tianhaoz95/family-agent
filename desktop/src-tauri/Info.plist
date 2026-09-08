@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Merged into the macOS bundle's Info.plist by Tauri.
+       NSMicrophoneUsageDescription is REQUIRED: without it a packaged .app
+       hard-crashes the moment the Chat voice-input button calls getUserMedia
+       in the WKWebView. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Family Agent records a short voice clip and sends it to the local agent running on this Mac to transcribe.</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
+</dict>
+</plist>
