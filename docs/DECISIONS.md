@@ -2362,3 +2362,52 @@ the other clients. Key calls:
 Verification used the machine's real Ollama (remote, `gemma4:26b` +
 `nomic-embed-text`) so chat / the planner / tool delegation / semantic search
 are all exercised for real, not just rendered.
+
+## Signing and notarizing the macOS app (`scripts/sign-desktop.sh`)
+
+Signing is done by a script after Tauri finishes, not by
+`tauri.conf.json`'s `signingIdentity`, because of what the bundle contains. The
+`.app` ships a whole Node runtime plus native addons under
+`Contents/Resources/sidecar` — 9 Mach-O files in total: the Tauri binary, the
+bundled `node`, and 7 addons/dylibs (onnxruntime ×2 arches, sharp, libvips,
+`@napi-rs/canvas`). Tauri signs the app bundle; it does not sign loose Mach-O
+files inside `Resources`, and an outer signature over unsigned nested code fails
+both `codesign --verify --deep --strict` and notarization. So everything is
+signed innermost-first, then the bundle last.
+
+`--deep` is deliberately not used. It applies the *outer* entitlements to nested
+code, which is wrong here: the dylibs need none, and `node` needs a different set
+from the app.
+
+**`node` gets its own entitlements** (`NodeEntitlements.plist`). The app spawns it
+as a child process, and a child process carries its own signature and its own
+entitlements — the app's do not extend to it. Under the hardened runtime an
+unentitled `node` dies the moment V8 allocates executable memory, which surfaces
+in the UI as the sidecar just never starting. The file is deliberately the same
+set the official Node.js macOS build signs itself with, because re-signing
+replaces entitlements wholesale and trimming one upstream considers necessary
+would break only in a packaged build.
+
+**Minus one entry:** upstream Node ships with
+`com.apple.security.get-task-allow` (it lets a debugger attach), and Apple's
+notary service rejects any binary carrying it. Dropping it is mandatory, not a
+preference, and it is easy to miss because it arrives inside a third-party
+binary rather than anything we wrote. `sign-desktop.sh` walks every Mach-O in
+the bundle and refuses to build the DMG if the entitlement survives — that check
+costs a second, where finding out from a rejected submission costs a round trip.
+
+**The DMG is rebuilt from the signed app** with `hdiutil` (plus an
+`/Applications` symlink) rather than re-signing Tauri's, because Tauri produces
+the `.app` and the `.dmg` in one pass and the DMG would otherwise contain the
+pre-signing copy.
+
+Mac App Store distribution is not an option: it requires the app sandbox, and
+the sandbox blocks spawning the bundled `node`, `lsof`, and localhost
+networking. Direct download with Developer ID + notarization is the only route,
+which is the right shape for a local-first app anyway.
+
+Verified end to end with an Apple Development certificate: all 9 binaries
+signed, `--verify --deep --strict` clean, `flags=0x10000(runtime)`,
+`TeamIdentifier=68CTFST8W2`, `get-task-allow` gone, and — the part that actually
+matters — the signed hardened-runtime app launches and its bundled `node`
+serves `/health`. Only the certificate type is missing; see `desktop/RELEASE.md`.

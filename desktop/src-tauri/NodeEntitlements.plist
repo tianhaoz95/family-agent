@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Entitlements for the BUNDLED `node` in Contents/Resources/sidecar/node.
+
+    The app spawns it as a child process, and a child process gets its own code
+    signature and its own entitlements — the app's Entitlements.plist does not
+    extend to it. Under the hardened runtime (which notarization requires) an
+    unentitled node dies as soon as V8 allocates executable memory, which from
+    the UI looks like the sidecar simply failing to start.
+
+    This is deliberately the *same set the official Node.js macOS build signs
+    itself with*, minus one entry. Re-signing replaces entitlements wholesale,
+    so trimming anything upstream Node considers necessary risks a failure that
+    only ever shows up in a packaged build — the worst kind to debug here.
+
+    The omitted entry is `com.apple.security.get-task-allow`, which upstream
+    Node does ship. It lets a debugger attach, and Apple's notary service
+    rejects any binary carrying it. Dropping it is mandatory, not a preference.
+    scripts/sign-desktop.sh asserts it is gone before submitting.
+
+    No microphone here: that is the WKWebView in the app process, not node.
+  -->
+
+  <!-- V8's JIT. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-executable-page-protection</key>
+  <true/>
+
+  <!-- node loads native addons (.node) and their dylibs — onnxruntime, sharp,
+       canvas — and resolves some of them through DYLD_ variables. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+</dict>
+</plist>
