@@ -104,11 +104,20 @@
       recovery code issued at setup.
     </p>
 
+    <h2>Where are the downloads?</h2>
+    <p>
+      There aren't any yet. Signed, notarized builds need an Apple Developer ID
+      certificate, and until that is in place the only way to run it is to build
+      from source — see <strong>Running it</strong> in the
+      <a href="https://github.com/tianhaoz95/family-agent#running-it">README</a>.
+      Once releases start, the app updates itself from then on.
+    </p>
+
     <h2>macOS says the app can't be opened</h2>
     <p>
-      Until releases are notarized by Apple, Gatekeeper will block the app on first
-      open. Right-click the app and choose <strong>Open</strong>, then confirm — you
-      only need to do it once.
+      A build you made yourself isn't signed by Apple, so Gatekeeper stops it the
+      first time. Right-click the app and choose <strong>Open</strong>, then
+      confirm — once per build. Published releases won't need this.
     </p>
 
     <h2>Reporting something</h2>

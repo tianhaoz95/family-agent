@@ -132,6 +132,7 @@ h1 {
 .hero .note { margin: 0; max-width: 46ch; font-size: 15px; color: var(--ink-soft); }
 
 .cta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 32px; }
+.cta-note { margin: 14px 0 0; font-size: 13.5px; color: var(--ink-soft); }
 
 .btn {
   display: inline-flex;
