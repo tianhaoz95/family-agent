@@ -190,6 +190,7 @@ if [ "$NOTARIZE" -eq 0 ]; then
   exit 0
 fi
 
+
 if [ "$DISTRIBUTABLE" -eq 0 ]; then
   echo "!! cannot notarize with a development certificate — see above." >&2
   exit 1
@@ -224,5 +225,72 @@ xcrun stapler staple "$APP"
 
 echo "==> final assessment"
 spctl -a -vvv -t exec "$APP" 2>&1 | sed 's/^/    /' || true
-echo
-echo "Done: $OUT_DMG"
+
+# ------------------------------------------------------- updater artifact
+#
+# Built HERE, from the signed and stapled app — not by `tauri build`. Tauri
+# emits its updater tarball during bundling, which is before any of the code
+# signing above has happened, so shipping that one would push an unsigned app
+# to everybody on the next update. Rebuilding it last is the whole point.
+
+echo "==> building the updater artifact from the signed app"
+UPDATER_DIR="$BUNDLE_DIR/updater"
+mkdir -p "$UPDATER_DIR"
+TARBALL="$UPDATER_DIR/Family Agent.app.tar.gz"
+rm -f "$TARBALL" "$TARBALL.sig"
+# -C so the archive holds "Family Agent.app" at its root, which is what the
+# updater expects to swap into place.
+tar -czf "$TARBALL" -C "$(dirname "$APP")" "$(basename "$APP")"
+
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
+  if [ -f "$HOME/.tauri/family-agent-updater.key" ]; then
+    export TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/family-agent-updater.key"
+  else
+    echo "!! no updater signing key. Expected ~/.tauri/family-agent-updater.key" >&2
+    echo "   or TAURI_SIGNING_PRIVATE_KEY / _PATH set. See desktop/RELEASE.md." >&2
+    exit 1
+  fi
+fi
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+
+( cd "$ROOT/desktop" && npx tauri signer sign "$TARBALL" >/dev/null )
+[ -f "$TARBALL.sig" ] || { echo "!! updater signing produced no .sig" >&2; exit 1; }
+echo "    $TARBALL"
+
+VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/desktop/src-tauri/tauri.conf.json'))['version'])")"
+ARCH="$(uname -m)"; [ "$ARCH" = "arm64" ] && ARCH="aarch64"
+REPO_URL="https://github.com/tianhaoz95/family-agent/releases/download/v$VERSION"
+
+python3 - "$VERSION" "$ARCH" "$REPO_URL" "$TARBALL.sig" "$UPDATER_DIR/latest.json" <<'PY'
+import json, sys, datetime, pathlib
+version, arch, base, sigfile, out = sys.argv[1:6]
+sig = pathlib.Path(sigfile).read_text().strip()
+manifest = {
+    "version": version,
+    "notes": "See the release notes on GitHub.",
+    "pub_date": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+    "platforms": {
+        f"darwin-{arch}": {"signature": sig, "url": f"{base}/Family.Agent.app.tar.gz"},
+    },
+}
+pathlib.Path(out).write_text(json.dumps(manifest, indent=2) + "\n")
+print(f"    latest.json for darwin-{arch} v{version}")
+PY
+
+cat <<EOF
+
+Done.
+
+  DMG      $OUT_DMG
+  updater  $TARBALL
+           $TARBALL.sig
+           $UPDATER_DIR/latest.json
+
+Publish by creating a GitHub release tagged v$VERSION and attaching all three of
+the DMG, the .app.tar.gz and latest.json. The updater endpoint points at
+releases/latest/download/latest.json, so the release must not be a draft or a
+pre-release or clients will not see it.
+
+Note GitHub rewrites spaces in asset names to dots on download, which is why
+latest.json points at "Family.Agent.app.tar.gz".
+EOF

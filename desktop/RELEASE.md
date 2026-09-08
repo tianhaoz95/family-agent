@@ -119,6 +119,54 @@ Gatekeeper wants Developer ID *and* notarization. That is the only gap left.
 
 ---
 
+## Auto-update
+
+The app checks for updates on launch and from **Settings → Updates**. It never
+installs silently: an update ships the whole app — Node runtime, `agent-core`
+and all — and restarting it restarts the server everyone else on the LAN is
+talking to. So the user sees the version and decides.
+
+**Endpoint:** `releases/latest/download/latest.json` on this repository. A
+release must be published (not a draft, not a pre-release) for clients to see it.
+
+**Two signing systems, don't confuse them.** Apple code signing proves the app
+is from you and lets macOS run it. Tauri's updater signature proves an update
+came from you and is what the app checks before installing. They are separate
+keys with separate jobs.
+
+The updater private key lives at `~/.tauri/family-agent-updater.key` — **outside
+the repo, and not recoverable**. Lose it and no already-installed copy will ever
+accept another update; every user would have to reinstall by hand. Back it up
+somewhere you back up secrets. The public half is in `tauri.conf.json` and is
+meant to be committed.
+
+`scripts/sign-desktop.sh --notarize` builds the updater artifact **last**, from
+the signed and stapled app. That ordering is the point: `tauri build` emits its
+own updater tarball during bundling, long before any code signing has happened,
+and shipping that one would push an unsigned app to everybody on the next
+update.
+
+### Publishing a release
+
+```bash
+cd desktop && npm run tauri:build:mac
+cd .. && ./scripts/sign-desktop.sh --notarize
+```
+
+That leaves three files to attach to a GitHub release tagged `v<version>`:
+
+| file | why |
+|---|---|
+| `Family Agent-signed.dmg` | what people download the first time |
+| `Family Agent.app.tar.gz` (+ `.sig`) | what the updater downloads |
+| `latest.json` | the manifest the app polls |
+
+GitHub rewrites spaces in asset names to dots on download, so `latest.json`
+points at `Family.Agent.app.tar.gz`. The script generates it that way already.
+
+Bump `version` in `desktop/src-tauri/tauri.conf.json` before building — the
+updater compares against it, so an unbumped version means no update is offered.
+
 ## Known gaps
 
 - **arm64 only.** The build targets the host architecture, so this DMG will not
@@ -129,5 +177,7 @@ Gatekeeper wants Developer ID *and* notarization. That is the only gap left.
 - **321 MB.** Inherent to bundling Node plus onnxruntime, transformers and
   tesseract for a local-AI app; noted in `docs/DECISIONS.md` → "macOS desktop
   packaging".
-- **No auto-update.** Tauri's updater is not configured, so there is no upgrade
-  path other than downloading a new DMG.
+- **Every update is a full 321 MB download.** Tauri has no delta updates, so the
+  whole bundle comes down each time. Worth batching changes into fewer releases.
+- **Updates only reach macOS.** The Linux `deb` build has no updater path
+  (Tauri supports AppImage only), and nothing is built for Windows.

@@ -4155,6 +4155,103 @@ settingsQuitBtn.addEventListener("click", async () => {
   }
 });
 
+// ---------- updates (Tauri only) ----------
+// The update ships the whole app — Node runtime, agent-core and all — so it is
+// never applied silently: the user gets the version and the release notes and
+// chooses. Restarting also restarts the bundled server everyone else on the LAN
+// is talking to, which is not something to do behind their back.
+
+const settingsUpdateHeading = document.getElementById("settings-update-heading")!;
+const settingsUpdateVersionEl = document.getElementById("settings-update-version")!;
+const settingsUpdateRow = document.getElementById("settings-update-row")!;
+const settingsUpdateCheckBtn = document.getElementById("settings-update-check") as HTMLButtonElement;
+const settingsUpdateInstallBtn = document.getElementById("settings-update-install") as HTMLButtonElement;
+const settingsUpdateStatusEl = document.getElementById("settings-update-status")!;
+
+type PendingUpdate = { version: string; body?: string; downloadAndInstall: (cb?: (p: unknown) => void) => Promise<void> };
+let pendingUpdate: PendingUpdate | null = null;
+
+async function initUpdates(): Promise<void> {
+  if (!isTauri()) return;
+  settingsUpdateHeading.hidden = false;
+  settingsUpdateRow.hidden = false;
+  try {
+    const { getVersion } = await import("@tauri-apps/api/app");
+    settingsUpdateVersionEl.textContent = `Family Agent ${await getVersion()}`;
+  } catch {
+    /* version is cosmetic — a failure here shouldn't hide the check button */
+  }
+  // One quiet check on launch. Never auto-installs.
+  void checkForUpdate({ quiet: true });
+}
+
+async function checkForUpdate({ quiet = false } = {}): Promise<void> {
+  settingsUpdateCheckBtn.disabled = true;
+  if (!quiet) settingsUpdateStatusEl.textContent = "Checking…";
+  try {
+    const { check } = await import("@tauri-apps/plugin-updater");
+    const update = await check();
+    if (!update) {
+      pendingUpdate = null;
+      settingsUpdateInstallBtn.hidden = true;
+      settingsUpdateStatusEl.textContent = quiet ? "" : "You're up to date.";
+      return;
+    }
+    pendingUpdate = update as unknown as PendingUpdate;
+    settingsUpdateInstallBtn.hidden = false;
+    const notes = update.body ? ` — ${update.body.split("\n")[0]}` : "";
+    settingsUpdateStatusEl.textContent = `Version ${update.version} is available${notes}`;
+  } catch (err) {
+    // Offline, or no release published yet. Stay quiet on the launch check —
+    // an update server being unreachable is not the user's problem to see.
+    pendingUpdate = null;
+    settingsUpdateInstallBtn.hidden = true;
+    if (!quiet) {
+      settingsUpdateStatusEl.textContent =
+        `Couldn't check for updates: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  } finally {
+    settingsUpdateCheckBtn.disabled = false;
+  }
+}
+
+settingsUpdateCheckBtn.addEventListener("click", () => void checkForUpdate());
+
+settingsUpdateInstallBtn.addEventListener("click", async () => {
+  if (!pendingUpdate) return;
+  if (!confirm(
+    `Install Family Agent ${pendingUpdate.version} and restart?\n\n` +
+    "The local server restarts too, so anyone using Family Agent on a phone " +
+    "will reconnect in a few seconds."
+  )) return;
+  settingsUpdateInstallBtn.disabled = true;
+  settingsUpdateCheckBtn.disabled = true;
+  try {
+    let downloaded = 0;
+    let total = 0;
+    await pendingUpdate.downloadAndInstall((event: any) => {
+      if (event?.event === "Started") {
+        total = event.data?.contentLength ?? 0;
+        settingsUpdateStatusEl.textContent = "Downloading…";
+      } else if (event?.event === "Progress") {
+        downloaded += event.data?.chunkLength ?? 0;
+        settingsUpdateStatusEl.textContent = total
+          ? `Downloading… ${Math.round((downloaded / total) * 100)}%`
+          : `Downloading… ${(downloaded / 1_000_000).toFixed(0)} MB`;
+      } else if (event?.event === "Finished") {
+        settingsUpdateStatusEl.textContent = "Installing…";
+      }
+    });
+    const { relaunch } = await import("@tauri-apps/plugin-process");
+    await relaunch();
+  } catch (err) {
+    settingsUpdateStatusEl.textContent =
+      `Update failed: ${err instanceof Error ? err.message : String(err)}`;
+    settingsUpdateInstallBtn.disabled = false;
+    settingsUpdateCheckBtn.disabled = false;
+  }
+});
+
 // ---------- auth gate + boot ----------
 const gate = document.getElementById("gate")!;
 const appEl = document.getElementById("app")!;
@@ -4212,6 +4309,7 @@ function enterApp(user: User) {
   setInterval(() => void refreshStatus(), 5000);
   startChannelBadgePolling();
   showView("chat");
+  void initUpdates();
   // A slow welcome drift until the first interaction (atmosphere.ts).
   atmosphereWelcome();
 }

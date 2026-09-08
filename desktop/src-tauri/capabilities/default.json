@@ -1,13 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for the single app window. The frontend talks to agent-core over plain fetch() to localhost; its Tauri IPC is the native directory picker (dialog), the launch-at-login toggle (autostart), and the app's own quit_app command (needs no capability entry — commands registered via invoke_handler are allowed by default, see docs/DECISIONS.md). Generated tools open in an in-window <iframe>, not a new window — no window/webview IPC needed.",
-  "windows": ["main"],
+  "description": "Default capabilities for the single app window. The frontend talks to agent-core over plain fetch() to localhost; its Tauri IPC is the native directory picker (dialog), the launch-at-login toggle (autostart), and the app's own quit_app command (needs no capability entry \u2014 commands registered via invoke_handler are allowed by default, see docs/DECISIONS.md). Generated tools open in an in-window <iframe>, not a new window \u2014 no window/webview IPC needed. The updater checks GitHub Releases and process:allow-restart relaunches the app once an update installs.",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "dialog:allow-open",
     "autostart:allow-enable",
     "autostart:allow-disable",
-    "autostart:allow-is-enabled"
+    "autostart:allow-is-enabled",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

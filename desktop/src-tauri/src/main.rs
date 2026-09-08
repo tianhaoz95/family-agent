@@ -324,6 +324,12 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_dialog::init())
+        // Updater. The frontend drives it (Settings > "Check for updates"), so
+        // there is nothing to configure here beyond registering the plugin;
+        // endpoint and public key live in tauri.conf.json. `process` is what
+        // relaunches the app after an update installs.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![quit_app])
         .manage(AgentCoreProcess(Mutex::new(None)))
         .setup(|app| {

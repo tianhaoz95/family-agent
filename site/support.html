@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support — Family Agent</title>
+<meta name="description" content="Getting Family Agent running, and what to do when a phone can't find the server.">
+<link rel="icon" href="img/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <a class="brand" href="./"><img src="img/logo.png" alt="">Family Agent</a>
+    <nav>
+      <a href="./">Home</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="https://github.com/tianhaoz95/family-agent">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="prose">
+    <h1>Support</h1>
+    <p class="updated">Questions, bugs and feature requests: <a href="https://github.com/tianhaoz95/family-agent/issues">open an issue on GitHub</a>.</p>
+
+    <h2>Getting started</h2>
+    <p>
+      Family Agent needs one machine at home to act as the server. Install the
+      desktop app there; it runs the server for you as long as it is open (or in
+      the tray).
+    </p>
+    <ol>
+      <li>
+        Install <a href="https://ollama.com">Ollama</a> on that machine and pull a
+        model that supports tool calling. Without tool calling the assistant can
+        talk but cannot actually do anything — that is a property of the model,
+        not of this app.
+      </li>
+      <li>
+        Install the desktop app and open it. On first run it asks you to create
+        the owner account and name your home.
+      </li>
+      <li>
+        Add an account for each person in <strong>Family</strong>. Everyone's
+        documents, tasks and chats stay separate.
+      </li>
+      <li>
+        On a phone, open the app on the same Wi-Fi. It should find the server by
+        itself; if not, enter the address shown in the desktop app's Settings.
+      </li>
+    </ol>
+
+    <h2>A phone can't find the server</h2>
+    <p>Usually one of these:</p>
+    <ul>
+      <li>
+        <strong>Different networks.</strong> Guest Wi-Fi and the main network are
+        often separate. Put both devices on the same one.
+      </li>
+      <li>
+        <strong>Client isolation.</strong> Some routers stop devices talking to
+        each other. Look for "AP isolation" or "client isolation" and turn it off.
+      </li>
+      <li>
+        <strong>The desktop app is closed.</strong> Closing the window keeps it
+        running in the tray, but Quit stops the server for everyone.
+      </li>
+      <li>
+        <strong>Local network permission.</strong> On iOS, check
+        Settings → Family Agent → Local Network is on.
+      </li>
+    </ul>
+    <p>
+      If discovery still fails, the address is in the desktop app under
+      Settings → Advanced, and every client accepts a typed address.
+    </p>
+
+    <h2>The assistant replies but never does anything</h2>
+    <p>
+      Almost always the model. It has to support tool calling in Ollama's serving
+      layer, and not every model does. The repository's
+      <a href="https://github.com/tianhaoz95/family-agent/blob/main/docs/DECISIONS.md">decision log</a>
+      lists the ones that have been tried and what happened.
+    </p>
+
+    <h2>Replies are very slow</h2>
+    <p>
+      A full planner turn can take a couple of minutes on modest hardware, because
+      everything is running locally. A smaller model is faster and less reliable at
+      choosing tools; a larger one is the reverse. This is the trade-off you own
+      by running your own inference.
+    </p>
+
+    <h2>I've forgotten the admin password</h2>
+    <p>
+      From the repository on the server machine,
+      <code>./scripts/show-accounts.sh</code> lists the accounts and
+      <code>./scripts/reset-password.sh &lt;username&gt;</code> resets one. If the
+      password vault was set up, the account holder unlocks it afterwards with the
+      recovery code issued at setup.
+    </p>
+
+    <h2>macOS says the app can't be opened</h2>
+    <p>
+      Until releases are notarized by Apple, Gatekeeper will block the app on first
+      open. Right-click the app and choose <strong>Open</strong>, then confirm — you
+      only need to do it once.
+    </p>
+
+    <h2>Reporting something</h2>
+    <p>
+      <a href="https://github.com/tianhaoz95/family-agent/issues">GitHub issues</a>
+      is the place. Useful things to include: which app, what you expected, what
+      happened, and anything from the desktop app's Activity screen around the
+      time it went wrong. Please don't paste vault contents or document text you
+      would not want public.
+    </p>
+  </div>
+
+  <footer>
+    <span>MIT licensed</span>
+    <a href="./">Home</a>
+    <a href="privacy.html">Privacy</a>
+    <a href="https://github.com/tianhaoz95/family-agent">Source</a>
+  </footer>
+
+</div>
+</body>
+</html>

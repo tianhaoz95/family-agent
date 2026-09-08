@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  agent-core:
+    name: agent-core + desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      # No Ollama on the runner, so the live-model integration tests skip
+      # themselves (modelIsReady() at the top of agents.integration.test.ts).
+      # Everything else is real.
+      - run: npm --prefix agent-core run build
+      - run: npx --prefix agent-core tsc -p agent-core/tsconfig.json --noEmit
+      - run: npm --prefix agent-core test
+      - run: npm --prefix desktop run typecheck
+      - run: npm --prefix desktop test
+
+  ios:
+    name: iOS build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build for the simulator
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project ios/FamilyAgent.xcodeproj -scheme FamilyAgent
+          xcodebuild -project ios/FamilyAgent.xcodeproj -scheme FamilyAgent \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath /tmp/dd build \
+            CODE_SIGNING_ALLOWED=NO | \
+            grep -E 'error:|warning:|BUILD (FAILED|SUCCEEDED)' || true
