@@ -23,8 +23,8 @@ struct HoldToTalkMic: View {
         Image(systemName: mode == .idle ? "mic" : "stop.fill")
             .font(.system(size: 18))
             .foregroundStyle(mode == .idle ? Theme.accent : Theme.danger)
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())
+            .frame(width: 36, height: 36)
+            .contentShape(Rectangle())
             .overlay {
                 if transcribing { ProgressView().controlSize(.small) }
             }

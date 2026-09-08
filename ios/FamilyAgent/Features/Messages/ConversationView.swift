@@ -67,43 +67,47 @@ struct ConversationView: View {
 
     @ViewBuilder
     private var composer: some View {
-        VStack(spacing: 6) {
-            HStack(alignment: .bottom, spacing: 8) {
-                if mentionPill {
+        HStack(alignment: .center, spacing: 4) {
+            if mentionPill {
+                Button { mentionPill = false } label: {
                     HStack(spacing: 3) {
-                        Text("@agent").font(.inter(12, .semibold)).foregroundStyle(Theme.accent)
-                        Button { mentionPill = false } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 12)) }
-                            .foregroundStyle(Theme.accent.opacity(0.6))
+                        Text("@agent").font(.inter(12.5, .semibold))
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                     }
-                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 9).padding(.vertical, 5)
                     .background(Theme.accentSoft, in: Capsule())
                 }
-                TextField(mentionPill ? "Ask the assistant" : "Message", text: $input, axis: .vertical)
-                    .lineLimit(1...4)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20))
-                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.border, lineWidth: 1))
-                    .onChange(of: input) { _, v in
-                        if !mentionPill, ["@agent ", "@ai ", "@assistant "].contains(where: { v.lowercased() == $0 }) {
-                            mentionPill = true
-                            input = ""
-                        }
-                    }
-                if model.voiceEnabled {
-                    HoldToTalkMic(enabled: !model.channelSending, transcribing: model.channelTranscribing,
-                                  onDictate: { model.transcribeChannelVoice($0) { input += $0 } },
-                                  onVoiceSend: { model.sendChannelVoice($0) })
-                }
-                Button { send() } label: {
-                    Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 34, height: 34).background(Theme.accent, in: Circle())
-                }
-                .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
+                .buttonStyle(.plain)
+                .padding(.leading, 6)
             }
+            TextField(mentionPill ? "Ask the assistant" : "Message", text: $input, axis: .vertical)
+                .font(.inter(15))
+                .lineLimit(1...4)
+                .padding(.vertical, 7)
+                .padding(.leading, mentionPill ? 0 : 10)
+                .onChange(of: input) { _, v in
+                    if !mentionPill, ["@agent ", "@ai ", "@assistant "].contains(where: { v.lowercased() == $0 }) {
+                        mentionPill = true
+                        input = ""
+                    }
+                }
+            if model.voiceEnabled {
+                HoldToTalkMic(enabled: !model.channelSending, transcribing: model.channelTranscribing,
+                              onDictate: { model.transcribeChannelVoice($0) { input += $0 } },
+                              onVoiceSend: { model.sendChannelVoice($0) })
+            }
+            Button { send() } label: {
+                Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(input.trimmingCharacters(in: .whitespaces).isEmpty ? Theme.textFaint : Theme.accent, in: Circle())
+            }
+            .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
         }
-        .padding(12)
-        .glass(.floating, in: RoundedRectangle(cornerRadius: Theme.R.lg, style: .continuous))
-        .padding(.horizontal, 10).padding(.bottom, 8)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
+        .glass(.floating, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .padding(.horizontal, 12).padding(.bottom, 8)
     }
 
     private func send() {

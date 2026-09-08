@@ -25,6 +25,24 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // No app bar (Android parity) — a slim header row: title on the left
+            // (clearing the floating menu button), new-chat / history on the right.
+            HStack {
+                Text("Chat").appTitle().foregroundStyle(Theme.text)
+                Spacer()
+                Button { model.startNewChatSession() } label: {
+                    Image(systemName: "square.and.pencil").font(.system(size: 17))
+                }
+                Button { showHistory = true } label: {
+                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 17))
+                }
+            }
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 20)
+            .padding(.leading, 44)   // clear the menu button
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
@@ -66,13 +84,6 @@ struct ChatView: View {
         }
         .background(Color.clear)
         .scrollContentBackground(.hidden)
-        .navigationTitle("Chat")
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { model.startNewChatSession() } label: { Image(systemName: "square.and.pencil") }
-                Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }
-            }
-        }
         .task {
             await model.refreshTools()
             #if DEBUG
@@ -96,62 +107,81 @@ struct ChatView: View {
         }
     }
 
+    private var canSend: Bool {
+        !input.trimmingCharacters(in: .whitespaces).isEmpty || !attached.isEmpty || slashChip != nil
+    }
+
     @ViewBuilder
     private var composer: some View {
-        VStack(spacing: 6) {
-            ImageTray(images: $attached)
+        VStack(spacing: 8) {
             if !slashCandidates.isEmpty && slashChip == nil {
                 SlashCommandMenu(candidates: slashCandidates) { cmd in
                     slashChip = cmd
                     input = ""
                 }
+                .padding(.horizontal, 12)
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            if !attached.isEmpty {
+                ImageTray(images: $attached).padding(.horizontal, 16)
+            }
+            HStack(alignment: .center, spacing: 4) {
                 PhotosPicker(selection: $photoItem, matching: .images) {
-                    Image(systemName: "photo").font(.system(size: 18)).foregroundStyle(Theme.textMuted)
+                    Image(systemName: "photo")
+                        .font(.system(size: 19))
+                        .foregroundStyle(Theme.textMuted)
+                        .frame(width: 34, height: 34)
                 }
+
                 if let chip = slashChip {
-                    HStack(spacing: 3) {
-                        Text("/\(chip)").font(.inter(12, .semibold)).foregroundStyle(Theme.accent)
-                        Button { slashChip = nil } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 12)) }
-                            .foregroundStyle(Theme.accent.opacity(0.6))
-                    }
-                    .padding(.horizontal, 8).padding(.vertical, 5)
-                    .background(Theme.accentSoft, in: Capsule())
-                }
-                TextField(slashChip == nil ? "Ask anything, or type / for a command" : "Message", text: $input, axis: .vertical)
-                    .lineLimit(1...3)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20))
-                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.border, lineWidth: 1))
-                    .onChange(of: input) { _, v in
-                        if slashChip == nil, v.hasPrefix("/"), v.hasSuffix(" "),
-                           let kw = FORCED_AGENT_KEYWORDS.first(where: { "/\($0.0) " == v })?.0 {
-                            slashChip = kw
-                            input = ""
+                    Button { slashChip = nil } label: {
+                        HStack(spacing: 3) {
+                            Text("/\(chip)").font(.inter(12.5, .semibold))
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                         }
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 9).padding(.vertical, 5)
+                        .background(Theme.accentSoft, in: Capsule())
                     }
+                    .buttonStyle(.plain)
+                }
+
+                TextField(
+                    slashChip == nil ? "Ask anything, or type / for a command" : "Message",
+                    text: $input, axis: .vertical
+                )
+                .font(.inter(15))
+                .lineLimit(1...4)
+                .padding(.vertical, 7)
+                .padding(.leading, slashChip == nil ? 4 : 0)
+                .onChange(of: input) { _, v in
+                    if slashChip == nil, v.hasPrefix("/"), v.hasSuffix(" "),
+                       let kw = FORCED_AGENT_KEYWORDS.first(where: { "/\($0.0) " == v })?.0 {
+                        slashChip = kw
+                        input = ""
+                    }
+                }
+
                 if model.voiceEnabled {
                     HoldToTalkMic(enabled: !model.chatSending, transcribing: model.chatTranscribing,
                                   onDictate: { model.transcribeVoice($0) { input += $0 } },
                                   onVoiceSend: { model.sendChatVoice($0) })
                 }
-                Button {
-                    send()
-                } label: {
+
+                Button { send() } label: {
                     Image(systemName: model.chatSending ? "stop.fill" : "arrow.up")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(Theme.accent, in: Circle())
+                        .frame(width: 30, height: 30)
+                        .background(canSend || model.chatSending ? Theme.accent : Theme.textFaint, in: Circle())
                 }
-                .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty && attached.isEmpty && slashChip == nil)
+                .disabled(!canSend && !model.chatSending)
             }
+            .padding(.leading, 8)
+            .padding(.trailing, 6)
+            .padding(.vertical, 4)
+            .glass(.floating, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
-        .padding(12)
-        .glass(.floating, in: RoundedRectangle(cornerRadius: Theme.R.lg, style: .continuous))
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.bottom, 8)
     }
 

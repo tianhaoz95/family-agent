@@ -50,3 +50,18 @@ The simulator shares the Mac's network, so point discovery / manual entry at
   `multiplatform-markdown-renderer`). Everything else is system frameworks.
 - Bundle id `app.familyagent.ios`. Simulator builds are ad-hoc signed; a device
   build needs a `DEVELOPMENT_TEAM`.
+
+## Quick start
+
+```bash
+./scripts/start-ios.sh                       # boot a sim, build, install, launch
+./scripts/start-ios.sh --login dad:pass --start events   # + DEBUG auto sign-in
+```
+
+## Navigation
+
+Chat is the home surface. A drawer slides in over the content (floating
+hamburger button top-left, edge-swipe, or scrim tap to dismiss) to switch
+between the 12 destinations — the same model as the Android `ModalNavigationDrawer`,
+not a master-detail push. Messages → a conversation is the one real push (with a
+back button; the menu button hides there).

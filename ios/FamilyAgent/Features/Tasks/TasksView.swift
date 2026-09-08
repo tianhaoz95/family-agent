@@ -14,10 +14,20 @@ struct TasksView: View {
         VStack(alignment: .leading, spacing: 0) {
             ScreenScaffold(title: "Events", subtitle: "Everything with a date attached.") {
                 VStack(spacing: 12) {
-                    Picker("", selection: Binding(get: { model.taskView }, set: { model.taskView = $0 })) {
-                        ForEach(views, id: \.0) { Text($0.1).tag($0.0) }
+                    HStack(spacing: 10) {
+                        Picker("", selection: Binding(get: { model.taskView }, set: { model.taskView = $0 })) {
+                            ForEach(views, id: \.0) { Text($0.1).tag($0.0) }
+                        }
+                        .pickerStyle(.segmented)
+                        Button {
+                            quickAdd = QuickAddSeed(date: model.calAnchor, minutes: nil)
+                        } label: {
+                            Image(systemName: "plus").font(.system(size: 15, weight: .semibold))
+                                .frame(width: 32, height: 30)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(Theme.accent)
                     }
-                    .pickerStyle(.segmented)
 
                     if model.taskView != "list" {
                         HStack {
@@ -42,13 +52,6 @@ struct TasksView: View {
                                                        onTapTask: { model.openTaskDetail($0.id) })
                         }
                     }
-                }
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { quickAdd = QuickAddSeed(date: model.calAnchor, minutes: nil) } label: {
-                    Image(systemName: "plus")
                 }
             }
         }

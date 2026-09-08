@@ -80,8 +80,10 @@ desktop style".
 
 Easiest path — launcher scripts that do their own readiness checks:
 ```bash
-./scripts/start-desktop.sh   # checks Ollama/model, launches the Tauri app
+./scripts/start-desktop.sh   # rebuilds agent-core, launches the Tauri app (Linux or macOS)
 ./scripts/start-android.sh   # detects/boots an emulator, builds, installs, launches the app
+./scripts/start-ios.sh       # boots an iOS simulator, builds, installs, launches the app
+                              #   --login user:pass  --start <screen>   (DEBUG auto sign-in)
 ./scripts/show-accounts.sh   # prints local accounts (username/role) from the SQLite store —
                               # for a forgotten admin username
 ./scripts/reset-password.sh <username> [password]   # resets an account's password (locked-out admin).
@@ -122,7 +124,7 @@ export ANDROID_HOME=$(pwd)/../.toolchains/android-sdk
 xcodebuild -resolvePackageDependencies -project FamilyAgent.xcodeproj -scheme FamilyAgent
 xcodebuild -project FamilyAgent.xcodeproj -scheme FamilyAgent -configuration Debug \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath build build
-xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/FamilyAgent.app
+xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/FamilyAgent.app  # or: ./scripts/start-ios.sh
 xcrun simctl launch booted app.familyagent.ios
 ```
 The simulator shares the Mac's network — point discovery / manual entry at
@@ -413,10 +415,16 @@ wire types are hand-mirrored in `ios/FamilyAgent/Networking/DTOs.swift` (the cou
   `CopyButton` / `SpeakButton` / `TypingDots` / `StepsStrip` / `FlowLayout` / `stepVerb`.
   `Markdown.swift` themes `swift-markdown-ui` (inline styles only — its block builders can't call
   `@MainActor` view modifiers under strict concurrency).
-- **Navigation**: `MainShell.swift` is a `NavigationSplitView` (glass sidebar on 26, collapses to
-  push-nav on iPhone) — the native form of Android's drawer. 12 `Destination`s, health-gated the
-  same way (`routinesEnabled`, `skillsMode`, `mcpMode && admin`, `vaultMode`). Nested routes
-  (`conversation`, chat sessions, tool webview) via `.sheet` / `navigationDestination`.
+- **Navigation**: `MainShell.swift` mirrors Android's `ModalNavigationDrawer` — Chat is the home
+  surface, a **drawer slides in over the content** (scrim + edge-swipe + a floating hamburger
+  button, top-left) to switch views, then dismisses. No app bar (Android parity); each screen
+  carries its own header (`ScreenScaffold` title, or an inline row for Chat's new/history and
+  Events' `+`). `AppDrawer` = logo + wordmark + nav items with an `accent-soft` pill behind the
+  active one + a connection pill pinned to the footer. 12 `Destination`s, health-gated the same
+  way (`routinesEnabled`, `skillsMode`, `mcpMode && admin`, `vaultMode`). Each destination is
+  its own `NavigationStack` (nav bar hidden) so per-screen `.sheet` / `navigationDestination`
+  (Messages → Conversation, which hides the menu button) keep working. Chat sessions + tool
+  webview are `.sheet` / `.fullScreenCover`.
 - **Screens**: one file per Android screen under `ios/FamilyAgent/Features/<X>/`. Calendar math
   (`Tasks/CalendarMath.swift`) hard-codes a Monday-start `Calendar` like `mondayOf` on Android
   (don't trust device locale). `Board/BoardView.swift` positions notes in points (dp ≈ pt, 1:1),

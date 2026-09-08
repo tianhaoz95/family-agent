@@ -23,7 +23,9 @@ struct ScreenScaffold<Content: View>: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 20)
-        .padding(.top, 8)
+        // Room for the floating menu button (MainShell) — the Android
+        // ScreenScaffold reserves the same 58dp.
+        .padding(.top, 56)
     }
 }
 
