@@ -13,15 +13,19 @@ username + password; the Android app finds the master node on the LAN
 automatically (mDNS). Sharing things *between* accounts is the next step, not
 built yet.
 
-Three apps share one backend:
+Four apps share one backend:
 
 - **agent-core** — a Node/TypeScript service that runs a local LLM-backed
   planner (via [deepagents](https://github.com/langchain-ai/deepagentsjs))
   behind a small HTTP API, backed by SQLite and a local Ollama instance.
 - **desktop** — a [Tauri](https://tauri.app) app that spawns agent-core as a
-  sidecar process and gives it a UI.
+  sidecar process and gives it a UI. Builds on Linux (`.deb`/`.appimage`) and
+  macOS (`.app`/`.dmg`, with agent-core + a Node runtime bundled in).
 - **android** — a native Kotlin/Compose companion app that talks to
   agent-core over the LAN.
+- **ios** — a native SwiftUI companion app, full feature parity with Android,
+  using Apple Liquid Glass on iOS 26 (with an iOS 18 fallback). See
+  [`ios/README.md`](ios/README.md).
 
 This is a working prototype, not a finished product — see
 [**docs/STATUS.md**](docs/STATUS.md) for exactly what's verified vs. not, and

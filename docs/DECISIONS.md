@@ -2248,3 +2248,117 @@ Files: `agent-core/src/cards/{wrap,runtime}.ts`, `agents/cardTools.ts`,
 `renderCard()` in `main.ts` + `.chat-card` CSS + a Settings toggle. Android:
 `CardWebView` composable + `DetailContent.CardSource` + a Settings toggle.
 Tests: `test/cards.test.ts`.
+
+## macOS desktop packaging
+
+The Tauri app shipped Linux-only (`deb`/`appimage`). Two things blocked macOS:
+
+1. **`main.rs` didn't compile.** `spawn_agent_core()` set `PR_SET_PDEATHSIG` on
+   the sidecar inside `#[cfg(unix)]`, but `libc::prctl` / `libc::PR_SET_PDEATHSIG`
+   are Linux-only symbols in the `libc` crate — the block is now
+   `#[cfg(target_os = "linux")]`. macOS has no direct PDEATHSIG equivalent; the
+   sidecar is instead cleaned up by the existing graceful handlers
+   (`WindowEvent::Destroyed`, `RunEvent::Exit`) and, next launch, by
+   `kill_stale_agent_core()`. That function's "is this PID actually ours" guard
+   read `/proc/<pid>/cmdline`; on macOS it now shells out to
+   `ps -p <pid> -o command=` (verified live: `tauri dev` reaped a stale
+   `/tmp/...` sidecar from a prior run).
+
+2. **The sidecar was a compile-time repo path.** `env!("CARGO_MANIFEST_DIR")`
+   works for `tauri dev` and a `tauri build` run from the same checkout, but a
+   `.app` copied elsewhere can't find `agent-core`. Since the brief was a
+   *distributable* `.dmg`, agent-core is now bundled:
+   `desktop/scripts/prepare-sidecar.sh` does an isolated `npm install --omit=dev`
+   of agent-core into `desktop/src-tauri/sidecar/agent-core/` and copies the
+   `node` binary next to it; `tauri.conf.json` ships `sidecar/` as
+   `bundle.resources`; `resolve_agent_core()` prefers
+   `<resource_dir>/sidecar/{node,agent-core/dist/server.js}` and falls back to
+   the repo + system `node`. The staging is idempotent (a SHA stamp over
+   `dist/` + `package.json`) so `beforeDevCommand`/`beforeBuildCommand` re-run it
+   for free. Trade-offs: the `.app` is ~765 MB (onnxruntime-node / transformers /
+   tesseract native assets — inherent to a local-AI app), and a *symlink* to the
+   repo's hoisted `node_modules` was a dead end because Tauri's resource walker
+   follows it into the npm-workspace `node_modules/desktop` self-reference and
+   loops.
+
+**Signing / notarization is out of scope** — it needs an Apple Developer ID
+cert. The build ad-hoc signs (`signingIdentity: "-"`), so the `.dmg` runs on
+another Mac only via right-click → Open. `NSMicrophoneUsageDescription` (in the
+new `Info.plist` merged by Tauri) is not optional: a *bundled* `.app` hard-crashes
+the instant the Chat voice button calls `getUserMedia` without it, even though a
+`tauri dev` run launched from a terminal inherits the terminal's TCC grant.
+
+The `.dmg` step (`bundle_dmg.sh`) drives Finder over AppleScript to lay out the
+drag-to-Applications window; that fails without a GUI session. `CI=true` makes
+the script skip the cosmetic styling and produce a plain (functional) DMG — this
+is the `desktop/scripts` … actually just the `tauri:build:mac` npm script
+(`CI=true tauri build`). A normal `tauri build` from a logged-in desktop is fine.
+
+## Cloning the Android app to native iOS
+
+The brief: a native iOS app that is a full-parity clone of the Kotlin/Compose
+Android app, using Apple **Liquid Glass** where it helps, "mostly the same" as
+the other clients. Key calls:
+
+- **Native SwiftUI, not a port of a cross-platform framework, not a webview.**
+  The Android app is ~9,900 lines of Compose; the iOS app re-implements it
+  screen-for-screen in SwiftUI (~60 Swift files, `ios/FamilyAgent/Features/<X>/`
+  ↔ `android/.../ui/<X>Screen.kt`). Both are thin HTTP clients of `agent-core`
+  with the wire types **hand-mirrored** (`ios/.../Networking/DTOs.swift` ↔
+  `android/.../data/ApiModels.kt` ↔ `desktop/src/api.ts`) — the same
+  no-shared-code discipline the rest of the repo uses.
+
+- **`NavigationSplitView`, not a reimplemented drawer.** Android uses a
+  `ModalNavigationDrawer`; the native iOS idiom for "a list of destinations that
+  swaps the main pane" is a split view. It collapses to a push-navigation stack
+  on iPhone (reads like the drawer→screen flow, keeps the system back-swipe),
+  becomes a real sidebar on iPad, and renders as **glass** for free on iOS 26 —
+  restoring the chrome the Android app couldn't have (no cheap backdrop blur on
+  Android). A `TabView` can't hold 12 destinations without a churny "More" menu.
+
+- **Liquid Glass behind `#available(iOS 26, *)`, `.ultraThinMaterial` below.**
+  One shim (`DesignSystem/Glass.swift`, `.glass(_:in:)` / `.glassButton()`)
+  routes every glass surface (sidebar, toolbars, chat/message composers, the
+  detail sheet, the mic overlay) through a single availability check. Deployment
+  target is iOS 18 (verified on an 18.6 simulator: the fallback renders a
+  translucent-material composer and a plain toolbar, same warm-paper layout).
+  `AppCard` stays opaque white on both — long-form text over the animated
+  gradient needs to stay crisp (same reasoning as the Android + desktop cards).
+
+- **Hand-authored `project.pbxproj` with Xcode 16+ file-system-synchronized
+  groups.** `objectVersion = 77`, one `PBXFileSystemSynchronizedRootGroup`, no
+  per-file `PBXFileReference` / `PBXBuildFile` — new Swift files are picked up
+  automatically, the project file stays ~250 lines and merges cleanly. It builds
+  headless with `xcodebuild` (no "open in Xcode once to migrate" step was
+  needed). `Info.plist` + `.entitlements` live in `ios/Config/` *outside* the
+  synchronized group — inside it, Xcode adds `Info.plist` to Copy Bundle
+  Resources *and* processes it, and the build fails with "Multiple commands
+  produce Info.plist".
+
+- **One SPM dependency: `swift-markdown-ui`** (the accepted analogue of Android's
+  `multiplatform-markdown-renderer`). Its block-level theme builders
+  (`.heading1 { config in config.label… }`) can't call the `@MainActor` view
+  modifiers under Swift 6 strict concurrency, so the theme only customises the
+  inline styles (Inter body, accent links, sunk code) and leaves block layout at
+  the library default. Everything else is a system framework.
+
+- **State: one `@MainActor @Observable` `AppModel`** mirroring `AppUiState` (~80
+  fields, same names) + `AppViewModel`'s methods (split across `AppModel+*.swift`
+  extensions). SwiftUI's field-level change tracking makes the "one big object"
+  pattern *better* here than on Android — views invalidate only on the fields
+  they read. Polling loops (channel list 8 s, conversation 2.5 s, chat turn-steps
+  1 s, doc-search 220 ms debounce, vault TOTP 1 s) are structured `Task`s tied to
+  a view's `.task` / `.task(id:)`, which replaces Android's manual `Job?.cancel()`
+  bookkeeping.
+
+- **`VoiceRecorder`** is an `AVAudioEngine` input tap → `AVAudioConverter` to
+  16 kHz mono Int16 → the exact 44-byte WAV header and RMS smoothing constants
+  (`min(1, s*6)`, fast-attack/slow-release) as `VoiceRecorder.kt` and
+  `desktop/src/audio.ts`. The tap runs on the render thread and feeds a
+  lock-guarded `Sink`; a one-shot converter-input class avoids a captured mutable
+  flag (Swift 6). ASR/TTS aren't verified end to end — the test Ollama has no
+  Whisper/Kokoro.
+
+Verification used the machine's real Ollama (remote, `gemma4:26b` +
+`nomic-embed-text`) so chat / the planner / tool delegation / semantic search
+are all exercised for real, not just rendered.

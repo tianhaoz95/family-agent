@@ -24,6 +24,10 @@ desktop/      Tauri v2 app. Spawns agent-core as a local sidecar process.
               Chat / Tasks / Documents / Activity UI.
 android/      Kotlin + Jetpack Compose companion app. Same four screens plus
               Settings (server URL). Talks to agent-core over plain HTTP.
+ios/          Native SwiftUI companion app — full feature parity with android/,
+              Apple Liquid Glass on iOS 26 with an iOS 18 material fallback.
+              Hand-authored xcodeproj (synchronized groups). Talks to agent-core
+              over plain HTTP. See "Native iOS app" below and ios/README.md.
 docs/         This file, DECISIONS.md, BUILD_LOG.md.
 .toolchains/  Downloaded JDK/Android SDK/Gradle (gitignored, machine-local —
               see "Reproducing the toolchain" below if this matters to you).
@@ -819,3 +823,68 @@ Later changes (not part of the original autonomous session):
     `CopyButton` in `ui/Components.kt`). Wired into Chat and family-chat.
     Verified against real model replies on both platforms (a Markdown list
     rendered as bullets — confirming rendering is fine).
+
+- **macOS: the desktop app now builds and packages as a self-contained `.app` /
+  `.dmg`.** It was Linux-only (`deb`/`appimage` targets; `main.rs` called
+  `libc::PR_SET_PDEATHSIG`, which is Linux-only in the `libc` crate → the mac
+  compile failed).
+  - `main.rs`: the `PR_SET_PDEATHSIG` block is now `#[cfg(target_os = "linux")]`
+    (on macOS the graceful shutdown handlers + `kill_stale_agent_core()` cover
+    sidecar cleanup); `is_agent_core_pid()` gained a `ps -o command=` check for
+    macOS (no `/proc`).
+  - **Bundled sidecar** so a distributed app is self-contained.
+    `desktop/scripts/prepare-sidecar.sh` stages `agent-core/dist` + a production
+    `node_modules` + the `node` binary under `desktop/src-tauri/sidecar/`
+    (gitignored, content-stamped, idempotent); `tauri.conf.json` ships it as
+    `bundle.resources`; `resolve_agent_core()` in `main.rs` prefers
+    `resource_dir()/sidecar/{node,agent-core}` and falls back to the repo
+    checkout + system `node` for dev.
+  - `tauri.conf.json`: `app`/`dmg` bundle targets, `bundle.macOS`
+    (`minimumSystemVersion` 12, `Entitlements.plist`, ad-hoc `signingIdentity`).
+    New `Info.plist` (`NSMicrophoneUsageDescription` — a bundled `.app`
+    hard-crashes on the Chat mic button without it) + `Entitlements.plist`.
+    `icon.icns` regenerated from an upscaled `logo.png`.
+  - Verified on macOS 26 (arm64): `npm run typecheck` + `npm test` green;
+    `cargo build`; `npm run tauri:dev` (window renders, sidecar spawns, a stale
+    sidecar from a prior run is reaped); `npm run tauri:build` →
+    `Family Agent.app` (~765 MB) that launches, spawns the **bundled** sidecar,
+    serves `/health`, and shuts it down with no orphan; `CI=true tauri build`
+    (→ `tauri:build:mac` npm script) also produces the `.dmg` (plain
+    `tauri build` makes the `.app` but the DMG's Finder-window AppleScript step
+    fails in a headless session).
+  - **Not yet**: the `.app`/`.dmg` is **ad-hoc signed, unnotarized** — on another
+    Mac it opens only via right-click → Open. Notarization needs a Developer ID
+    cert. The Linux `.deb`/`.appimage` still carry the pre-existing "sidecar is a
+    compile-time repo path" limitation (unchanged).
+
+- **Native iOS app (`ios/`).** A full-parity SwiftUI clone of the Android app —
+  all 12 screens (Chat, Messages + Conversation, Events with list/day/3-day/week/
+  month views, Documents + search + upload + PDF preview, Board, Tools, Routines,
+  Skills, Connections, Vault, Activity, Settings), plus voice input
+  (`AVAudioEngine` → 16 kHz WAV, push-to-talk), sealed generated-card WebView,
+  live tool-call steps strip, chat history sessions, image attachments. Design:
+  same warm-paper "Notion" palette + animated gradient (`Atmosphere.swift`,
+  `TimelineView`+`Canvas`), **Apple Liquid Glass** on iOS 26 (`glassEffect`,
+  glass toolbars/sidebar/composer) behind `#available(iOS 26)` with a
+  `.ultraThinMaterial` fallback down to **iOS 18**. Navigation is a
+  `NavigationSplitView` (adaptive glass sidebar) rather than Android's drawer.
+  - Structure: hand-authored `project.pbxproj` using Xcode 16+
+    file-system-synchronized groups (builds headless with `xcodebuild`, no
+    "open in Xcode once" step); one SPM dependency (`swift-markdown-ui`);
+    `AppModel` is one `@MainActor @Observable` object mirroring `AppUiState` +
+    `AppViewModel`; `FamilyAgentAPI` is a `Sendable` URLSession client mirroring
+    `FamilyAgentApi.kt`; `ServerDiscovery` uses `NWBrowser` + an active `/health`
+    probe of the device /24; the token lives in the Keychain. Builds clean
+    (0 warnings) under Swift 6 `SWIFT_STRICT_CONCURRENCY=complete`.
+  - Verified on the iOS 26.5 simulator against a live `agent-core` + remote
+    `gemma4:26b`: discovery (Bonjour + probe both find the server), sign-in,
+    Settings/Events/Board/Documents/Vault render with real seeded data, and a
+    full chat turn → Markdown reply + a "4 tool calls" steps strip (the planner
+    delegated to the task and notes agents). Separately built + run on an
+    iOS 18.6 simulator to confirm the material fallback + non-glass toolbar.
+  - **Not verified**: voice transcription / text-to-speech end to end (the
+    remote Ollama has no Whisper/Kokoro — the UI + error paths render, the
+    result errors); a real device (simulator only); the iPad layout beyond a
+    quick check.
+  - See `ios/README.md`, `CLAUDE.md` → "Native iOS app", and `docs/DECISIONS.md`
+    → "Cloning the Android app to native iOS" / "macOS desktop packaging".

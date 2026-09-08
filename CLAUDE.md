@@ -117,6 +117,19 @@ export ANDROID_HOME=$(pwd)/../.toolchains/android-sdk
 ./gradlew installDebug                  # build + install on a connected device/emulator
 ```
 
+**ios** (`cd ios`, needs Xcode 16+ / an iOS 18+ simulator):
+```bash
+xcodebuild -resolvePackageDependencies -project FamilyAgent.xcodeproj -scheme FamilyAgent
+xcodebuild -project FamilyAgent.xcodeproj -scheme FamilyAgent -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath build build
+xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/FamilyAgent.app
+xcrun simctl launch booted app.familyagent.ios
+```
+The simulator shares the Mac's network — point discovery / manual entry at
+`http://localhost:4173`. DEBUG-only launch env for smoke tests:
+`SIMCTL_CHILD_FA_SERVER_URL` + `SIMCTL_CHILD_FA_AUTOLOGIN=user:pass` +
+`SIMCTL_CHILD_FA_START=<destination>` (+ `_FA_CHAT_PROMPT` to auto-send a chat).
+
 From the repo root, `npm test` runs agent-core's suite then desktop's.
 
 ### Test tiers in agent-core — know this before touching agent code
@@ -134,9 +147,9 @@ write-ups in `docs/DECISIONS.md` for two real examples caught only by live-model
 
 ## Architecture
 
-Three independent apps sharing one HTTP contract, no shared code between them (types are
-duplicated by hand in each client — `desktop/src/api.ts` and
-`android/.../data/ApiModels.kt` — rather than via a shared package).
+Four independent apps sharing one HTTP contract, no shared code between them (types are
+duplicated by hand in each client — `desktop/src/api.ts`, `android/.../data/ApiModels.kt`,
+and `ios/FamilyAgent/Networking/DTOs.swift` — rather than via a shared package).
 
 ```
 agent-core (Node/TS, 0.0.0.0:4173)  <--HTTP+bearer-->  desktop (Tauri, spawns agent-core as a sidecar)
@@ -362,6 +375,62 @@ into `FamilyAgentApi.uploadDocument()`, an OkHttp `MultipartBody` POST to the sa
 `/documents/upload` route the desktop upload UI uses. `DocumentsScreen` also has a search field
 + a `SingleChoiceSegmentedButtonRow` (Smart/Exact/Fuzzy/Meaning); search state lives on
 `AppUiState` (`documentSearch*`), debounced in `AppViewModel.setDocumentSearch`.
+
+## Native iOS app (`ios/`)
+
+Full feature parity with `android/`, native SwiftUI, **Apple Liquid Glass** on iOS 26 with a
+`.ultraThinMaterial` fallback down to **iOS 18**. It's a pure HTTP client of `agent-core` — the
+wire types are hand-mirrored in `ios/FamilyAgent/Networking/DTOs.swift` (the counterpart of
+`android/.../data/ApiModels.kt`), same no-shared-code discipline as the other clients.
+
+- **Project**: hand-authored `FamilyAgent.xcodeproj/project.pbxproj` using Xcode 16+
+  file-system-synchronized groups (`PBXFileSystemSynchronizedRootGroup`, `objectVersion 77`) — no
+  per-file references, new Swift files auto-add, builds headless with `xcodebuild`. Deployment
+  target iOS 18. One SPM dep: `swift-markdown-ui` (`Package.resolved` committed). `Info.plist` +
+  `.entitlements` live in `ios/Config/` **outside** the synchronized group (inside it, Xcode both
+  copies *and* processes `Info.plist` → "multiple commands produce" build failure). Bundle id
+  `app.familyagent.ios`. Fonts (Inter + Source Serif) copied from `android/.../res/font/`.
+- **State**: `ios/FamilyAgent/App/AppModel.swift` — one `@MainActor @Observable` object mirroring
+  Android's `AppUiState` (same field names) + `AppViewModel`'s methods, split across
+  `AppModel+{Chat,Messages,Data}.swift`. `perform<T>` wraps every call and turns a `401` into
+  `.needLogin` (= `AppViewModel.apiCall`). Builds clean under Swift 6
+  `SWIFT_STRICT_CONCURRENCY=complete`.
+- **Networking**: `FamilyAgentAPI.swift` (a `Sendable` struct over `URLSession`, ~90 methods,
+  `// MARK:` per Android grouping — diffs 1:1 against `FamilyAgentApi.kt`). Two payloads send an
+  explicit JSON `null` via a custom `encode(to:)` (`RescheduleTaskRequest`,
+  `RoutineInput.deliverChannelId`) — `JSONEncoder` omits `nil` otherwise. `ToolStep.input` is a
+  `JSONValue` enum. `ServerDiscovery.swift` = `NWBrowser` (`_familyagent._tcp`, needs
+  `NSBonjourServices` + `NSLocalNetworkUsageDescription` in Info.plist) **plus** an active
+  `GET /health` probe of the device /24 (`getifaddrs`); the simulator also probes `localhost`.
+  Token in the Keychain (`Keychain.swift`), rest in `UserDefaults` (`SettingsStore.swift`).
+- **Design** (`ios/FamilyAgent/DesignSystem/`): `Theme.swift` ports the Kotlin `Pal`/`AppAccents`/
+  shape/type tokens (warm `#F6F5F4`, one `#0075DE` accent, Inter, light only). `Glass.swift` is
+  the single `#available(iOS 26, *)` shim — `.glass(_:in:)` / `.glassButton()` →
+  `glassEffect`/`.buttonStyle(.glass)` on 26, `.ultraThinMaterial` + hairline below. `AppCard`
+  stays opaque white on both (crisp text over the gradient). `Atmosphere.swift` is the
+  `TimelineView`+`Canvas` port of `ui/Atmosphere.kt` (4 drifting blooms, 34 s loop, frozen under
+  Reduce Motion). `Components.swift` = `ScreenScaffold` / `AppCard` / `Chip` / `StatusDot` /
+  `CopyButton` / `SpeakButton` / `TypingDots` / `StepsStrip` / `FlowLayout` / `stepVerb`.
+  `Markdown.swift` themes `swift-markdown-ui` (inline styles only — its block builders can't call
+  `@MainActor` view modifiers under strict concurrency).
+- **Navigation**: `MainShell.swift` is a `NavigationSplitView` (glass sidebar on 26, collapses to
+  push-nav on iPhone) — the native form of Android's drawer. 12 `Destination`s, health-gated the
+  same way (`routinesEnabled`, `skillsMode`, `mcpMode && admin`, `vaultMode`). Nested routes
+  (`conversation`, chat sessions, tool webview) via `.sheet` / `navigationDestination`.
+- **Screens**: one file per Android screen under `ios/FamilyAgent/Features/<X>/`. Calendar math
+  (`Tasks/CalendarMath.swift`) hard-codes a Monday-start `Calendar` like `mondayOf` on Android
+  (don't trust device locale). `Board/BoardView.swift` positions notes in points (dp ≈ pt, 1:1),
+  `PATCH`es `{x,y}` optimistically on drag end. `Shared/CardWebView.swift` seals a generated card
+  in a `WKWebView` (`loadHTMLString(html, baseURL: nil)` opaque origin + a `WKContentRuleList`
+  block-all + a `@MainActor` nav-policy deny). `Shared/PDFPreview.swift` uses PDFKit.
+  `Audio/VoiceRecorder.swift` = `AVAudioEngine` tap → `AVAudioConverter` → 16 kHz WAV, same RMS
+  constants as `VoiceRecorder.kt` / `desktop/src/audio.ts`; `HoldToTalkMic.swift` is the
+  tap-to-dictate / hold-for-push-to-talk gesture.
+- **DEBUG-only smoke-test hooks** (`AppModel.restoreSession` / `MainShell` / `ChatView`):
+  `FA_SERVER_URL`, `FA_AUTOLOGIN=user:pass`, `FA_START=<destination>`, `FA_CHAT_PROMPT` — pass as
+  `SIMCTL_CHILD_*` env to `xcrun simctl launch`.
+
+See `ios/README.md` and `docs/DECISIONS.md` → "Cloning the Android app to native iOS".
 
 ## Cross-account: chat + shared board
 
