@@ -48,9 +48,15 @@ alpha channel) **before** spending a slow upload, exports with
 Build numbers default to a UTC timestamp (`202609081432`) — monotonic, never
 collides. `CFBundleVersion` must be unique per `CFBundleShortVersionString`.
 
-For `--upload`, provide either an App Store Connect API key (Users and Access →
-Integrations → App Store Connect API). `altool` looks the key up **by id in a
-well-known directory**, not by path, so the `.p8` has to be filed there:
+For `--upload`, use an App Store Connect API key (Users and Access →
+Integrations → App Store Connect API → Team Key, **Developer** role). Prefer it
+over an app-specific password: it isn't tied to anyone's Apple ID password, it
+can be revoked on its own, and the same key also notarizes the macOS build
+(`scripts/sign-desktop.sh`).
+
+The `.p8` downloads **once** and can't be fetched again. `altool` looks it up
+**by id in a well-known directory** rather than by path, so file it there — which
+is also where `notarytool` is pointed from the desktop script:
 ```bash
 mkdir -p ~/.appstoreconnect/private_keys
 mv ~/Downloads/AuthKey_XXXXXXXXXX.p8 ~/.appstoreconnect/private_keys/

@@ -80,20 +80,44 @@ the `.dmg` in one pass and its DMG would otherwise hold the pre-signing copy.
 
 ## Notarization credentials
 
-Store a keychain profile once:
+**Use an App Store Connect API key, not an app-specific password.** It isn't
+tied to anyone's Apple ID password, it can be revoked on its own without
+disturbing the account, and the *same key* uploads the iOS build — one
+credential covers both platforms.
+
+App Store Connect → **Users and Access** → **Integrations** → App Store Connect
+API → generate a **Team Key** with the **Developer** role. The `.p8` downloads
+**once** and cannot be fetched again, so file it immediately:
+
+```bash
+mkdir -p ~/.appstoreconnect/private_keys
+mv ~/Downloads/AuthKey_XXXXXXXXXX.p8 ~/.appstoreconnect/private_keys/
+export FA_ASC_KEY_ID=XXXXXXXXXX
+export FA_ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+That path matters: `altool` (the iOS upload) finds the key **by id in a
+well-known directory**, while `notarytool` (macOS) wants an **explicit path**.
+Keeping it there satisfies both, and `scripts/release-ios.sh` looks in the same
+place.
+
+Optionally fold it into a keychain profile so nothing needs to be in the
+environment at all:
 
 ```bash
 xcrun notarytool store-credentials FamilyAgent \
-  --apple-id you@example.com \
-  --team-id 68CTFST8W2 \
-  --password <app-specific-password>
+  --key ~/.appstoreconnect/private_keys/AuthKey_XXXXXXXXXX.p8 \
+  --key-id XXXXXXXXXX --issuer xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 export FA_NOTARY_PROFILE=FamilyAgent
 ```
 
-Or set `FA_APPLE_ID` + `FA_APP_PASSWORD` + `FA_TEAM_ID` per run. App-specific
-passwords come from appleid.apple.com → Sign-In and Security. Submission
-typically takes a few minutes; the script waits, then staples both the DMG and
-the `.app` so a copy dragged out of the DMG still validates offline.
+The older route still works if you prefer it: `FA_APPLE_ID` + `FA_APP_PASSWORD`
++ `FA_TEAM_ID`, with an app-specific password from appleid.apple.com →
+Sign-In and Security. It's weaker mainly because it's bound to the Apple ID and
+has to be reissued if that password changes.
+
+Submission typically takes a few minutes; the script waits, then staples both
+the DMG and the `.app` so a copy dragged out of the DMG still validates offline.
 
 ---
 

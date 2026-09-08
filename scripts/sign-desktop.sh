@@ -17,9 +17,11 @@
 #                     cert is preferred, falling back to "Apple Development"
 #                     (fine for running locally, NOT distributable or notarizable).
 #
-# Notarization auth, one of:
-#   FA_NOTARY_PROFILE                       a `notarytool store-credentials` profile
-#   FA_APPLE_ID + FA_APP_PASSWORD + FA_TEAM_ID
+# Notarization auth, best first:
+#   FA_NOTARY_PROFILE                        a `notarytool store-credentials` profile
+#   FA_ASC_KEY_ID + FA_ASC_ISSUER_ID         App Store Connect API key, with the .p8
+#                                            at ~/.appstoreconnect/private_keys/
+#   FA_APPLE_ID + FA_APP_PASSWORD + FA_TEAM_ID   app-specific password
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -36,7 +38,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --notarize)    NOTARIZE=1; shift ;;
     --verify-only) VERIFY_ONLY=1; shift ;;
-    -h|--help)     sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "!! unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -196,21 +198,51 @@ if [ "$DISTRIBUTABLE" -eq 0 ]; then
   exit 1
 fi
 
+# Three ways in, best first. An App Store Connect API key is preferred over an
+# app-specific password: it is not tied to anyone's Apple ID password, it can be
+# revoked on its own, and the SAME key uploads the iOS build in release-ios.sh.
+# Note the two tools disagree on how to find the .p8 — altool looks it up by key
+# id in a well-known directory, notarytool wants an explicit path — so keeping it
+# at ~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8 satisfies both.
+ASC_KEY="$HOME/.appstoreconnect/private_keys/AuthKey_${FA_ASC_KEY_ID:-none}.p8"
+[ -f "$ASC_KEY" ] || ASC_KEY="$HOME/private_keys/AuthKey_${FA_ASC_KEY_ID:-none}.p8"
+
 AUTH=()
 if [ -n "${FA_NOTARY_PROFILE:-}" ]; then
   AUTH=(--keychain-profile "$FA_NOTARY_PROFILE")
+elif [ -n "${FA_ASC_KEY_ID:-}" ] && [ -n "${FA_ASC_ISSUER_ID:-}" ] && [ -f "$ASC_KEY" ]; then
+  AUTH=(--key "$ASC_KEY" --key-id "$FA_ASC_KEY_ID" --issuer "$FA_ASC_ISSUER_ID")
 elif [ -n "${FA_APPLE_ID:-}" ] && [ -n "${FA_APP_PASSWORD:-}" ] && [ -n "${FA_TEAM_ID:-}" ]; then
   AUTH=(--apple-id "$FA_APPLE_ID" --password "$FA_APP_PASSWORD" --team-id "$FA_TEAM_ID")
 else
+  if [ -n "${FA_ASC_KEY_ID:-}" ] && [ ! -f "$ASC_KEY" ]; then
+    echo "!! FA_ASC_KEY_ID is set but no key file at:" >&2
+    echo "   ~/.appstoreconnect/private_keys/AuthKey_${FA_ASC_KEY_ID}.p8" >&2
+    echo >&2
+  fi
   cat >&2 <<'EOF'
-!! no notarization credentials. Either store a profile once:
+!! no notarization credentials.
 
-     xcrun notarytool store-credentials FamilyAgent \
-       --apple-id you@example.com --team-id 68CTFST8W2 --password <app-specific-password>
-     export FA_NOTARY_PROFILE=FamilyAgent
+   Recommended — an App Store Connect API key. It is not tied to an Apple ID
+   password, is revocable on its own, and the same key uploads the iOS build:
 
-   or set FA_APPLE_ID + FA_APP_PASSWORD + FA_TEAM_ID.
-   App-specific passwords come from appleid.apple.com > Sign-In and Security.
+     App Store Connect > Users and Access > Integrations > App Store Connect API
+     Generate a Team Key with the Developer role, download the .p8 ONCE, then:
+
+       mkdir -p ~/.appstoreconnect/private_keys
+       mv ~/Downloads/AuthKey_XXXXXXXXXX.p8 ~/.appstoreconnect/private_keys/
+       export FA_ASC_KEY_ID=XXXXXXXXXX
+       export FA_ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+   Or store either credential in the keychain once and just use the profile:
+
+       xcrun notarytool store-credentials FamilyAgent \
+         --key ~/.appstoreconnect/private_keys/AuthKey_XXXXXXXXXX.p8 \
+         --key-id XXXXXXXXXX --issuer xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+       export FA_NOTARY_PROFILE=FamilyAgent
+
+   Or, the older way: FA_APPLE_ID + FA_APP_PASSWORD + FA_TEAM_ID, with an
+   app-specific password from appleid.apple.com > Sign-In and Security.
 EOF
   exit 1
 fi
