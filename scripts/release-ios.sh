@@ -11,8 +11,10 @@
 #   signing can resolve the distribution certificate and App Store profile.
 #
 # For --upload, one of:
-#   FA_ASC_KEY_ID + FA_ASC_ISSUER_ID + FA_ASC_KEY_PATH   (App Store Connect API key)
-#   FA_APPLE_ID + FA_APP_PASSWORD                        (app-specific password)
+#   FA_ASC_KEY_ID + FA_ASC_ISSUER_ID    App Store Connect API key. altool finds the
+#                                       .p8 by name, not by path — put it in
+#                                       ~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8
+#   FA_APPLE_ID + FA_APP_PASSWORD       app-specific password
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -141,6 +143,13 @@ fi
 echo "==> validating with App Store Connect"
 AUTH=()
 if [ -n "${FA_ASC_KEY_ID:-}" ] && [ -n "${FA_ASC_ISSUER_ID:-}" ]; then
+  # altool resolves the key by id from a well-known directory; it takes no path.
+  KEY_FILE="$HOME/.appstoreconnect/private_keys/AuthKey_${FA_ASC_KEY_ID}.p8"
+  if [ ! -f "$KEY_FILE" ] && [ ! -f "$HOME/private_keys/AuthKey_${FA_ASC_KEY_ID}.p8" ]; then
+    echo "!! expected the API key at $KEY_FILE" >&2
+    echo "   (altool looks it up by key id, not by path)" >&2
+    exit 1
+  fi
   AUTH=(--apiKey "$FA_ASC_KEY_ID" --apiIssuer "$FA_ASC_ISSUER_ID")
 elif [ -n "${FA_APPLE_ID:-}" ] && [ -n "${FA_APP_PASSWORD:-}" ]; then
   AUTH=(--username "$FA_APPLE_ID" --password "$FA_APP_PASSWORD")

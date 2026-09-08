@@ -1,69 +1,33 @@
-# Shipping Family Agent to the App Store
+# Shipping Family Agent
 
-What's already prepared in this repo, what you have to do by hand in an Apple
-account, and the one design problem that decides whether this app can be
-reviewed at all.
+**Route: TestFlight internal testing.** iPhone only, portrait only.
 
----
+Internal testing needs **no App Review** — you add App Store Connect users as
+internal testers (up to 100) and builds go live to them as soon as processing
+finishes. That sidesteps the problem that would otherwise sink a public listing:
+Family Agent is a client of `agent-core` on your own laptop, so a reviewer in
+Cupertino would open it, find nothing on the LAN, and reject under Guideline 2.1
+— App Completeness. Nothing here asks a reviewer to set up a server, because
+nothing here goes to a reviewer.
 
-## The blocker to settle first: how does App Review connect?
-
-Family Agent is a client of `agent-core` running on **your** home laptop. A
-reviewer in Cupertino opens the app, it scans the LAN, finds nothing, and shows
-the "Find your home" screen forever. That is a **Guideline 2.1 — App
-Completeness** rejection, and it is the single most likely reason a submission
-comes back.
-
-Reviewers do not install a server. Notes in the "App Review Information" box
-asking them to set one up will not be actioned. You need one of:
-
-| Option | What it means | Cost |
-|---|---|---|
-| **Hosted demo server** | Stand up one internet-reachable `agent-core` and put its URL + a demo login in App Review Information. Needs the app to accept a non-LAN `https://` address (it already accepts a manually entered URL — but see ATS below). | A VPS + TLS cert |
-| **Demo mode in the app** | A build-visible "Try a demo" path on the discovery screen that runs against canned local data, no server. Reviewable offline, and doubles as a first-run experience. | ~a day of work |
-| **Don't ship publicly** | Keep it on **TestFlight internal testing** (up to 100 of your own devices, no App Review at all) or use an **Apple Developer Enterprise / custom app** distribution. | none extra |
-
-If you point the app at a public HTTPS demo server, `NSAllowsLocalNetworking`
-is not enough on its own for that host — it only relaxes ATS for local names.
-A real `https://` host with a valid certificate passes ATS normally, so a proper
-TLS demo server needs no ATS change. Plain `http://` to a public host would
-need an ATS exception, which Apple scrutinises; don't go that way.
-
-**For a personal / family app, TestFlight internal testing is the honest answer
-and skips this problem entirely.**
-
----
-
-## Already done in the repo
-
-| | |
-|---|---|
-| App icon | Regenerated 1024×1024, **opaque, no alpha, full-bleed** (it had an alpha channel and baked-in rounded corners — both rejected/double-masked). `Assets.xcassets/AppIcon.appiconset/icon-1024.png` |
-| Privacy manifest | `FamilyAgent/PrivacyInfo.xcprivacy` — required since May 2024, otherwise `ITMS-91053` on upload. Declares no tracking, no collected data, and the one required-reason API the app uses (`UserDefaults`, `CA92.1`). |
-| Launch screen | `UILaunchScreen` → `LaunchBackground` colour set (`#F6F5F4`). It previously named an empty colour asset. |
-| Version | `MARKETING_VERSION = 1.0.0`; the build number is stamped per upload by the release script. |
-| Debug hooks | `FA_SERVER_URL` / `FA_AUTOLOGIN` / `FA_START` / `FA_CHAT_PROMPT` / `FA_DRAWER` are all `#if DEBUG`. Verified absent from the Release binary with `strings`. |
-| Usage strings | Microphone, camera, photo library and local network descriptions all present and specific about *why*. |
-| Export compliance | `ITSAppUsesNonExemptEncryption = false` — the app itself does no crypto beyond HTTPS/Keychain. Skips the per-upload questionnaire. |
-| iPad layout | Content column capped at 700pt so screens read as designed instead of stretching to 1000pt+. |
-| Release build | Archives clean at `-O` with `dwarf-with-dsym` and `VALIDATE_PRODUCT = YES`. |
+You still need the **$99/year Apple Developer Program** — TestFlight is not
+available on a free account.
 
 ---
 
 ## One-time Apple setup (only you can do this)
 
-1. **Apple Developer Program** — $99/year, at <https://developer.apple.com/programs/>.
-   A free account can run on your own device but cannot ship to the store.
+1. **Apple Developer Program** — <https://developer.apple.com/programs/>.
 2. **Team ID** — Membership page, 10 characters. Everything below needs it:
    ```bash
    export FA_TEAM_ID=ABCDE12345
    ```
-3. **Register the bundle ID** — Certificates, Identifiers & Profiles → Identifiers
-   → `app.familyagent.ios`. No special capabilities are needed; the app uses none.
+3. **Register the bundle ID** — Certificates, Identifiers & Profiles →
+   Identifiers → `app.familyagent.ios`. No capabilities needed; the app uses none.
 4. **Sign Xcode into the team** — Xcode → Settings → Accounts. Automatic signing
-   then resolves the distribution certificate and App Store profile itself.
-5. **Create the app record** in App Store Connect → My Apps → +. Name, primary
-   language, the bundle ID from step 3, and an SKU (any private string).
+   then resolves the distribution certificate and provisioning profile itself.
+5. **Create the app record** — App Store Connect → My Apps → **+**. Name, primary
+   language, the bundle ID from step 3, any SKU string.
 
 ---
 
@@ -76,67 +40,94 @@ export FA_TEAM_ID=ABCDE12345
 ./scripts/release-ios.sh --build 7 --upload   # pin the build number
 ```
 
-The script archives Release for a generic iOS device, checks the two things
-App Store Connect rejects most often (missing privacy manifest, icon with an
-alpha channel) before spending an upload, exports with
-`ios/Config/ExportOptions.plist`, and optionally validates and uploads.
+The script archives Release for a generic iOS device, pre-flights the two things
+App Store Connect rejects most often (a missing privacy manifest, an icon with an
+alpha channel) **before** spending a slow upload, exports with
+`ios/Config/ExportOptions.plist`, then optionally validates and uploads.
 
-Build numbers default to a UTC timestamp (`202609081432`), which is monotonic
-and never collides. `CFBundleVersion` must be unique per `CFBundleShortVersionString`.
+Build numbers default to a UTC timestamp (`202609081432`) — monotonic, never
+collides. `CFBundleVersion` must be unique per `CFBundleShortVersionString`.
 
-For `--upload`, provide either an App Store Connect API key:
+For `--upload`, provide either an App Store Connect API key (Users and Access →
+Integrations → App Store Connect API). `altool` looks the key up **by id in a
+well-known directory**, not by path, so the `.p8` has to be filed there:
 ```bash
+mkdir -p ~/.appstoreconnect/private_keys
+mv ~/Downloads/AuthKey_XXXXXXXXXX.p8 ~/.appstoreconnect/private_keys/
 export FA_ASC_KEY_ID=XXXXXXXXXX FA_ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-export FA_ASC_KEY_PATH=~/private_keys/AuthKey_XXXXXXXXXX.p8
 ```
 or an app-specific password (appleid.apple.com → Sign-In and Security):
 ```bash
 export FA_APPLE_ID=you@example.com FA_APP_PASSWORD=abcd-efgh-ijkl-mnop
 ```
 
-You can also just open Xcode → Window → Organizer and distribute the archive
-the script leaves in `ios/build/release/`.
+Or open Xcode → Window → Organizer and distribute the archive the script leaves
+in `ios/build/release/`.
 
 ---
 
-## Filling in App Store Connect
+## Turning the build on for testers
 
-**App Privacy.** Answer "**Data Not Collected**". Everything the app sends —
-chat, documents, photos, voice — goes to the server the user runs, which you
-have no access to; there is no analytics or advertising SDK and no third-party
-network call. This must match `PrivacyInfo.xcprivacy`; the two are cross-checked.
+App Store Connect → your app → **TestFlight**:
 
-**Age rating.** The assistant relays whatever the user's own local model
-produces, so treat it as user-generated content when answering the
-questionnaire.
+1. Wait for the build to finish processing (5–30 min; you get an email).
+2. **Internal Testing** → create a group → add people by their App Store Connect
+   user (they must be users on your team; add them under Users and Access first).
+3. Attach the build to the group. It goes live immediately — no review step.
+4. Fill in **What to Test**. This is the only free-text field internal testing
+   requires.
 
-**Screenshots.** Required at 6.9" (1320×2868 or 1290×2796). If you keep iPad in
-`TARGETED_DEVICE_FAMILY`, 13" iPad shots are required too. Capture them from the
-simulator:
-```bash
-./scripts/start-ios.sh --login user:pass --start chat
-xcrun simctl io booted screenshot shot.png
-```
+Export compliance won't prompt: `ITSAppUsesNonExemptEncryption = false` is
+already in `Info.plist`, and it's accurate — the app does no crypto of its own
+beyond the system Keychain and TLS.
 
-**Support URL and privacy policy URL** are both mandatory. A page in the repo's
-GitHub Pages or the README will do, but the fields cannot be blank.
+Testers install the TestFlight app, accept the invite, and need to be on the
+same network as your `agent-core` (or reach it over Tailscale/VPN) for the app
+to find a server.
 
-**App Review Information** — demo account credentials and, critically, whatever
-you settled on at the top of this document.
+---
+
+## Already done in the repo
+
+| | |
+|---|---|
+| App icon | Regenerated 1024×1024, **opaque, no alpha, full-bleed**. It had an alpha channel — a hard upload rejection — and its own rounded corners, which iOS would have masked a second time. Redrawn geometrically from the same four brand discs rather than upscaled from the 256px logo. |
+| Privacy manifest | `FamilyAgent/PrivacyInfo.xcprivacy`. Required for every submission since May 2024; without it the upload fails with `ITMS-91053`. Declares no tracking, no collected data, and the one required-reason API the app uses (`UserDefaults` in `SettingsStore`, reason `CA92.1`). |
+| Launch screen | `UILaunchScreen` → `LaunchBackground` colour set (`#F6F5F4`), so there's no white flash before the first frame. It previously named an empty colour asset. |
+| Version | `MARKETING_VERSION = 1.0.0`; build number stamped per upload by the script. |
+| Device scope | iPhone only (`TARGETED_DEVICE_FAMILY = 1`), portrait only. |
+| Debug hooks | `FA_SERVER_URL` / `FA_AUTOLOGIN` / `FA_START` / `FA_CHAT_PROMPT` / `FA_DRAWER` are all `#if DEBUG`, and verified absent from the Release binary with `strings`. |
+| Usage strings | Microphone, camera, photo library and local network, each saying *why*. |
+| Release build | Archives clean at `-O`, `dwarf-with-dsym`, `VALIDATE_PRODUCT = YES`, zero warnings. |
+
+---
+
+## If you later go to the public App Store
+
+Three things become blockers that internal TestFlight lets you ignore:
+
+- **Reviewer access.** Either build an in-app demo mode backed by canned data, or
+  host one internet-reachable `agent-core` with a valid TLS certificate and put
+  its URL plus a demo login in App Review Information. A note asking the reviewer
+  to install a server will not be actioned. (Plain `http://` to a public host
+  would need an ATS exception Apple scrutinises — don't; a real `https://` host
+  passes ATS with no change, since `NSAllowsLocalNetworking` only covers local names.)
+- **Store listing.** Screenshots at 6.9" (1320×2868 or 1290×2796), a support URL
+  and a privacy policy URL — none of the three can be blank.
+- **App Privacy questionnaire.** Answer **Data Not Collected**: everything the app
+  sends goes to the server the user runs, which you have no access to, and there
+  is no analytics or advertising SDK. It is cross-checked against
+  `PrivacyInfo.xcprivacy`, so keep the two in step.
 
 ---
 
 ## Known gaps
 
-- **No demo/offline path.** See the blocker above. Nothing else on this list
-  matters until that is decided.
-- **Landscape is declared but never designed.** `UISupportedInterfaceOrientations`
-  allows landscape on iPhone; no screen has been checked in it. Either test it or
-  cut it to portrait before submitting.
-- **Push notifications.** Routines deliver into the app only — there is no APNs
-  integration, so a scheduled routine is invisible until the app is opened. Not a
-  blocker, but it is the feature reviewers most often expect from a "reminders"
-  app.
-- **The icon is derived from a 256px source.** It is now redrawn geometrically at
-  1024 so it is crisp, but it is four flat circles; if you want a more considered
-  mark, this is the moment.
+- **No push notifications.** Routines deliver in-app only — there's no APNs
+  integration, so a scheduled routine is invisible until someone opens the app.
+  Fine for TestFlight; it's the first thing to want on a public release.
+- **Landscape is not supported.** Deliberately dropped rather than shipped
+  untested. Re-claiming it means actually laying out the drawer and the week
+  calendar for it.
+- **The icon is four flat discs** derived from a 256px source. Now redrawn crisply
+  at 1024, but if you want a more considered mark, do it before people install.

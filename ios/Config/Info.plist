@@ -38,18 +38,13 @@
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
+	<!-- Portrait only, iPhone only (TARGETED_DEVICE_FAMILY = 1). Landscape was
+	     declared here but no screen was ever laid out or checked in it, and the
+	     drawer and the week calendar are the obvious casualties. Claim it only
+	     once it's actually been designed. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 
 	<!-- Discovery of the home server on the LAN (NWBrowser + active probe). -->
