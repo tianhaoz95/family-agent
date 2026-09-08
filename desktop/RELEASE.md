@@ -173,23 +173,48 @@ update.
 ### Publishing a release
 
 ```bash
-cd desktop && npm run tauri:build:mac
-cd .. && ./scripts/sign-desktop.sh --notarize
+./scripts/release-mac.sh --check            # verify the setup, build nothing
+./scripts/release-mac.sh --version 1.0.0    # build, sign, notarize, publish
 ```
 
-That leaves three files to attach to a GitHub release tagged `v<version>`:
+`release-mac.sh` does the whole thing: preflight, Tauri build, deep-sign,
+notarize and staple, rebuild the DMG and the updater artifact from the signed
+app, then create the GitHub release and upload every asset. It uses the `gh`
+CLI when that's installed and logged in, and otherwise the REST API with a
+token from `FA_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` (needs
+`contents:write`).
+
+**Run `--check` first.** A release build is around twenty minutes, and a missing
+credential is a miserable thing to discover at the end of one. It verifies the
+certificate, that notarization credentials actually resolve, that the updater
+signing key exists, and that GitHub auth is present — then stops.
+`--no-upload` stops after notarization; `--draft` uploads without publishing;
+`--skip-build` reuses the bundle already on disk.
+
+Two details about how it publishes. The release is created as a **draft**,
+assets are uploaded, and only then is it published — `/releases/latest` starts
+resolving the moment a release goes public, so publishing first would leave a
+window in which an updater fetches a `latest.json` whose tarball hasn't finished
+uploading. And afterwards it fetches the two URLs clients actually use and
+asserts they return 200, rather than assuming.
+
+The assets it attaches, produced by `scripts/sign-desktop.sh` (still runnable on
+its own):
 
 | file | why |
 |---|---|
-| `Family Agent-signed.dmg` | what people download the first time |
-| `Family Agent.app.tar.gz` (+ `.sig`) | what the updater downloads |
+| `Family-Agent-<version>-arm64.dmg` | what people download the first time |
+| `Family.Agent.app.tar.gz` (+ `.sig`) | what the updater downloads |
 | `latest.json` | the manifest the app polls |
 
-GitHub rewrites spaces in asset names to dots on download, so `latest.json`
-points at `Family.Agent.app.tar.gz`. The script generates it that way already.
+GitHub rewrites spaces in asset names to dots, so `latest.json` points at
+`Family.Agent.app.tar.gz`; the tarball is uploaded under exactly that name and
+the script asserts the two agree before publishing.
 
-Bump `version` in `desktop/src-tauri/tauri.conf.json` before building — the
-updater compares against it, so an unbumped version means no update is offered.
+The version comes from `desktop/src-tauri/tauri.conf.json` — currently `0.1.0`,
+so the first public release wants `--version 1.0.0`. The updater compares
+against it, so an unbumped version means installed copies are never offered the
+update. The script also refuses to run if the tag already exists on the remote.
 
 ## Known gaps
 
