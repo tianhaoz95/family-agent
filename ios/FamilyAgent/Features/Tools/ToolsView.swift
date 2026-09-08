@@ -9,20 +9,17 @@ struct ToolsView: View {
         ScrollView {
             ScreenScaffold(title: "Tools", subtitle: "Ask the agent to build a small web tool to help finish a task \u{2014} generated and run locally.") {
                 VStack(alignment: .leading, spacing: 12) {
-                    AppCard {
-                        TextField("e.g. a chore chart for the kids", text: $prompt, axis: .vertical)
-                            .lineLimit(1...4)
+                    HStack(spacing: 8) {
+                        TextField("e.g. split our vacation budget 4 ways", text: $prompt)
                             .textFieldStyle(.roundedBorder)
-                        Button {
+                        Button("Build") {
+                            guard !prompt.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                             model.buildTool(prompt); prompt = ""
-                        } label: {
-                            Label("Build", systemImage: "hammer")
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(prompt.trimmingCharacters(in: .whitespaces).isEmpty)
-                        if let s = model.toolStatus {
-                            Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
-                        }
+                    }
+                    if let s = model.toolStatus {
+                        Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
                     }
 
                     if model.tools.isEmpty {
@@ -30,29 +27,35 @@ struct ToolsView: View {
                     } else {
                         ForEach(model.tools) { tool in
                             AppCard {
-                                HStack {
-                                    Text(tool.name).appTitleSmall()
+                                HStack(spacing: 6) {
+                                    Text(tool.name).appTitleSmall().lineLimit(1)
                                     Spacer()
-                                    Chip(text: tool.status,
-                                         color: tool.status == "ready" ? Theme.ok :
-                                                tool.status == "failed" ? Theme.danger : Theme.warn)
+                                    if tool.kind == "server" { Chip(text: "shared") }
+                                    Button { model.deleteTool(tool.id) } label: {
+                                        Image(systemName: "trash").font(.system(size: 15)).foregroundStyle(Theme.textMuted)
+                                    }.buttonStyle(.plain)
                                 }
-                                if !tool.description.isEmpty {
-                                    Text(tool.description).appBodySmall().foregroundStyle(Theme.textBody)
-                                }
-                                if let err = tool.error, tool.status == "failed" {
-                                    Text(err).appLabelSmall().foregroundStyle(Theme.danger).lineLimit(3)
-                                }
-                                HStack {
-                                    if tool.status == "ready", let base = model.toolsBaseURL,
-                                       let u = URL(string: "\(base)/\(tool.id)/") {
-                                        Button("Open") { openURL = IdentURL(u) }
+                                Spacer().frame(height: 4)
+                                Text(tool.description).appBodySmall().foregroundStyle(Theme.textMuted)
+                                Spacer().frame(height: 10)
+                                switch tool.status {
+                                case "building":
+                                    HStack(spacing: 8) {
+                                        ProgressView().controlSize(.mini)
+                                        Text("Building…").appBody().foregroundStyle(Theme.textMuted)
                                     }
-                                    Spacer()
-                                    Button("Delete", role: .destructive) { model.deleteTool(tool.id) }
-                                        .font(.inter(13))
+                                case "failed":
+                                    Text(tool.error.map { "Failed: \($0)" } ?? "Build failed.")
+                                        .appBody().foregroundStyle(Theme.danger)
+                                default:
+                                    if let base = model.toolsBaseURL, let path = tool.path,
+                                       let u = URL(string: base.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) {
+                                        Button { openURL = IdentURL(u) } label: {
+                                            Label("Open", systemImage: "arrow.up.forward.app")
+                                        }
+                                        .buttonStyle(.borderedProminent).controlSize(.small)
+                                    }
                                 }
-                                .padding(.top, 4)
                             }
                         }
                     }

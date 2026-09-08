@@ -3,14 +3,15 @@ import SwiftUI
 struct ConnectionsView: View {
     @Environment(AppModel.self) private var model
     @State private var editing: McpServer?
+    @State private var confirmDelete: McpServer?
 
     var body: some View {
         ScrollView {
             ScreenScaffold(title: "Connections", subtitle: "External services (MCP) the assistant can call. Their results are treated as information only, never as instructions.") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Button {
+                    Button("Add connection") {
                         editing = McpServer(name: "", transport: "http", enabled: true)
-                    } label: { Label("Add server", systemImage: "plus") }
+                    }
                     .buttonStyle(.borderedProminent)
 
                     if let s = model.mcpStatus {
@@ -22,24 +23,27 @@ struct ConnectionsView: View {
                     } else {
                         ForEach(model.mcpServers) { server in
                             AppCard {
-                                HStack {
-                                    Text(server.name).appTitleSmall()
-                                    Spacer()
+                                HStack(spacing: 10) {
                                     Toggle("", isOn: Binding(
                                         get: { server.enabled },
                                         set: { model.setMcpServerEnabled(server.name, $0) }
                                     )).labelsHidden()
-                                }
-                                Text("\(server.transport) · \(server.url ?? server.command ?? "")")
-                                    .appLabelSmall().foregroundStyle(Theme.textMuted).lineLimit(1)
-                                HStack {
-                                    Button("Test") { model.probeMcpServer(server.name) }
-                                    Button("Edit") { editing = server }
+                                    Text(server.name).appTitle().lineLimit(1)
                                     Spacer()
-                                    Button("Delete", role: .destructive) { model.deleteMcpServer(server.name) }
-                                        .font(.inter(13))
+                                    Text(server.transport).appLabelSmall().foregroundStyle(Theme.textMuted)
                                 }
-                                .padding(.top, 4)
+                                Spacer().frame(height: 6)
+                                Text(server.transport == "http"
+                                     ? (server.url ?? "")
+                                     : ([server.command].compactMap { $0 } + (server.args ?? [])).joined(separator: " "))
+                                    .appBodySmall().foregroundStyle(Theme.textMuted).lineLimit(1)
+                                Spacer().frame(height: 8)
+                                HStack {
+                                    Button("Test") { model.probeMcpServer(server.name) }.font(.inter(13))
+                                    Button("Edit") { editing = server }.font(.inter(13))
+                                    Spacer()
+                                    Button("Remove", role: .destructive) { confirmDelete = server }.font(.inter(13))
+                                }
                             }
                         }
                     }
@@ -48,6 +52,15 @@ struct ConnectionsView: View {
         }
         .task { await model.refreshConnections() }
         .sheet(item: $editing) { McpEditor(server: $0) }
+        .alert("Remove connection?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
+            Button("Remove", role: .destructive) {
+                if let s = confirmDelete { model.deleteMcpServer(s.name) }
+                confirmDelete = nil
+            }
+            Button("Cancel", role: .cancel) { confirmDelete = nil }
+        } message: {
+            Text("\u{201C}\(confirmDelete?.name ?? "")\u{201D} will be disconnected.")
+        }
     }
 }
 

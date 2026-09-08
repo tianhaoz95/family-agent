@@ -4,42 +4,55 @@ struct SkillsView: View {
     @Environment(AppModel.self) private var model
     @State private var editing: Skill?
     @State private var creatingNew = false
+    @State private var confirmDelete: Skill?
 
     var body: some View {
         ScrollView {
             ScreenScaffold(title: "Skills", subtitle: "Named playbooks you teach the assistant \u{2014} step-by-step instructions it follows for a recurring family task.") {
                 VStack(alignment: .leading, spacing: 12) {
                     if model.isAdmin {
-                        Button {
+                        Button("New skill") {
                             editing = Skill(name: "", markdownBody: "")
                             creatingNew = true
-                        } label: { Label("New skill", systemImage: "plus") }
+                        }
                         .buttonStyle(.borderedProminent)
                     }
                     if let s = model.skillStatus {
                         Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
                     }
                     if model.skills.isEmpty {
-                        EmptyState(text: model.isAdmin ? "No skills yet. Add one to teach the assistant a repeatable task." : "No skills have been added yet.", systemImage: "graduationcap")
+                        EmptyState(text: model.isAdmin ? "No skills yet. Add one to teach the assistant a repeatable task." : "No skills yet.",
+                                   systemImage: "graduationcap")
                     } else {
                         ForEach(model.skills) { skill in
                             AppCard {
-                                HStack {
-                                    Text(skill.name).appTitleSmall()
-                                    Spacer()
+                                HStack(spacing: 10) {
                                     if model.isAdmin {
                                         Toggle("", isOn: Binding(
                                             get: { skill.enabled },
                                             set: { model.setSkillEnabled(skill.name, $0) }
                                         )).labelsHidden()
-                                    } else if !skill.enabled {
-                                        Chip(text: "Off", color: Theme.textMuted)
                                     }
+                                    Text(skill.name).appTitle().lineLimit(1)
+                                    Spacer()
+                                    if !model.isAdmin, !skill.enabled { Chip(text: "Off", color: Theme.textMuted) }
                                 }
                                 if !skill.description.isEmpty {
-                                    Text(skill.description).appBodySmall().foregroundStyle(Theme.textBody)
+                                    Spacer().frame(height: 6)
+                                    Text(skill.description).appBody()
+                                }
+                                if let w = skill.whenToUse, !w.isEmpty {
+                                    Spacer().frame(height: 4)
+                                    Text("Use when: \(w)").appBodySmall().foregroundStyle(Theme.textMuted)
+                                }
+                                if !skill.scripts.isEmpty {
+                                    Spacer().frame(height: 4)
+                                    Text("Scripts: \(skill.scripts.joined(separator: ", "))"
+                                         + (model.skillScriptsRunnable ? "" : " (script runner unavailable on this server)"))
+                                        .appLabelSmall().foregroundStyle(Theme.textMuted)
                                 }
                                 if model.isAdmin {
+                                    Spacer().frame(height: 8)
                                     HStack {
                                         Button("Edit") {
                                             Task {
@@ -50,11 +63,11 @@ struct SkillsView: View {
                                                 creatingNew = false
                                             }
                                         }
+                                        .font(.inter(13))
                                         Spacer()
-                                        Button("Delete", role: .destructive) { model.deleteSkill(skill.name) }
+                                        Button("Delete", role: .destructive) { confirmDelete = skill }
                                             .font(.inter(13))
                                     }
-                                    .padding(.top, 4)
                                 }
                             }
                         }
@@ -65,6 +78,15 @@ struct SkillsView: View {
         .task { await model.refreshSkills() }
         .sheet(item: $editing) { skill in
             SkillEditor(skill: skill, isNew: creatingNew)
+        }
+        .alert("Delete skill?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let s = confirmDelete { model.deleteSkill(s.name) }
+                confirmDelete = nil
+            }
+            Button("Cancel", role: .cancel) { confirmDelete = nil }
+        } message: {
+            Text("\u{201C}\(confirmDelete?.name ?? "")\u{201D} will be removed.")
         }
     }
 }
