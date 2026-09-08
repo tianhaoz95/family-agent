@@ -19,8 +19,9 @@
 #
 # Notarization auth, best first:
 #   FA_NOTARY_PROFILE                        a `notarytool store-credentials` profile
-#   FA_ASC_KEY_ID + FA_ASC_ISSUER_ID         App Store Connect API key, with the .p8
-#                                            at ~/.appstoreconnect/private_keys/
+#   FA_ASC_ISSUER_ID + one of:
+#     FA_KEY_LOCATION      explicit path to the .p8 (key id read off the filename)
+#     FA_ASC_KEY_ID        looked up in ~/.appstoreconnect/private_keys/
 #   FA_APPLE_ID + FA_APP_PASSWORD + FA_TEAM_ID   app-specific password
 set -euo pipefail
 
@@ -204,8 +205,19 @@ fi
 # Note the two tools disagree on how to find the .p8 — altool looks it up by key
 # id in a well-known directory, notarytool wants an explicit path — so keeping it
 # at ~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8 satisfies both.
-ASC_KEY="$HOME/.appstoreconnect/private_keys/AuthKey_${FA_ASC_KEY_ID:-none}.p8"
-[ -f "$ASC_KEY" ] || ASC_KEY="$HOME/private_keys/AuthKey_${FA_ASC_KEY_ID:-none}.p8"
+# FA_KEY_LOCATION, if set, is the .p8 itself and wins over the conventional
+# locations. The key id can be read back off the filename, so setting it
+# separately is optional.
+if [ -n "${FA_KEY_LOCATION:-}" ]; then
+  ASC_KEY="${FA_KEY_LOCATION/#\~/$HOME}"
+  if [ -z "${FA_ASC_KEY_ID:-}" ]; then
+    base="$(basename "$ASC_KEY")"; base="${base%.p8}"
+    FA_ASC_KEY_ID="${base#AuthKey_}"
+  fi
+else
+  ASC_KEY="$HOME/.appstoreconnect/private_keys/AuthKey_${FA_ASC_KEY_ID:-none}.p8"
+  [ -f "$ASC_KEY" ] || ASC_KEY="$HOME/private_keys/AuthKey_${FA_ASC_KEY_ID:-none}.p8"
+fi
 
 AUTH=()
 if [ -n "${FA_NOTARY_PROFILE:-}" ]; then
