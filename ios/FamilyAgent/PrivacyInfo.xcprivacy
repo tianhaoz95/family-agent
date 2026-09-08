@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Privacy manifest. Required by App Store Connect for any submission since
+	  May 2024; an upload without one is rejected with ITMS-91053.
+
+	  Family Agent is a client of a server the user runs on their own machine.
+	  Chat, documents, photos and voice clips go to that server and nowhere else:
+	  the developer has no access to any of it, there is no analytics SDK, no
+	  advertising identifier, and no third-party network call of any kind. So
+	  nothing here is "collected" in Apple's sense, and nothing is used for
+	  tracking. Keep this in step with the App Privacy answers in App Store
+	  Connect — they are reviewed against each other.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<!--
+			  SettingsStore.swift keeps the server URL, the signed-in names, the
+			  chosen Events view and the auto-read preference in UserDefaults.
+			  All of it is this app's own state, read back only by this app —
+			  which is exactly what CA92.1 covers. (The session token is not
+			  here; it lives in the Keychain, which is not a required-reason API.)
+			-->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

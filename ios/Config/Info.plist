@@ -25,10 +25,13 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 
+	<!-- Launch screen: the app's own warm paper canvas, so there's no white or
+	     black flash before the first frame. The empty UIColorName that used to be
+	     here named a colour asset that doesn't exist. -->
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
-		<string></string>
+		<string>LaunchBackground</string>
 	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>

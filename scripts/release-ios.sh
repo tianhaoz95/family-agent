@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# Archive the iOS app and export/upload an App Store Connect build.
+#
+#   ./scripts/release-ios.sh                 # archive + export the .ipa
+#   ./scripts/release-ios.sh --upload        # ...and upload it to App Store Connect
+#   ./scripts/release-ios.sh --build 7       # set the build number for this upload
+#
+# Requires (see ios/RELEASE.md):
+#   FA_TEAM_ID          your 10-character Apple Developer Team ID
+#   Xcode signed in to that team (Xcode > Settings > Accounts), so automatic
+#   signing can resolve the distribution certificate and App Store profile.
+#
+# For --upload, one of:
+#   FA_ASC_KEY_ID + FA_ASC_ISSUER_ID + FA_ASC_KEY_PATH   (App Store Connect API key)
+#   FA_APPLE_ID + FA_APP_PASSWORD                        (app-specific password)
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+ROOT="$PWD"
+IOS="$ROOT/ios"
+BUILD_DIR="$IOS/build/release"
+ARCHIVE="$BUILD_DIR/FamilyAgent.xcarchive"
+EXPORT_DIR="$BUILD_DIR/export"
+
+UPLOAD=0
+BUILD_NUMBER=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --upload) UPLOAD=1; shift ;;
+    --build)  BUILD_NUMBER="${2:-}"; shift 2 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    *) echo "!! unknown argument: $1"; exit 2 ;;
+  esac
+done
+
+if [ -z "${FA_TEAM_ID:-}" ]; then
+  cat >&2 <<'EOF'
+!! FA_TEAM_ID is not set.
+
+   It is the 10-character Team ID from developer.apple.com > Membership.
+   Without it xcodebuild cannot resolve a distribution signing identity.
+
+     export FA_TEAM_ID=ABCDE12345
+
+   See ios/RELEASE.md for the full first-release checklist.
+EOF
+  exit 1
+fi
+
+command -v xcodebuild >/dev/null || { echo "!! xcodebuild not found — install Xcode" >&2; exit 1; }
+
+# A build number must be unique per version in App Store Connect. Default to a
+# UTC timestamp, which is monotonic and never collides.
+if [ -z "$BUILD_NUMBER" ]; then
+  BUILD_NUMBER="$(date -u +%Y%m%d%H%M)"
+fi
+
+MARKETING_VERSION="$(
+  grep -m1 'MARKETING_VERSION = ' "$IOS/FamilyAgent.xcodeproj/project.pbxproj" \
+    | sed 's/.*MARKETING_VERSION = \(.*\);/\1/'
+)"
+
+echo "==> Family Agent $MARKETING_VERSION (build $BUILD_NUMBER)"
+echo "    team $FA_TEAM_ID"
+
+rm -rf "$ARCHIVE" "$EXPORT_DIR"
+mkdir -p "$BUILD_DIR"
+
+echo "==> resolving package dependencies"
+xcodebuild -resolvePackageDependencies \
+  -project "$IOS/FamilyAgent.xcodeproj" -scheme FamilyAgent >/dev/null
+
+echo "==> archiving (Release, generic iOS device)"
+xcodebuild archive \
+  -project "$IOS/FamilyAgent.xcodeproj" \
+  -scheme FamilyAgent \
+  -configuration Release \
+  -destination 'generic/platform=iOS' \
+  -archivePath "$ARCHIVE" \
+  DEVELOPMENT_TEAM="$FA_TEAM_ID" \
+  CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+  CODE_SIGN_STYLE=Automatic \
+  | grep -E 'error:|warning:|ARCHIVE (FAILED|SUCCEEDED)' || true
+
+[ -d "$ARCHIVE" ] || { echo "!! archive failed" >&2; exit 1; }
+
+# Pre-flight the two things App Store Connect rejects most often, before we
+# spend a slow upload finding out.
+APP="$ARCHIVE/Products/Applications/FamilyAgent.app"
+echo "==> checking the archived bundle"
+if [ ! -f "$APP/PrivacyInfo.xcprivacy" ]; then
+  echo "!! PrivacyInfo.xcprivacy is missing from the bundle (ITMS-91053)" >&2
+  exit 1
+fi
+echo "    privacy manifest present"
+ICON_ALPHA="$(
+  python3 - "$IOS/FamilyAgent/Resources/Assets.xcassets/AppIcon.appiconset/icon-1024.png" <<'PY'
+import struct, sys
+with open(sys.argv[1], "rb") as fh:
+    fh.read(8)
+    length = struct.unpack(">I", fh.read(4))[0]
+    assert fh.read(4) == b"IHDR"
+    ihdr = fh.read(length)
+    print("yes" if ihdr[9] in (4, 6) else "no")
+PY
+)"
+if [ "$ICON_ALPHA" = "yes" ]; then
+  echo "!! the 1024 app icon has an alpha channel — App Store Connect rejects this" >&2
+  exit 1
+fi
+echo "    app icon is opaque"
+
+echo "==> exporting"
+EXPORT_PLIST="$BUILD_DIR/ExportOptions.plist"
+cp "$IOS/Config/ExportOptions.plist" "$EXPORT_PLIST"
+/usr/libexec/PlistBuddy -c "Add :teamID string $FA_TEAM_ID" "$EXPORT_PLIST" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Set :teamID $FA_TEAM_ID" "$EXPORT_PLIST"
+
+xcodebuild -exportArchive \
+  -archivePath "$ARCHIVE" \
+  -exportPath "$EXPORT_DIR" \
+  -exportOptionsPlist "$EXPORT_PLIST" \
+  | grep -E 'error:|EXPORT (FAILED|SUCCEEDED)' || true
+
+IPA="$(find "$EXPORT_DIR" -name '*.ipa' -maxdepth 1 | head -1)"
+[ -n "$IPA" ] || { echo "!! no .ipa produced" >&2; exit 1; }
+echo "==> $IPA"
+
+if [ "$UPLOAD" -eq 0 ]; then
+  cat <<EOF
+
+Archive and .ipa are ready. To upload:
+
+  ./scripts/release-ios.sh --upload --build $BUILD_NUMBER
+
+or open Xcode > Window > Organizer and distribute "$ARCHIVE".
+EOF
+  exit 0
+fi
+
+echo "==> validating with App Store Connect"
+AUTH=()
+if [ -n "${FA_ASC_KEY_ID:-}" ] && [ -n "${FA_ASC_ISSUER_ID:-}" ]; then
+  AUTH=(--apiKey "$FA_ASC_KEY_ID" --apiIssuer "$FA_ASC_ISSUER_ID")
+elif [ -n "${FA_APPLE_ID:-}" ] && [ -n "${FA_APP_PASSWORD:-}" ]; then
+  AUTH=(--username "$FA_APPLE_ID" --password "$FA_APP_PASSWORD")
+else
+  echo "!! no App Store Connect credentials — set FA_ASC_KEY_ID + FA_ASC_ISSUER_ID," >&2
+  echo "   or FA_APPLE_ID + FA_APP_PASSWORD. See ios/RELEASE.md." >&2
+  exit 1
+fi
+
+xcrun altool --validate-app -f "$IPA" -t ios "${AUTH[@]}"
+echo "==> uploading"
+xcrun altool --upload-app -f "$IPA" -t ios "${AUTH[@]}"
+echo "==> done — the build appears in App Store Connect after processing (usually 5-30 min)."

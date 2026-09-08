@@ -165,7 +165,13 @@ struct MainShell: View {
         NavigationStack {
             ZStack {
                 Atmosphere().ignoresSafeArea()
+                // Cap the reading column. On iPhone this is a no-op (the widest
+                // phone is ~440pt); on iPad it stops every screen stretching to
+                // 1000pt+, where a document summary ran past 130 characters a line
+                // and the app read as a blown-up phone build.
                 destinationView(d)
+                    .frame(maxWidth: 700)
+                    .frame(maxWidth: .infinity)
             }
             .toolbar(.hidden, for: .navigationBar)
         }

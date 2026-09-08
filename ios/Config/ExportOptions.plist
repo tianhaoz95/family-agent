@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Export options for an App Store Connect upload. Used by
+	  scripts/release-ios.sh; teamID is filled in from FA_TEAM_ID at export time,
+	  so this file carries no account-specific value.
+	-->
+	<key>method</key>
+	<string>app-store-connect</string>
+
+	<key>destination</key>
+	<string>export</string>
+
+	<!-- Automatic signing: Xcode resolves the distribution cert + App Store
+	     profile from the signed-in Apple ID. -->
+	<key>signingStyle</key>
+	<string>automatic</string>
+
+	<!-- Bitcode is gone from the toolchain; symbols let App Store Connect
+	     symbolicate crash reports. -->
+	<key>uploadSymbols</key>
+	<true/>
+
+	<!-- Never let Xcode rewrite Swift or the bundle version behind our back. -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+
+	<key>stripSwiftSymbols</key>
+	<true/>
+</dict>
+</plist>
