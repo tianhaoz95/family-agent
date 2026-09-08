@@ -170,58 +170,78 @@ struct TaskScheduleView: View {
 
     var body: some View {
         let days = CalendarMath.rangeDays(view: view, anchor: anchor)
-        ScrollView {
+        VStack(spacing: 0) {
+            // Day headers + an all-day row for tasks with no time.
             HStack(alignment: .top, spacing: 0) {
-                // hour gutter
-                VStack(spacing: 0) {
-                    ForEach(0..<24, id: \.self) { h in
-                        Text(String(format: "%02d", h))
-                            .appLabelSmall().foregroundStyle(Theme.textFaint)
-                            .frame(height: hourH, alignment: .top)
-                    }
-                }
-                .frame(width: 26)
-
+                Spacer().frame(width: 26)
                 ForEach(days, id: \.self) { day in
-                    dayColumn(day)
-                        .frame(maxWidth: .infinity)
+                    let allDay = tasks.filter { $0.dayKey == CalendarMath.dayKey(day) && $0.dueTime == nil }
+                    VStack(spacing: 2) {
+                        Text(dayHeader(day)).appLabelSmall()
+                        ForEach(allDay.prefix(2)) { t in
+                            Text(t.title).font(.system(size: 9)).lineLimit(1)
+                                .padding(.horizontal, 3).padding(.vertical, 1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Theme.marigold.opacity(0.25), in: RoundedRectangle(cornerRadius: 3))
+                                .onTapGesture { onTapTask(t) }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
                 }
             }
-            .padding(.top, 4)
+            .padding(.bottom, 4)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    HStack(alignment: .top, spacing: 0) {
+                        VStack(spacing: 0) {
+                            ForEach(0..<24, id: \.self) { h in
+                                Text(String(format: "%02d", h))
+                                    .appLabelSmall().foregroundStyle(Theme.textFaint)
+                                    .frame(height: hourH, alignment: .top)
+                                    .id("hour-\(h)")
+                            }
+                        }
+                        .frame(width: 26)
+                        ForEach(days, id: \.self) { day in
+                            dayColumn(day).frame(maxWidth: .infinity)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+                .onAppear { proxy.scrollTo("hour-7", anchor: .top) }
+            }
         }
     }
 
     @ViewBuilder
     private func dayColumn(_ day: Date) -> some View {
         let key = CalendarMath.dayKey(day)
-        let dayTasks = tasks.filter { $0.dayKey == key }
-        VStack(spacing: 0) {
-            Text(dayHeader(day)).appLabelSmall().frame(height: 20)
-            ZStack(alignment: .topLeading) {
-                VStack(spacing: 0) {
-                    ForEach(0..<24, id: \.self) { _ in
-                        Rectangle().fill(Theme.border).frame(height: 1)
-                        Spacer().frame(height: hourH - 1)
-                    }
+        let dayTasks = tasks.filter { $0.dayKey == key && $0.dueTime != nil }
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                ForEach(0..<24, id: \.self) { _ in
+                    Rectangle().fill(Theme.border).frame(height: 1)
+                    Spacer().frame(height: hourH - 1)
                 }
-                .contentShape(Rectangle())
-                .gesture(
-                    SpatialTapGesture().onEnded { value in
-                        let mins = Int((value.location.y / hourH) * 60 / 30) * 30
-                        onTapSlot(day, min(max(0, mins), 23 * 60 + 30))
-                    }
-                )
-                ForEach(dayTasks) { t in
-                    let mins = t.minutesOfDay ?? 9 * 60
-                    Text(t.title)
-                        .appLabelSmall()
-                        .lineLimit(1)
-                        .padding(.horizontal, 4).padding(.vertical, 2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 4))
-                        .offset(y: CGFloat(mins) / 60 * hourH)
-                        .onTapGesture { onTapTask(t) }
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                SpatialTapGesture().onEnded { value in
+                    let mins = Int((value.location.y / hourH) * 60 / 30) * 30
+                    onTapSlot(day, min(max(0, mins), 23 * 60 + 30))
                 }
+            )
+            ForEach(dayTasks) { t in
+                let mins = t.minutesOfDay ?? 9 * 60
+                Text(t.title)
+                    .appLabelSmall()
+                    .lineLimit(1)
+                    .padding(.horizontal, 4).padding(.vertical, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 4))
+                    .offset(y: CGFloat(mins) / 60 * hourH)
+                    .onTapGesture { onTapTask(t) }
             }
         }
     }
