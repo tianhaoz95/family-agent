@@ -114,11 +114,11 @@ describe("mcp/config", () => {
       transport: "http",
       enabled: true,
       url: "https://x.test/mcp",
-      headers: { Authorization: "Bearer abc", "X-Client": "nana" },
+      headers: { Authorization: "Bearer abc", "X-Client": "family-agent" },
       env: { API_TOKEN: "shh", DEBUG: "1" },
     });
     expect(red.headers?.Authorization).toBe("••••");
-    expect(red.headers?.["X-Client"]).toBe("nana");
+    expect(red.headers?.["X-Client"]).toBe("family-agent");
     expect(red.env?.API_TOKEN).toBe("••••");
     expect(red.env?.DEBUG).toBe("1");
   });

@@ -428,7 +428,7 @@ Character marks (round illustrated faces in 2px colored circles) and abstract de
 
 ---
 
-## Applying this in the apps (nana-specific)
+## Applying this in the apps (Family Agent specific)
 
 This system is the palette / type / spacing source of truth for both `desktop/`
 and `android/`. It is a **light-only** theme — no dark mode.

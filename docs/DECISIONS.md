@@ -1921,8 +1921,10 @@ convergence (not just porting the effects onto the Playful palette).
 - Active drawer item: `accent-soft` background + `accent` text/icon (was a
   filled indigo pill).
 
-`res/font/nunito_variable.ttf` is left in place (unreferenced) in case the
-Playful direction is ever revisited.
+`res/font/nunito_variable.ttf` was left in place (unreferenced) in case the
+Playful direction was ever revisited; it was deleted when the repo went public
+(an unreferenced font still ships in the APK, and redistributing an OFL font
+means shipping its licence too — see `THIRD-PARTY-NOTICES.md`).
 
 Verified on the emulator: login, Chat, Messages, drawer, Board, Events (Month),
 Settings — all show the warm canvas + animated gradient + glass + floating

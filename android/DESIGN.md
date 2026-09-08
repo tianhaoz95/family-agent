@@ -89,5 +89,9 @@ toggle (`GET/PUT /settings`, admin + env-lock gated). See `docs/DECISIONS.md`
 
 ## Nunito
 
-`res/font/nunito_variable.ttf` is still bundled but no longer referenced — kept
-in case the Playful direction is ever revisited. Safe to delete.
+Gone. `res/font/nunito_variable.ttf` had been left bundled but unreferenced in
+case the Playful direction was ever revisited. It was deleted when the repo went
+public: an unreferenced font is still packaged into every APK, so it was still
+being redistributed, and redistributing an OFL font means shipping its licence
+alongside it. Not worth 270 KB and a licence file for a retired direction — the
+font is one `git revert` away if it is ever wanted back.

@@ -113,7 +113,7 @@ deviation, see `docs/DECISIONS.md` — this file is the *what happened*.
 - No `cargo tauri`-style CLI shortcut here — needed a full Gradle/AGP/Kotlin
   toolchain. Installed JDK 17 (Temurin) and the Android SDK
   (platform-tools, platform 34, build-tools 34.0.0) as user-space downloads
-  (~/GitHub/nana/.toolchains/, gitignored) since sudo/Docker were both
+  (~/GitHub/family-agent/.toolchains/, gitignored) since sudo/Docker were both
   unavailable. Licenses accepted non-interactively (`yes | sdkmanager
   --licenses`).
 - Generated a proper Gradle wrapper (`./gradlew`, Gradle 8.9) via a

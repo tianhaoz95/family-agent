@@ -227,7 +227,7 @@ Later changes (not part of the original autonomous session):
   Color Mobile Design System" — indigo/pink/cyan, soft-shadow rounded cards,
   Nunito, **light + dark**). The Android app no longer shares the repo-root
   `DESIGN.md`; the desktop app still does. Bundled Nunito
-  (`res/font/nunito_variable.ttf`). Dark mode is driven by
+  (`res/font/nunito_variable.ttf`, since removed). Dark mode is driven by
   `isSystemInDarkTheme()` with a day/night `windowBackground` colour so
   there's no launch flash (non-DayNight style parent — `Theme.Material.DayNight`
   needs API 29, minSdk is 26). Rounded icon set throughout. Verified on the
