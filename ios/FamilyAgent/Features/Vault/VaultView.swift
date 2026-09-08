@@ -12,50 +12,43 @@ struct VaultView: View {
             ScreenScaffold(title: "Vault", subtitle: "Passwords and two-factor codes for the family \u{2014} encrypted on the home server. Ask the assistant for one in a private \u{201C}/vault\u{201D} chat.") {
                 VStack(alignment: .leading, spacing: 12) {
                     if let code = model.vaultRecoveryCode {
-                        AppCard(accent: Theme.marigold) {
-                            Text("Save your recovery code").appTitleSmall()
-                            Text(code).font(.system(.body, design: .monospaced)).textSelection(.enabled)
-                            Text("You'll need this if you ever reset your password. It won't be shown again.")
-                                .appLabelSmall().foregroundStyle(Theme.textMuted)
-                            Button("I've saved it") { model.dismissVaultRecoveryCode() }
+                        AppCard(accent: Theme.accent) {
+                            Text("Save your recovery code").appTitle()
+                            Spacer().frame(height: 6)
+                            Text("If you forget your password (or an admin resets it) this is the ONLY way back into your vault. Write it down now — it isn't shown again.")
+                                .appBodySmall().foregroundStyle(Theme.textMuted)
+                            Spacer().frame(height: 14)
+                            Text(code)
+                                .font(.system(.title3, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.R.sm))
+                                .textSelection(.enabled)
+                            Spacer().frame(height: 12)
+                            HStack(spacing: 8) {
+                                Button("Copy") { UIPasteboard.general.string = code }.buttonStyle(.bordered)
+                                Button("I've saved it") { model.dismissVaultRecoveryCode() }.buttonStyle(.borderedProminent)
+                            }
                         }
-                    }
-
-                    if let msg = model.vaultStatusMsg {
-                        Text(msg).appLabelSmall().foregroundStyle(Theme.textMuted)
-                    }
-
-                    if let status = model.vaultStatusValue {
+                    } else if let status = model.vaultStatusValue {
                         if !status.exists {
-                            AppCard {
-                                Text("Set up your vault").appTitleSmall()
-                                SecureField("Confirm your account password", text: $password)
-                                    .textFieldStyle(.roundedBorder)
-                                Button("Set up") { model.vaultSetup(password); password = "" }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(password.isEmpty)
-                            }
+                            VaultGate(heading: "Set up your vault",
+                                      blurb: "Your vault is encrypted with a key from your account password. Confirm it to create the vault — you'll get a one-time recovery code.",
+                                      action: "Create vault",
+                                      statusMsg: model.vaultStatusMsg,
+                                      password: $password) { model.vaultSetup(password); password = "" }
                         } else if !status.unlocked {
-                            AppCard {
-                                Text("Unlock").appTitleSmall()
-                                SecureField("Your account password", text: $password)
-                                    .textFieldStyle(.roundedBorder)
-                                Button("Unlock") { model.vaultUnlock(password); password = "" }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(password.isEmpty)
-                                DisclosureGroup("Use a recovery code instead") {
-                                    SecureField("Recovery code", text: $recoveryCode)
-                                        .textFieldStyle(.roundedBorder)
-                                    SecureField("New password", text: $password)
-                                        .textFieldStyle(.roundedBorder)
-                                    Button("Recover") {
-                                        model.vaultRecover(code: recoveryCode, password: password)
-                                        recoveryCode = ""; password = ""
-                                    }
-                                }
-                                .font(.inter(13, .medium))
-                            }
+                            VaultUnlockGate(password: $password, recoveryCode: $recoveryCode,
+                                            statusMsg: model.vaultStatusMsg,
+                                            onUnlock: { model.vaultUnlock(password); password = "" },
+                                            onRecover: {
+                                                model.vaultRecover(code: recoveryCode, password: password)
+                                                recoveryCode = ""; password = ""
+                                            })
                         } else {
+                            if let msg = model.vaultStatusMsg {
+                                Text(msg).appLabelSmall().foregroundStyle(Theme.textMuted)
+                            }
                             HStack {
                                 Button { showEditor = VaultEditSeed(entry: nil) } label: { Label("Add", systemImage: "plus") }
                                     .buttonStyle(.borderedProminent)
@@ -86,7 +79,7 @@ struct VaultView: View {
                             }
                         }
                     } else {
-                        ProgressView()
+                        Text("Loading…").appBody().foregroundStyle(Theme.textMuted)
                     }
                 }
             }
@@ -119,6 +112,80 @@ struct VaultView: View {
 struct VaultEditSeed: Identifiable {
     let entry: VaultEntryDetail?
     var id: String { entry?.id ?? "new" }
+}
+
+/// Setup / unlock gate — mirrors Android's `VaultGate`.
+private struct VaultGate: View {
+    let heading: String
+    let blurb: String
+    let action: String
+    let statusMsg: String?
+    @Binding var password: String
+    let onSubmit: () -> Void
+
+    var body: some View {
+        AppCard {
+            Image(systemName: "lock.fill").foregroundStyle(Theme.accent)
+            Spacer().frame(height: 8)
+            Text(heading).appTitle()
+            Spacer().frame(height: 6)
+            Text(blurb).appBodySmall().foregroundStyle(Theme.textMuted)
+            Spacer().frame(height: 12)
+            SecureField("Your account password", text: $password)
+                .textFieldStyle(.roundedBorder)
+                .textContentType(.password)
+            if let statusMsg {
+                Spacer().frame(height: 6)
+                Text(statusMsg).appLabelSmall().foregroundStyle(Theme.textMuted)
+            }
+            Spacer().frame(height: 12)
+            Button(action, action: onSubmit)
+                .buttonStyle(.borderedProminent)
+                .disabled(password.isEmpty)
+        }
+    }
+}
+
+private struct VaultUnlockGate: View {
+    @Binding var password: String
+    @Binding var recoveryCode: String
+    let statusMsg: String?
+    let onUnlock: () -> Void
+    let onRecover: () -> Void
+    @State private var recovering = false
+
+    var body: some View {
+        if recovering {
+            AppCard {
+                Text("Recover your vault").appTitle()
+                Spacer().frame(height: 6)
+                Text("Enter your recovery code and current account password. The vault re-secures under that password and you get a fresh code.")
+                    .appBodySmall().foregroundStyle(Theme.textMuted)
+                Spacer().frame(height: 12)
+                TextField("Recovery code", text: $recoveryCode).textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Spacer().frame(height: 8)
+                SecureField("Account password", text: $password).textFieldStyle(.roundedBorder)
+                Spacer().frame(height: 12)
+                HStack {
+                    Button("Recover", action: onRecover).buttonStyle(.borderedProminent)
+                        .disabled(recoveryCode.isEmpty || password.isEmpty)
+                    Button("Back") { recovering = false }.font(.inter(14))
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                VaultGate(heading: "Vault locked",
+                          blurb: "Enter your account password to unlock the vault for this session. It re-locks after 15 minutes idle.",
+                          action: "Unlock",
+                          statusMsg: statusMsg,
+                          password: $password,
+                          onSubmit: onUnlock)
+                Button("Use a recovery code instead") { recovering = true }
+                    .font(.inter(14, .medium))
+            }
+        }
+    }
 }
 private struct VaultDetailSeed: Identifiable {
     let detail: VaultEntryDetail
