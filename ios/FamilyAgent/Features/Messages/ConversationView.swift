@@ -120,12 +120,14 @@ struct ConversationView: View {
 
     @ViewBuilder
     private var composer: some View {
-        HStack(alignment: .center, spacing: 4) {
+        ComposerBar {
             PhotosPicker(selection: $photoItem, matching: .images) {
-                Image(systemName: "photo").font(.system(size: 19))
-                    .foregroundStyle(Theme.accent).frame(width: 34, height: 34)
+                Image(systemName: "photo").font(.system(size: 18))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 34, height: 34)
             }
             .disabled(attached.count >= 4)
+            .opacity(attached.count >= 4 ? 0.35 : 1)
 
             if mentionPill {
                 Button { mentionPill = false } label: {
@@ -145,8 +147,8 @@ struct ConversationView: View {
                 .lineLimit(1...4)
                 .padding(.vertical, 7)
                 .padding(.leading, mentionPill ? 0 : 4)
+                .tint(Theme.accent)
                 .onChange(of: input) { _, v in
-                    // Lift "@agent <text>" out of the field into a pill, even mid-typing.
                     guard !mentionPill, v.hasPrefix("@") else { return }
                     if let sp = v.firstIndex(where: { $0 == " " || $0 == "\t" }) {
                         let mention = v[v.index(after: v.startIndex)..<sp].lowercased()
@@ -165,16 +167,8 @@ struct ConversationView: View {
                               onVoiceSend: { model.sendChannelVoice($0) })
             }
 
-            Button { send() } label: {
-                Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(canSend ? Theme.accent : Theme.textFaint, in: Circle())
-            }
-            .disabled(!canSend)
+            SendButton(sending: model.channelSending, enabled: canSend) { send() }
         }
-        .padding(.leading, 8).padding(.trailing, 6).padding(.vertical, 4)
-        .glass(.floating, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .padding(.horizontal, 12).padding(.bottom, 8)
     }
 
     private var canSend: Bool {

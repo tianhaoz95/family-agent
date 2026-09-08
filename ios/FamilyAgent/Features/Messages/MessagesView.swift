@@ -14,7 +14,7 @@ struct MessagesView: View {
                         Label("New conversation", systemImage: "plus")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.primary)
 
                     if composing {
                         NewConversationForm(
@@ -100,7 +100,7 @@ struct NewConversationForm: View {
                 Button("Start") {
                     onStart(Array(picked), groupName.isEmpty ? nil : groupName)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.primary)
                 .disabled(picked.isEmpty || (picked.count > 1 && groupName.isEmpty))
                 Button("Cancel", action: onCancel).font(.inter(14))
             }

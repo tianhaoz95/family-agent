@@ -103,24 +103,29 @@ struct ChatView: View {
     // MARK: header (no app bar — Android parity)
 
     private var header: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 14) {
             Text("Chat").appTitle().foregroundStyle(Theme.text)
             Spacer()
-            Button { model.startNewChatSession() } label: {
-                Label("New", systemImage: "plus").font(.inter(13, .medium)).labelStyle(.titleAndIcon)
-            }
-            Button { showHistory = true } label: {
-                Label("History", systemImage: "clock.arrow.circlepath").font(.inter(13, .medium)).labelStyle(.titleAndIcon)
-            }
-            Button { showSlashHelp = true } label: {
-                Image(systemName: "questionmark.circle").font(.system(size: 17))
-            }
+            headerIcon("square.and.pencil") { model.startNewChatSession() }
+            headerIcon("clock.arrow.circlepath") { showHistory = true }
+            headerIcon("questionmark") { showSlashHelp = true }
         }
-        .foregroundStyle(Theme.accent)
         .padding(.horizontal, 20)
-        .padding(.leading, 44)
-        .padding(.top, 10)
-        .padding(.bottom, 4)
+        .padding(.leading, 46)
+        .padding(.top, 12)
+        .padding(.bottom, 6)
+    }
+
+    private func headerIcon(_ name: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 34, height: 34)
+                .background(Theme.accentSoft, in: Circle())
+                .overlay(Circle().strokeBorder(Theme.accent.opacity(0.10), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle(scale: 0.92))
     }
 
     // MARK: "/" autocomplete — while "/" + a partial name is typed (no space yet)
@@ -168,18 +173,21 @@ struct ChatView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .center, spacing: 4) {
+        ComposerBar {
             PhotosPicker(selection: $photoItem, matching: .images) {
-                Image(systemName: "photo").font(.system(size: 19))
-                    .foregroundStyle(Theme.accent).frame(width: 34, height: 34)
+                Image(systemName: "photo").font(.system(size: 18))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 34, height: 34)
             }
             .disabled(attached.count >= 4)
+            .opacity(attached.count >= 4 ? 0.35 : 1)
 
             TextField("Ask anything, or type /", text: $input, axis: .vertical)
                 .font(.inter(15))
                 .lineLimit(1...4)
                 .padding(.vertical, 7)
                 .padding(.leading, 4)
+                .tint(Theme.accent)
 
             if model.voiceEnabled {
                 HoldToTalkMic(enabled: !model.chatSending, transcribing: model.chatTranscribing,
@@ -189,18 +197,8 @@ struct ChatView: View {
                               onVoiceSend: { model.sendChatVoice($0) })
             }
 
-            Button { send() } label: {
-                Image(systemName: model.chatSending ? "stop.fill" : "arrow.up")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(canSend || model.chatSending ? Theme.accent : Theme.textFaint, in: Circle())
-            }
-            .disabled(!canSend && !model.chatSending)
+            SendButton(sending: model.chatSending, enabled: canSend) { send() }
         }
-        .padding(.leading, 8).padding(.trailing, 6).padding(.vertical, 4)
-        .glass(.floating, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .padding(.horizontal, 12).padding(.bottom, 8)
     }
 
     private func send() {

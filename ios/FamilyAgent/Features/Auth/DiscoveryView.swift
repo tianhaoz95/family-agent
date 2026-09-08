@@ -52,7 +52,7 @@ struct DiscoveryView: View {
                         } label: {
                             Text("Connect").frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.primary)
                         .disabled(manual.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }

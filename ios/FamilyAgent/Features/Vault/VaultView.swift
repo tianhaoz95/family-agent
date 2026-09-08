@@ -26,8 +26,8 @@ struct VaultView: View {
                                 .textSelection(.enabled)
                             Spacer().frame(height: 12)
                             HStack(spacing: 8) {
-                                Button("Copy") { UIPasteboard.general.string = code }.buttonStyle(.bordered)
-                                Button("I've saved it") { model.dismissVaultRecoveryCode() }.buttonStyle(.borderedProminent)
+                                Button("Copy") { UIPasteboard.general.string = code }.buttonStyle(.ghost)
+                                Button("I've saved it") { model.dismissVaultRecoveryCode() }.buttonStyle(.primary)
                             }
                         }
                     } else if let status = model.vaultStatusValue {
@@ -51,7 +51,7 @@ struct VaultView: View {
                             }
                             HStack {
                                 Button { showEditor = VaultEditSeed(entry: nil) } label: { Label("Add", systemImage: "plus") }
-                                    .buttonStyle(.borderedProminent)
+                                    .buttonStyle(.primary)
                                 Button("Lock") { model.vaultLock() }
                                 if model.isAdmin {
                                     Button("Share with family") { model.vaultFamilySync() }
@@ -140,7 +140,7 @@ private struct VaultGate: View {
             }
             Spacer().frame(height: 12)
             Button(action, action: onSubmit)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.primary)
                 .disabled(password.isEmpty)
         }
     }
@@ -168,7 +168,7 @@ private struct VaultUnlockGate: View {
                 SecureField("Account password", text: $password).textFieldStyle(.roundedBorder)
                 Spacer().frame(height: 12)
                 HStack {
-                    Button("Recover", action: onRecover).buttonStyle(.borderedProminent)
+                    Button("Recover", action: onRecover).buttonStyle(.primary)
                         .disabled(recoveryCode.isEmpty || password.isEmpty)
                     Button("Back") { recovering = false }.font(.inter(14))
                 }

@@ -14,18 +14,21 @@ struct ScreenScaffold<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title).appHeadline().foregroundStyle(Theme.text)
-            Spacer().frame(height: 6)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer().frame(height: 5)
             Text(subtitle)
-                .font(.serif(17))
+                .font(.serif(16.5))
+                .lineSpacing(2)
                 .foregroundStyle(Theme.textBody)
-            Spacer().frame(height: 22)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer().frame(height: 24)
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 20)
         // Room for the floating menu button (MainShell) — the Android
         // ScreenScaffold reserves the same 58dp.
-        .padding(.top, 56)
+        .padding(.top, 58)
     }
 }
 
@@ -33,25 +36,37 @@ struct ScreenScaffold<Content: View>: View {
 
 struct AppCard<Content: View>: View {
     var accent: Color? = nil
+    var padding: CGFloat = 18
     var onTap: (() -> Void)? = nil
     @ViewBuilder var content: Content
+
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Theme.R.md, style: .continuous) }
 
     var body: some View {
         let card = VStack(spacing: 0) {
             if let accent {
-                Rectangle().fill(accent).frame(height: 4)
+                Capsule().fill(accent).frame(width: 34, height: 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, padding)
+                    .padding(.top, padding - 6)
             }
             VStack(alignment: .leading, spacing: 8) { content }
-                .padding(18)
+                .padding(padding)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Theme.surface)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.R.md, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.R.md, style: .continuous)
-                .stroke(Theme.border, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 3)
+        .background(Theme.surface, in: shape)
+        .overlay(shape.strokeBorder(Theme.border, lineWidth: 1))
+        // A faint top highlight sells the "floating over the wash" feel.
+        .overlay(alignment: .top) {
+            shape.stroke(
+                LinearGradient(colors: [.white.opacity(0.55), .clear],
+                               startPoint: .top, endPoint: .bottom),
+                lineWidth: 1
+            )
+            .blendMode(.plusLighter)
+            .mask(shape.fill(LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .center)))
+        }
+        .elevation(Theme.E.card)
 
         if let onTap {
             Button(action: onTap) { card }
@@ -63,11 +78,12 @@ struct AppCard<Content: View>: View {
 }
 
 struct PressScaleStyle: ButtonStyle {
-    var scale: CGFloat = 0.97
+    var scale: CGFloat = 0.985
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? scale : 1)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
+            .brightness(configuration.isPressed ? -0.015 : 0)
+            .animation(.spring(response: 0.28, dampingFraction: 0.72), value: configuration.isPressed)
     }
 }
 
@@ -78,37 +94,46 @@ struct Chip: View {
     var color: Color = Theme.accent
     var body: some View {
         Text(text.uppercased())
-            .font(.inter(11, .bold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(color.opacity(0.14), in: Capsule())
+            .font(.inter(10.5, .bold))
+            .tracking(0.4)
+            .foregroundStyle(color.opacity(0.92))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3.5)
+            .background(color.opacity(0.13), in: Capsule())
+            .overlay(Capsule().strokeBorder(color.opacity(0.10), lineWidth: 1))
     }
 }
 
 struct StatusDot: View {
     let color: Color
-    var body: some View { Circle().fill(color).frame(width: 9, height: 9) }
+    var body: some View {
+        Circle().fill(color).frame(width: 8, height: 8)
+            .overlay(Circle().strokeBorder(color.opacity(0.25), lineWidth: 3).blur(radius: 0.5))
+    }
 }
 
 struct EmptyState: View {
     let text: String
     var systemImage: String = "sparkles"
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 18) {
             ZStack {
-                Circle().fill(Theme.accentSoft).frame(width: 72, height: 72)
+                Circle().fill(Theme.accentSoft).frame(width: 78, height: 78)
+                Circle().strokeBorder(.white.opacity(0.6), lineWidth: 1).frame(width: 78, height: 78)
                 Image(systemName: systemImage)
-                    .font(.system(size: 26))
-                    .foregroundStyle(Theme.accent)
+                    .font(.system(size: 27, weight: .regular))
+                    .foregroundStyle(Theme.accent.opacity(0.85))
             }
+            .elevation(Theme.E.sm)
             Text(text)
-                .appBody()
+                .font(.inter(14.5))
                 .foregroundStyle(Theme.textMuted)
                 .multilineTextAlignment(.center)
+                .lineSpacing(3)
+                .frame(maxWidth: 320)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 64)
+        .padding(.top, 72)
         .padding(.horizontal, 24)
     }
 }
@@ -171,33 +196,29 @@ struct SpeakButton: View {
 
 struct TypingDots: View {
     @State private var t = 0.0
+    private let shape = UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 6, bottomTrailingRadius: 20, topTrailingRadius: 20)
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             ForEach(0..<3, id: \.self) { i in
                 Circle()
-                    .fill(Theme.textMuted)
-                    .frame(width: 7, height: 7)
-                    .offset(y: bounce(i) * -5)
-                    .opacity(0.45 + 0.55 * bounce(i))
+                    .fill(Theme.accent.opacity(0.55))
+                    .frame(width: 6.5, height: 6.5)
+                    .scaleEffect(0.7 + 0.5 * bounce(i))
+                    .offset(y: bounce(i) * -3)
+                    .opacity(0.4 + 0.6 * bounce(i))
             }
         }
-        .padding(.horizontal, 18).padding(.vertical, 15)
-        .background(Theme.surface)
-        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 6, bottomTrailingRadius: 18, topTrailingRadius: 18))
-        .overlay(
-            UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 6, bottomTrailingRadius: 18, topTrailingRadius: 18)
-                .stroke(Theme.border, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.06), radius: 8, y: 3)
+        .padding(.horizontal, 16).padding(.vertical, 13)
+        .background(Theme.surfaceSunk, in: shape)
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(60))
-                await MainActor.run { t += 0.12 }
+                try? await Task.sleep(for: .milliseconds(55))
+                await MainActor.run { t += 0.14 }
             }
         }
     }
     private func bounce(_ i: Int) -> Double {
-        (sin(t - Double(i) * 0.6) + 1) / 2
+        (sin(t - Double(i) * 0.7) + 1) / 2
     }
 }
 

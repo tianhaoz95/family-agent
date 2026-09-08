@@ -128,12 +128,14 @@ struct MainShell: View {
     private var menuButton: some View {
         Button { open() } label: {
             Image(systemName: "line.3.horizontal")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 42, height: 42)
+                .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+                .elevation(Theme.E.pop)
         }
-        .background(.white, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        .buttonStyle(PressScaleStyle(scale: 0.92))
         .padding(.leading, 12)
         .padding(.top, 6)
     }
@@ -228,28 +230,33 @@ private struct AppDrawer: View {
     let unread: Int
     let onSelect: (Destination) -> Void
 
+    private let clip = UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0,
+                                              bottomTrailingRadius: 28, topTrailingRadius: 28, style: .continuous)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
                 Image("Logo")
                     .resizable().scaledToFit()
-                    .frame(width: 34, height: 34)
+                    .frame(width: 36, height: 36)
                     .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                Text("Family Agent").appTitle().foregroundStyle(Theme.text)
+                    .elevation(Theme.E.sm)
+                Text("Family Agent").font(.inter(19, .semibold)).tracking(-0.4).foregroundStyle(Theme.text)
             }
-            .padding(.horizontal, 8)
-            .padding(.top, 8)
-            .padding(.bottom, 22)
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+            .padding(.bottom, 20)
 
             ScrollView {
-                VStack(spacing: 2) {
+                VStack(spacing: 3) {
                     ForEach(destinations) { d in
+                        let selected = d == selection
                         Button { onSelect(d) } label: {
-                            HStack(spacing: 12) {
+                            HStack(spacing: 13) {
                                 Image(systemName: d.systemImage)
-                                    .font(.system(size: 18))
+                                    .font(.system(size: 17, weight: selected ? .semibold : .regular))
                                     .frame(width: 24)
-                                Text(d.label).appTitleSmall()
+                                Text(d.label).font(.inter(14.5, selected ? .semibold : .medium)).tracking(-0.1)
                                 Spacer()
                                 if d == .messages && unread > 0 {
                                     Text(unread > 99 ? "99+" : "\(unread)")
@@ -258,37 +265,38 @@ private struct AppDrawer: View {
                                         .background(Theme.accent, in: Capsule())
                                 }
                             }
-                            .foregroundStyle(d == selection ? Theme.accent : Theme.text)
-                            .padding(.horizontal, 12).padding(.vertical, 11)
+                            .foregroundStyle(selected ? Theme.accent : Theme.textStrong)
+                            .padding(.horizontal, 13).padding(.vertical, 11)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                d == selection ? Theme.accentSoft : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            )
+                            .background {
+                                if selected {
+                                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                        .fill(Theme.accentSoft)
+                                        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                            .strokeBorder(Theme.accent.opacity(0.10), lineWidth: 1))
+                                }
+                            }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressScaleStyle(scale: 0.97))
                     }
                 }
+                .padding(.bottom, 8)
             }
             .scrollIndicators(.hidden)
 
-            ConnectionPill(connection: connection)
-                .padding(.top, 10)
+            ConnectionPill(connection: connection).padding(.top, 10)
         }
         .padding(.horizontal, 14)
         .padding(.top, 24)
-        .padding(.bottom, 16)
+        .padding(.bottom, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background {
-            // Glass on iOS 26, opaque surface below (no cheap blur — matches Android's call).
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(Theme.surface)
+            clip.fill(Theme.surface)
         }
-        .glass(.chrome, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .clipShape(
-            .rect(topLeadingRadius: 0, bottomLeadingRadius: 0, bottomTrailingRadius: 26, topTrailingRadius: 26)
-        )
-        .shadow(color: .black.opacity(0.18), radius: 18, x: 6, y: 0)
+        .glass(.chrome, in: clip)
+        .overlay(clip.strokeBorder(.white.opacity(0.4), lineWidth: 1))
+        .clipShape(clip)
+        .shadow(color: Color(hex: 0x2A2420).opacity(0.22), radius: 24, x: 8, y: 0)
         .ignoresSafeArea(edges: .bottom)
     }
 }
@@ -305,10 +313,11 @@ private struct ConnectionPill: View {
         }()
         HStack(spacing: 10) {
             StatusDot(color: color)
-            Text(label).appLabelSmall().foregroundStyle(Theme.textMuted).lineLimit(1)
+            Text(label).font(.inter(12.5, .medium)).foregroundStyle(Theme.textMuted).lineLimit(1)
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surfaceSunk, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Theme.surfaceSunk, in: RoundedRectangle(cornerRadius: Theme.R.md, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.R.md, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
     }
 }

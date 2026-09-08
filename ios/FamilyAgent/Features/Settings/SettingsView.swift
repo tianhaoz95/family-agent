@@ -44,7 +44,7 @@ struct SettingsView: View {
                     }
                     Spacer().frame(height: 12)
                     Button { model.signOut() } label: { Text("Sign out") }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.ghost)
 
                     Spacer().frame(height: 24)
                     Button(showAdvanced ? "Hide advanced" : "Advanced") { showAdvanced.toggle() }
@@ -59,7 +59,7 @@ struct SettingsView: View {
                         Button("Save & reconnect") {
                             model.setServerURL(serverURLDraft.isEmpty ? model.serverURL : serverURLDraft)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.primary)
                         .disabled(serverURLDraft.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }

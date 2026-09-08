@@ -9,34 +9,27 @@ struct BoardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScreenScaffold(title: "Board", subtitle: "A corkboard of sticky notes. Drag to rearrange; tap to edit.") {
-                VStack(spacing: 12) {
-                    HStack {
-                        Picker("", selection: Binding(
-                            get: { model.noteScope },
-                            set: { model.setNoteScope($0) }
-                        )) {
-                            Text("Shared").tag("shared")
-                            Text("Mine").tag("private")
-                        }
-                        .pickerStyle(.segmented)
-
+                VStack(spacing: 14) {
+                    HStack(spacing: 10) {
+                        BrandSegmented(options: [("shared", "Shared"), ("private", "Mine")],
+                                       selection: Binding(get: { model.noteScope }, set: { model.setNoteScope($0) }))
                         Button {
                             let n = model.notes.count
                             let cascade = 24 + Double(n % 6) * 24
                             model.addBlankNote(x: cascade, y: cascade) { editing = $0 }
-                        } label: { Label("Add note", systemImage: "plus") }
-                        .buttonStyle(.bordered)
+                        } label: { Label("Add", systemImage: "plus") }
+                        .buttonStyle(.ghost)
                     }
 
                     GeometryReader { geo in
                         ZStack(alignment: .topLeading) {
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            RoundedRectangle(cornerRadius: Theme.R.lg, style: .continuous)
                                 .fill(Theme.surface)
-                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.border, lineWidth: 1))
-                                .shadow(color: .black.opacity(0.06), radius: 8, y: 3)
+                                .overlay(RoundedRectangle(cornerRadius: Theme.R.lg, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+                                .elevation(Theme.E.card)
 
                             if model.notes.isEmpty {
-                                Text("Nothing pinned up yet. Tap \"Add note\".")
+                                Text("Nothing pinned up yet. Tap \u{201C}Add\u{201D}.")
                                     .appBodySmall().foregroundStyle(Theme.textMuted)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                             }

@@ -54,7 +54,7 @@ struct LoginView: View {
                     } label: {
                         Text(isSetup ? "Create account" : "Sign in").frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.primary)
                     .disabled(!canSubmit)
 
                     Button("Choose a different server") { model.backToServerPick() }

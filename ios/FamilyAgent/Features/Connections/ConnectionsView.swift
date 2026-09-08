@@ -12,7 +12,7 @@ struct ConnectionsView: View {
                     Button("Add connection") {
                         editing = McpServer(name: "", transport: "http", enabled: true)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.primary)
 
                     if let s = model.mcpStatus {
                         Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)

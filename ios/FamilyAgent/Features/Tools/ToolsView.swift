@@ -16,7 +16,7 @@ struct ToolsView: View {
                             guard !prompt.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                             model.buildTool(prompt); prompt = ""
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.primary)
                     }
                     if let s = model.toolStatus {
                         Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
@@ -53,7 +53,7 @@ struct ToolsView: View {
                                         Button { openURL = IdentURL(u) } label: {
                                             Label("Open", systemImage: "arrow.up.forward.app")
                                         }
-                                        .buttonStyle(.borderedProminent).controlSize(.small)
+                                        .buttonStyle(.primary)
                                     }
                                 }
                             }

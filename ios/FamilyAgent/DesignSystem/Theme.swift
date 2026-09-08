@@ -70,6 +70,21 @@ enum Theme {
         static let x32: CGFloat = 32
     }
 
+    // MARK: Elevation — soft, warm-tinted shadows (the atmosphere-layer float)
+    struct Shadow {
+        let color: Color
+        let radius: CGFloat
+        let y: CGFloat
+    }
+    enum E {
+        /// Resting card lift.
+        static let card = Shadow(color: Color(hex: 0x2A2420).opacity(0.07), radius: 14, y: 6)
+        /// Pressed / smaller elements.
+        static let sm = Shadow(color: Color(hex: 0x2A2420).opacity(0.06), radius: 7, y: 3)
+        /// Menus, sheets, the composer, floating buttons.
+        static let pop = Shadow(color: Color(hex: 0x2A2420).opacity(0.14), radius: 22, y: 10)
+    }
+
     // Sticky-note swatches (BoardScreen NOTE_COLORS).
     static func noteColor(_ name: String) -> Color {
         switch name {
@@ -99,9 +114,13 @@ extension Font {
 // MARK: - Text style helpers (mirror AppTypography)
 
 extension View {
-    func appHeadline() -> some View { self.font(.inter(26, .semibold)).tracking(-0.5) }
-    func appTitle() -> some View { self.font(.inter(20, .semibold)).tracking(-0.3) }
-    func appTitleSmall() -> some View { self.font(.inter(14, .semibold)) }
+    /// Apply one of the `Theme.E` elevation tokens.
+    func elevation(_ s: Theme.Shadow) -> some View {
+        self.shadow(color: s.color, radius: s.radius, x: 0, y: s.y)
+    }
+    func appHeadline() -> some View { self.font(.inter(27, .semibold)).tracking(-0.7) }
+    func appTitle() -> some View { self.font(.inter(19, .semibold)).tracking(-0.35) }
+    func appTitleSmall() -> some View { self.font(.inter(14.5, .semibold)).tracking(-0.1) }
     func appBody() -> some View { self.font(.inter(15)) }
     func appBodySmall() -> some View { self.font(.inter(13)) }
     func appLabel() -> some View { self.font(.inter(12.5, .medium)) }

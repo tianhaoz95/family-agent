@@ -33,13 +33,9 @@ struct DocumentsView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     searchField
                     if searchActive {
-                        Picker("", selection: Binding(
-                            get: { model.documentSearchMode },
-                            set: { model.setDocumentSearch(query: model.documentSearchQuery, mode: $0) }
-                        )) {
-                            ForEach(SEARCH_MODES, id: \.0) { Text($0.1).tag($0.0) }
-                        }
-                        .pickerStyle(.segmented)
+                        BrandSegmented(options: SEARCH_MODES,
+                                       selection: Binding(get: { model.documentSearchMode },
+                                                          set: { model.setDocumentSearch(query: model.documentSearchQuery, mode: $0) }))
                         if let note = searchNote {
                             Text(note).appLabelSmall().foregroundStyle(Theme.textMuted)
                         }
@@ -49,11 +45,14 @@ struct DocumentsView: View {
                         Button { showImporter = true } label: {
                             Label("Upload", systemImage: "arrow.up.doc").frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.ghost)
                         PhotosPicker(selection: $photoItem, matching: .images) {
-                            Label("Scan", systemImage: "camera").frame(maxWidth: .infinity)
+                            Label("Scan", systemImage: "camera")
+                                .font(.inter(14, .semibold)).foregroundStyle(Theme.accent)
+                                .frame(maxWidth: .infinity).padding(.vertical, 9)
+                                .background(Theme.accentSoft, in: Capsule())
+                                .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.12), lineWidth: 1))
                         }
-                        .buttonStyle(.bordered)
                     }
                     if let s = model.documentUploadStatus {
                         Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)

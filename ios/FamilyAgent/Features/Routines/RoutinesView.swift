@@ -18,7 +18,7 @@ struct RoutinesView: View {
             ScreenScaffold(title: "Routines", subtitle: "A saved instruction the assistant runs on a schedule \u{2014} a morning briefing, a bill reminder, a weekly review.") {
                 VStack(alignment: .leading, spacing: 12) {
                     Button("New routine") { editing = RoutineEditSeed(routine: nil) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.primary)
 
                     if let s = model.routineStatus {
                         Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
@@ -111,7 +111,7 @@ struct RoutineCard: View {
 
             Spacer().frame(height: 10)
             HStack {
-                Button("Run now", action: onRun).buttonStyle(.borderedProminent).controlSize(.small)
+                Button("Run now", action: onRun).buttonStyle(.primary)
                 Button("Edit", action: onEdit).font(.inter(13))
                 Button("Delete", role: .destructive, action: onDelete).font(.inter(13))
             }

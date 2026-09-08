@@ -13,33 +13,34 @@ struct TasksView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScreenScaffold(title: "Events", subtitle: "Everything the family agent is tracking for you.") {
-                VStack(spacing: 12) {
+                VStack(spacing: 14) {
                     HStack(spacing: 10) {
-                        Picker("", selection: Binding(get: { model.taskView }, set: { model.taskView = $0 })) {
-                            ForEach(views, id: \.0) { Text($0.1).tag($0.0) }
-                        }
-                        .pickerStyle(.segmented)
+                        BrandSegmented(options: views,
+                                       selection: Binding(get: { model.taskView }, set: { model.taskView = $0 }))
                         Button {
                             quickAdd = QuickAddSeed(date: model.calAnchor, minutes: nil)
                         } label: {
-                            Image(systemName: "plus").font(.system(size: 15, weight: .semibold))
-                                .frame(width: 32, height: 30)
+                            Image(systemName: "plus").font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 34)
+                                .background(Theme.accent, in: Circle())
+                                .elevation(Theme.E.sm)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(Theme.accent)
+                        .buttonStyle(.plain)
                     }
 
                     if model.taskView != "list" {
-                        HStack {
-                            Button { shift(-1) } label: { Image(systemName: "chevron.left") }
+                        HStack(spacing: 4) {
+                            Button { shift(-1) } label: { Image(systemName: "chevron.left").font(.system(size: 14, weight: .semibold)) }
                             Spacer()
                             Text(rangeLabel).appTitleSmall()
                             Spacer()
-                            Button { shift(1) } label: { Image(systemName: "chevron.right") }
+                            Button { shift(1) } label: { Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)) }
                             Button("Today") { model.calAnchor = CalendarMath.cal.startOfDay(for: .now) }
-                                .font(.inter(13, .medium))
                         }
-                        .padding(.horizontal, 4)
+                        .foregroundStyle(Theme.accent)
+                        .buttonStyle(.soft)
+                        .padding(.horizontal, 2)
                     }
 
                     Group {
@@ -131,7 +132,7 @@ struct TaskListView: View {
                     onAdd(title, due.isEmpty ? nil : due, time.isEmpty ? nil : time)
                     title = ""; due = ""; time = ""
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.primary)
             }
             HStack(spacing: 8) {
                 TextField("Due date — 2026-11-01", text: $due)

@@ -15,7 +15,7 @@ struct SkillsView: View {
                             editing = Skill(name: "", markdownBody: "")
                             creatingNew = true
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.primary)
                     }
                     if let s = model.skillStatus {
                         Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
