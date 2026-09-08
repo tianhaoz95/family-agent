@@ -132,7 +132,7 @@ private struct VaultGate: View {
             Text(blurb).appBodySmall().foregroundStyle(Theme.textMuted)
             Spacer().frame(height: 12)
             SecureField("Your account password", text: $password)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.app)
                 .textContentType(.password)
             if let statusMsg {
                 Spacer().frame(height: 6)
@@ -162,10 +162,10 @@ private struct VaultUnlockGate: View {
                 Text("Enter your recovery code and current account password. The vault re-secures under that password and you get a fresh code.")
                     .appBodySmall().foregroundStyle(Theme.textMuted)
                 Spacer().frame(height: 12)
-                TextField("Recovery code", text: $recoveryCode).textFieldStyle(.roundedBorder)
+                TextField("Recovery code", text: $recoveryCode).textFieldStyle(.app)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 Spacer().frame(height: 8)
-                SecureField("Account password", text: $password).textFieldStyle(.roundedBorder)
+                SecureField("Account password", text: $password).textFieldStyle(.app)
                 Spacer().frame(height: 12)
                 HStack {
                     Button("Recover", action: onRecover).buttonStyle(.primary)

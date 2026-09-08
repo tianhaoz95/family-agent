@@ -61,11 +61,11 @@ struct DocumentsView: View {
                     DisclosureGroup(isExpanded: $pasteExpanded) {
                         VStack(spacing: 8) {
                             TextField("Filename, e.g. electric-bill.txt", text: $pasteFilename)
-                                .textFieldStyle(.roundedBorder)
+                                .textFieldStyle(.app)
                                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                             TextField("Paste the document text here", text: $pasteText, axis: .vertical)
                                 .lineLimit(4...8)
-                                .textFieldStyle(.roundedBorder)
+                                .textFieldStyle(.app)
                             Button("Ingest") {
                                 guard !pasteFilename.isEmpty, !pasteText.isEmpty else { return }
                                 model.ingestDocument(filename: pasteFilename, text: pasteText)

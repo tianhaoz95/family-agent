@@ -43,7 +43,7 @@ struct DiscoveryView: View {
 
                     if manualOpen {
                         TextField("Server address", text: $manual)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.app)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)

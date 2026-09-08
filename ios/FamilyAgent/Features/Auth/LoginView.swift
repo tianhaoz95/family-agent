@@ -29,16 +29,16 @@ struct LoginView: View {
                         .textContentType(.username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.app)
 
                     if isSetup {
                         TextField("Your name", text: $displayName)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.app)
                     }
 
                     SecureField("Password", text: $password)
                         .textContentType(isSetup ? .newPassword : .password)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.app)
 
                     if let error, error != "SETUP" {
                         Text(error).font(.inter(14)).foregroundStyle(Theme.danger)

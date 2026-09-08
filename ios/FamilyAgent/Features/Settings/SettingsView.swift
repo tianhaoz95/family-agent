@@ -14,6 +14,7 @@ struct SettingsView: View {
                         HStack(spacing: 10) {
                             StatusDot(color: connectionColor)
                             Text(connectionLabel).appBody()
+                            Spacer(minLength: 0)
                         }
                     }
 
@@ -48,11 +49,11 @@ struct SettingsView: View {
 
                     Spacer().frame(height: 24)
                     Button(showAdvanced ? "Hide advanced" : "Advanced") { showAdvanced.toggle() }
-                        .font(.inter(14, .medium))
+                        .buttonStyle(.soft)
                     if showAdvanced {
                         section("Server address")
                         TextField("http://192.168.1.2:4173", text: $serverURLDraft)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.app)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         Spacer().frame(height: 10)

@@ -11,7 +11,7 @@ struct ToolsView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 8) {
                         TextField("e.g. split our vacation budget 4 ways", text: $prompt)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.app)
                         Button("Build") {
                             guard !prompt.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                             model.buildTool(prompt); prompt = ""

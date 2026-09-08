@@ -10,11 +10,13 @@ struct MessagesView: View {
             ScreenScaffold(title: "Messages",
                            subtitle: "Chat with the family. Type @agent to pull in the assistant.") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Button { composing.toggle() } label: {
-                        Label("New conversation", systemImage: "plus")
-                            .frame(maxWidth: .infinity)
+                    if composing {
+                        Button { composing = false } label: { Label("Cancel", systemImage: "xmark") }
+                            .buttonStyle(.ghost)
+                    } else {
+                        Button { composing = true } label: { Label("New conversation", systemImage: "plus") }
+                            .buttonStyle(.primary)
                     }
-                    .buttonStyle(.primary)
 
                     if composing {
                         NewConversationForm(
@@ -93,7 +95,7 @@ struct NewConversationForm: View {
             }
             if picked.count > 1 {
                 Spacer().frame(height: 8)
-                TextField("Group name", text: $groupName).textFieldStyle(.roundedBorder)
+                TextField("Group name", text: $groupName).textFieldStyle(.app)
             }
             Spacer().frame(height: 12)
             HStack(spacing: 8) {

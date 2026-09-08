@@ -59,6 +59,24 @@ extension ButtonStyle where Self == SoftButtonStyle {
     static func soft(_ tint: Color) -> SoftButtonStyle { .init(tint: tint) }
 }
 
+// MARK: - Text field style (warm paper, not the iOS grey inset)
+
+struct AppFieldStyle: TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View {
+        configuration
+            .font(.inter(15))
+            .tint(Theme.accent)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.R.md, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.R.md, style: .continuous)
+                .strokeBorder(Theme.border, lineWidth: 1))
+    }
+}
+
+extension TextFieldStyle where Self == AppFieldStyle {
+    static var app: AppFieldStyle { .init() }
+}
+
 // MARK: - Brand segmented control (warm paper, not the iOS grey)
 
 struct BrandSegmented<Tag: Hashable>: View {

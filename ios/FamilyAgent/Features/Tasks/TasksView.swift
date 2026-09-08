@@ -126,7 +126,7 @@ struct TaskListView: View {
             // Inline add (matches Android's list view — no sheet).
             HStack(spacing: 8) {
                 TextField("New event", text: $title)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.app)
                 Button("Add") {
                     guard !title.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                     onAdd(title, due.isEmpty ? nil : due, time.isEmpty ? nil : time)
@@ -136,10 +136,10 @@ struct TaskListView: View {
             }
             HStack(spacing: 8) {
                 TextField("Due date — 2026-11-01", text: $due)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.app)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 TextField("14:30", text: $time)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.app)
                     .frame(width: 100)
             }
             Spacer().frame(height: 8)
