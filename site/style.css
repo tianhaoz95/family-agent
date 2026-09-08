@@ -1,19 +1,22 @@
 /* Family Agent — site styles.
    Palette and type are the app's own (DESIGN.md / Theme.swift): warm paper
-   canvas, one blue accent, Inter with Source Serif for the editorial voice. */
+   canvas, one blue accent used sparingly, Inter with Source Serif as the
+   editorial voice. The page should feel like the product. */
 
 :root {
   --paper: #f6f5f4;
   --surface: #fcfbfa;
   --sunk: #f1efee;
   --ink: #1e1b18;
-  --ink-soft: rgba(30, 27, 24, 0.58);
+  --ink-soft: rgba(30, 27, 24, 0.56);
   --body: #615d59;
   --accent: #0075de;
   --accent-ink: #00457f;
   --accent-soft: #e6f3fe;
-  --rule: rgba(42, 36, 32, 0.13);
-  --shadow: rgba(42, 36, 32, 0.09);
+  --rule: rgba(42, 36, 32, 0.12);
+  --shadow-sm: rgba(42, 36, 32, 0.07);
+  --shadow-lg: rgba(42, 36, 32, 0.17);
+  --bezel: #2b2724;
   --bloom-sky: rgba(96, 168, 236, 0.18);
   --bloom-peach: rgba(255, 178, 90, 0.15);
   --bloom-lilac: rgba(140, 124, 230, 0.13);
@@ -26,13 +29,15 @@
     --surface: #211d19;
     --sunk: #17140f;
     --ink: #f2efe9;
-    --ink-soft: rgba(242, 239, 233, 0.56);
+    --ink-soft: rgba(242, 239, 233, 0.54);
     --body: #a8a199;
     --accent: #4fa3f0;
     --accent-ink: #8fc5f5;
     --accent-soft: rgba(79, 163, 240, 0.14);
     --rule: rgba(242, 239, 233, 0.14);
-    --shadow: rgba(0, 0, 0, 0.45);
+    --shadow-sm: rgba(0, 0, 0, 0.4);
+    --shadow-lg: rgba(0, 0, 0, 0.55);
+    --bezel: #080706;
     --bloom-sky: rgba(96, 168, 236, 0.13);
     --bloom-peach: rgba(255, 178, 90, 0.09);
     --bloom-lilac: rgba(140, 124, 230, 0.11);
@@ -41,12 +46,11 @@
 }
 
 * { box-sizing: border-box; }
-
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 
 body {
   margin: 0;
-  min-height: 100vh;
   background: var(--paper);
   color: var(--ink);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -55,7 +59,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* The app's atmosphere: colour pooling at the edges, paper in the middle. */
+/* The app's own atmosphere: colour pools at the edges, paper in the middle. */
 body::before {
   content: "";
   position: fixed;
@@ -63,19 +67,15 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(34vmax 34vmax at 12% 6%, var(--bloom-sky), transparent 60%),
-    radial-gradient(38vmax 38vmax at 92% 14%, var(--bloom-peach), transparent 60%),
-    radial-gradient(40vmax 40vmax at 78% 96%, var(--bloom-lilac), transparent 58%),
-    radial-gradient(32vmax 32vmax at 4% 88%, var(--bloom-mint), transparent 60%);
+    radial-gradient(34vmax 34vmax at 12% 4%, var(--bloom-sky), transparent 60%),
+    radial-gradient(38vmax 38vmax at 94% 12%, var(--bloom-peach), transparent 60%),
+    radial-gradient(40vmax 40vmax at 80% 96%, var(--bloom-lilac), transparent 58%),
+    radial-gradient(32vmax 32vmax at 2% 86%, var(--bloom-mint), transparent 60%);
 }
 
-.wrap {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 30px 26px 90px;
-}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
 
-/* ---------- masthead ---------- */
+/* ---------------------------------------------------------------- chrome */
 
 .top {
   display: flex;
@@ -83,7 +83,7 @@ body::before {
   justify-content: space-between;
   gap: 18px;
   flex-wrap: wrap;
-  padding-bottom: 56px;
+  padding: 26px 0 0;
 }
 
 .brand {
@@ -98,115 +98,188 @@ body::before {
 }
 .brand img { width: 30px; height: 30px; border-radius: 9px; }
 
-.top nav { display: flex; gap: 22px; font-size: 14.5px; }
+.top nav { display: flex; gap: 24px; font-size: 14.5px; }
 .top nav a { color: var(--body); text-decoration: none; }
 .top nav a:hover { color: var(--accent-ink); }
 
-/* ---------- hero ---------- */
+/* ------------------------------------------------------------------ hero */
 
-.hero { max-width: 34ch; }
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr);
+  gap: 56px;
+  align-items: center;
+  padding: 76px 0 96px;
+}
 
 h1 {
-  margin: 0 0 18px;
-  font-size: clamp(38px, 6.5vw, 60px);
+  margin: 0 0 20px;
+  font-size: clamp(38px, 5.4vw, 58px);
   font-weight: 700;
-  letter-spacing: -0.038em;
-  line-height: 1.03;
+  letter-spacing: -0.04em;
+  line-height: 1.02;
   text-wrap: balance;
 }
 
-.lede {
-  margin: 0 0 12px;
-  max-width: 56ch;
+.hero .lede {
+  margin: 0 0 14px;
+  max-width: 46ch;
   font-family: "Source Serif 4", Georgia, serif;
-  font-size: 20px;
+  font-size: 20.5px;
   line-height: 1.5;
   color: var(--body);
 }
+.hero .note { margin: 0; max-width: 46ch; font-size: 15px; color: var(--ink-soft); }
 
-.hero-note {
-  margin: 0;
-  max-width: 56ch;
-  font-size: 15px;
-  color: var(--ink-soft);
-}
-
-.cta {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 30px;
-}
+.cta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 32px; }
 
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 11px 20px;
+  padding: 11px 21px;
   border-radius: 999px;
   font-size: 15px;
   font-weight: 600;
   text-decoration: none;
   border: 1px solid transparent;
-  transition: transform 140ms ease, background 140ms ease;
+  transition: transform 130ms ease;
 }
 .btn:active { transform: scale(0.98); }
-.btn-primary { background: var(--accent); color: #fff; box-shadow: 0 6px 16px var(--shadow); }
+.btn-primary { background: var(--accent); color: #fff; box-shadow: 0 7px 18px var(--shadow-sm); }
 .btn-ghost { background: var(--accent-soft); color: var(--accent-ink); border-color: rgba(0, 69, 127, 0.1); }
 
-/* ---------- sections ---------- */
+/* ---------------------------------------------------------------- device */
+/* A real bezel, not a screenshot with a radius bolted on. The screens are
+   1206x2622 (ratio 2.174), so 13% of width equals 6% of height — which makes
+   `13% / 6%` a circular corner at whatever size the frame ends up. */
 
-section { padding-top: 76px; }
+.device {
+  background: var(--bezel);
+  padding: 2.1%;
+  border-radius: 12.4% / 5.7%;
+  box-shadow: 0 22px 50px var(--shadow-lg), 0 3px 10px var(--shadow-sm);
+  /* the faint highlight along the top edge of a real handset */
+  background-image: linear-gradient(160deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 42%);
+}
+.device img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 11.6% / 5.34%;
+}
+.hero .device { max-width: 330px; margin-inline: auto; }
+
+/* -------------------------------------------------------------- sections */
+
+section { padding: 78px 0; border-top: 1px solid var(--rule); }
+
+.eyebrow {
+  margin: 0 0 14px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
 
 h2 {
-  margin: 0 0 26px;
+  margin: 0 0 16px;
+  font-size: clamp(26px, 3.4vw, 34px);
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  line-height: 1.12;
+  text-wrap: balance;
+  max-width: 22ch;
+}
+
+.section-lede {
+  margin: 0 0 46px;
+  max-width: 58ch;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 18.5px;
+  line-height: 1.52;
+  color: var(--body);
+}
+
+/* features */
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 40px 44px;
+}
+.features h3 {
+  margin: 0 0 7px;
+  padding-top: 15px;
+  border-top: 2px solid var(--ink);
+  font-size: 16.5px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.features p { margin: 0; font-size: 14.5px; color: var(--body); }
+
+/* the privacy thesis — the one place the page raises its voice */
+
+.thesis { text-align: center; }
+.thesis h2 { margin-inline: auto; max-width: 20ch; }
+.thesis .section-lede { margin-inline: auto; text-align: center; }
+.claims {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 30px 40px;
+  margin-top: 8px;
+  text-align: left;
+}
+.claim {
+  padding: 22px 24px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  box-shadow: 0 8px 20px var(--shadow-sm);
+}
+.claim h3 { margin: 0 0 6px; font-size: 15.5px; font-weight: 600; }
+.claim p { margin: 0; font-size: 14px; color: var(--body); }
+
+/* screenshot row */
+
+.screens {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 40px 30px;
+}
+.screens figure { margin: 0; }
+.screens figcaption {
+  margin-top: 16px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--body);
+}
+.screens figcaption b { display: block; color: var(--ink); font-weight: 600; font-size: 14.5px; }
+
+/* requirements */
+
+.reqs { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 34px 44px; }
+.reqs h3 { margin: 0 0 6px; font-size: 15.5px; font-weight: 600; }
+.reqs p { margin: 0; font-size: 14.5px; color: var(--body); }
+
+/* closing call */
+
+.closing { text-align: center; }
+.closing .cta { justify-content: center; }
+.closing p.small { margin: 18px 0 0; font-size: 13.5px; color: var(--ink-soft); }
+
+/* ----------------------------------------------------------- prose pages */
+
+.prose { max-width: 68ch; padding: 56px 0 0; }
+.prose h1 { font-size: clamp(30px, 5vw, 40px); margin-bottom: 10px; }
+.prose h2 {
+  margin: 44px 0 12px;
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-soft);
-  padding-bottom: 11px;
-  border-bottom: 1px solid var(--rule);
-}
-
-h3 { margin: 0 0 6px; font-size: 16.5px; font-weight: 600; letter-spacing: -0.012em; }
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(238px, 1fr));
-  gap: 30px 34px;
-}
-.grid p { margin: 0; font-size: 14.5px; color: var(--body); }
-
-/* ---------- shots ---------- */
-
-.shots {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
-  gap: 26px 22px;
-}
-.shot figure { margin: 0; }
-.shot img {
-  display: block;
-  width: 100%;
-  border-radius: 18px;
-  border: 1px solid var(--rule);
-  box-shadow: 0 8px 22px var(--shadow);
-  background: var(--surface);
-}
-.shot figcaption {
-  margin-top: 10px;
-  font-size: 13px;
-  color: var(--body);
-}
-
-/* ---------- prose pages ---------- */
-
-.prose { max-width: 68ch; }
-.prose h1 { font-size: clamp(30px, 5vw, 40px); margin-bottom: 10px; }
-.prose h2 {
-  margin-top: 42px;
-  font-size: 13px;
+  max-width: none;
 }
 .prose p, .prose li { color: var(--body); font-size: 15.5px; }
 .prose strong { color: var(--ink); font-weight: 600; }
@@ -220,14 +293,13 @@ h3 { margin: 0 0 6px; font-size: 16.5px; font-weight: 600; letter-spacing: -0.01
 }
 .updated { font-size: 13.5px; color: var(--ink-soft); }
 
-/* ---------- footer ---------- */
+/* ---------------------------------------------------------------- footer */
 
 footer {
-  margin-top: 84px;
-  padding-top: 22px;
   border-top: 1px solid var(--rule);
+  padding: 26px 0 60px;
   display: flex;
-  gap: 20px;
+  gap: 22px;
   flex-wrap: wrap;
   font-size: 13.5px;
   color: var(--ink-soft);
@@ -235,12 +307,19 @@ footer {
 footer a { color: var(--body); text-decoration: none; }
 footer a:hover { color: var(--accent-ink); }
 
-a:focus-visible, .btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: 6px;
+a:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+
+/* --------------------------------------------------------------- narrow */
+
+@media (max-width: 860px) {
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 46px;
+    padding: 52px 0 66px;
+    text-align: left;
+  }
+  .hero .device { max-width: 270px; }
+  section { padding: 60px 0; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; }
-}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

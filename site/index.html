@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Family Agent — a household assistant that runs on your own machine</title>
-<meta name="description" content="A local-first assistant for a family's documents, schedule and tasks. Runs on your own laptop, talks to a local model, and never sends your family's data to a cloud API.">
+<meta name="description" content="A local-first assistant for a family's documents, schedule and tasks. It runs on a laptop in your house, thinks with a model on that same laptop, and never sends your family's data to a cloud API.">
 <meta property="og:title" content="Family Agent">
 <meta property="og:description" content="A household assistant that runs on your own machine. Nothing leaves the house.">
 <meta property="og:type" content="website">
@@ -15,123 +15,155 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="wrap">
 
+<div class="wrap">
   <header class="top">
     <a class="brand" href="./"><img src="img/logo.png" alt="">Family Agent</a>
     <nav>
-      <a href="#what">What it does</a>
-      <a href="#privacy-summary">Privacy</a>
+      <a href="#does">What it does</a>
+      <a href="#privacy">Privacy</a>
       <a href="support.html">Support</a>
       <a href="https://github.com/tianhaoz95/family-agent">GitHub</a>
     </nav>
   </header>
 
   <div class="hero">
-    <h1>A household assistant that runs on your own machine.</h1>
+    <div>
+      <h1>The family assistant that never leaves the house.</h1>
+      <p class="lede">
+        Family Agent keeps track of your household's documents, schedule and
+        tasks — on a laptop in your home, thinking with a model on that same
+        laptop.
+      </p>
+      <p class="note">
+        There's no account to create and no service to trust, because the
+        server is yours.
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/tianhaoz95/family-agent/releases/latest">Download for macOS</a>
+        <a class="btn btn-ghost" href="https://github.com/tianhaoz95/family-agent">Read the source</a>
+      </div>
+    </div>
+    <div class="device">
+      <img src="img/chat-reply.jpg" width="880" height="1913" alt="A chat reply listing the week's events, with the two tool calls that produced it shown underneath">
+    </div>
   </div>
-  <p class="lede">
-    Family Agent keeps track of your family's documents, schedule and tasks — and
-    it does it on a laptop in your house, talking to a model running on that same
-    laptop.
-  </p>
-  <p class="hero-note">
-    Not a cloud service with a privacy policy you have to trust. There is no
-    server to sign up for, because the server is yours.
-  </p>
+</div>
 
-  <div class="cta">
-    <a class="btn btn-primary" href="https://github.com/tianhaoz95/family-agent/releases/latest">Download for macOS</a>
-    <a class="btn btn-ghost" href="https://github.com/tianhaoz95/family-agent">Read the source</a>
-  </div>
+<div class="wrap">
 
-  <section id="what">
-    <h2>What it does</h2>
-    <div class="grid">
+  <section id="does">
+    <p class="eyebrow">What it does</p>
+    <h2>Ask in plain language. It does the filing.</h2>
+    <p class="section-lede">
+      Everything below runs against a model on your own hardware — so it is as
+      fast as your machine, and as private as your machine.
+    </p>
+    <div class="features">
       <div>
-        <h3>Understands your paperwork</h3>
-        <p>Drop a bill, a school letter or a photo of a form into a watched folder. It reads it — text layer, or OCR for scans — pulls out the dates and amounts, and files it where you can search for it later by meaning, not just by filename.</p>
+        <h3>Reads your paperwork</h3>
+        <p>Drop a bill, a school letter or a photo of a form into a watched folder. It reads it — text layer, or OCR for a scan — pulls out the dates and amounts, and files it where you can find it later by meaning, not just by filename.</p>
       </div>
       <div>
-        <h3>Keeps the family calendar</h3>
-        <p>Ask for something in plain language and it becomes an event. List, day, three-day, week and month views, and a shared sticky board for the things that aren't really events.</p>
+        <h3>Keeps the calendar</h3>
+        <p>Mention something in passing and it becomes an event. List, day, three-day, week and month views, plus a shared sticky board for the things that aren't really events.</p>
       </div>
       <div>
-        <h3>One account per person</h3>
-        <p>Everyone's documents, tasks and chats stay their own. What's shared is shared deliberately: the family board, group chats, and a vault you can open to the household.</p>
+        <h3>One account each</h3>
+        <p>Everyone's documents, tasks and chats stay their own. What's shared is shared on purpose: the family board, group threads, and a vault you can open to the household.</p>
       </div>
       <div>
         <h3>Runs errands on a schedule</h3>
-        <p>A morning briefing, a bill nudge, a weekly review. Routines are saved instructions the assistant runs on its own and reports back on.</p>
+        <p>A morning briefing, a bill nudge, a Sunday review. Routines are saved instructions the assistant carries out on its own and reports back on.</p>
       </div>
       <div>
         <h3>Builds small tools</h3>
-        <p>Ask for a chore chart or a trip budget splitter and it writes one — a small web tool, generated and served locally, that you can keep and improve by asking.</p>
+        <p>Ask for a chore chart or a trip budget splitter and it writes one — a small web tool, generated and served locally, that you keep and improve just by asking.</p>
       </div>
       <div>
-        <h3>Remembers your passwords</h3>
-        <p>An encrypted vault for logins and two-factor codes. Only the secret is encrypted, so the list still works locked, and a stolen database gives up nothing.</p>
+        <h3>Holds your passwords</h3>
+        <p>An encrypted vault for logins and two-factor codes. Only the secret itself is encrypted, so the list still works while locked, and a stolen database gives up nothing.</p>
       </div>
     </div>
   </section>
 
-  <section id="shots">
-    <h2>On your phone</h2>
-    <div class="shots">
-      <div class="shot"><figure>
-        <img src="img/15-chat-reply.jpg" alt="A chat reply listing the week's events, with the tool calls that produced it" loading="lazy" width="900" height="1957">
-        <figcaption>Ask a question; see exactly which tools answered it.</figcaption>
-      </figure></div>
-      <div class="shot"><figure>
-        <img src="img/03-events.jpg" alt="A week calendar view with several events" loading="lazy" width="900" height="1957">
-        <figcaption>The week, from things you asked for in passing.</figcaption>
-      </figure></div>
-      <div class="shot"><figure>
-        <img src="img/05-documents.jpg" alt="The documents screen with search and one filed document" loading="lazy" width="900" height="1957">
-        <figcaption>Documents, searchable by meaning as well as words.</figcaption>
-      </figure></div>
-      <div class="shot"><figure>
-        <img src="img/01-chat.jpg" alt="The chat screen ready for a new conversation" loading="lazy" width="900" height="1957">
-        <figcaption>Native apps for iOS and Android; a desktop app runs the server.</figcaption>
-      </figure></div>
-    </div>
-  </section>
-
-  <section id="privacy-summary">
-    <h2>Where your data goes</h2>
-    <div class="grid">
-      <div>
-        <h3>Nowhere, by default</h3>
-        <p>Documents, chats, photos and voice clips go to the machine in your house and stop there. Inference runs against a local model. The developer has no access to any of it and there is no analytics of any kind.</p>
+  <section id="privacy" class="thesis">
+    <p class="eyebrow">Where your data goes</p>
+    <h2>Nowhere.</h2>
+    <p class="section-lede">
+      Not "anonymised". Not "never sold". Your documents and conversations go to
+      the machine in your house and stop there — and you can read the code that
+      makes that true.
+    </p>
+    <div class="claims">
+      <div class="claim">
+        <h3>No cloud model</h3>
+        <p>Replies come from a model running on your own hardware through Ollama. No prompt, document or photo ever reaches a hosted AI API.</p>
       </div>
-      <div>
+      <div class="claim">
+        <h3>No analytics, no accounts</h3>
+        <p>There is no telemetry, no advertising identifier and no third-party SDK. There is also no account with us — the only server involved is the one you installed.</p>
+      </div>
+      <div class="claim">
         <h3>Two exceptions, both off</h3>
-        <p>Web search and command-line file processing can reach past your machine. Both are off unless an operator turns them on with an environment variable, and both are documented in full.</p>
-      </div>
-      <div>
-        <h3>You can read all of it</h3>
-        <p>The whole thing is MIT-licensed and on GitHub, including the reasoning behind every non-obvious decision. Nothing about how your data is handled is something you have to take on faith.</p>
+        <p>Web search and command-line file processing can reach past your machine. Each is off unless an operator deliberately switches it on, and each is documented in full.</p>
       </div>
     </div>
-    <p style="margin-top:26px"><a href="privacy.html">Full privacy policy →</a></p>
+  </section>
+
+  <section id="screens">
+    <p class="eyebrow">On your phone</p>
+    <h2>Native apps, not a wrapped web page.</h2>
+    <p class="section-lede">
+      The desktop app hosts the server. iPhone and Android apps find it on your
+      network and behave the way their platforms expect.
+    </p>
+    <div class="screens">
+      <figure>
+        <div class="device"><img src="img/events.jpg" width="880" height="1913" alt="A week calendar with several events" loading="lazy"></div>
+        <figcaption><b>Events</b>Day, week and month, built from things you asked for in passing.</figcaption>
+      </figure>
+      <figure>
+        <div class="device"><img src="img/documents.jpg" width="880" height="1913" alt="The documents screen with a search field and a filed document" loading="lazy"></div>
+        <figcaption><b>Documents</b>Searchable by meaning as well as by words.</figcaption>
+      </figure>
+      <figure>
+        <div class="device"><img src="img/board.jpg" width="880" height="1913" alt="A shared sticky note board" loading="lazy"></div>
+        <figcaption><b>Board</b>The shared notes that never quite become tasks.</figcaption>
+      </figure>
+      <figure>
+        <div class="device"><img src="img/vault.jpg" width="880" height="1913" alt="The vault listing shared and private entries" loading="lazy"></div>
+        <figcaption><b>Vault</b>Passwords and two-factor codes, encrypted at rest.</figcaption>
+      </figure>
+    </div>
   </section>
 
   <section id="requirements">
-    <h2>What you need</h2>
-    <div class="grid">
+    <p class="eyebrow">What you need</p>
+    <h2>One machine at home, usually switched on.</h2>
+    <div class="reqs">
       <div>
-        <h3>A Mac to run it on</h3>
-        <p>macOS 12 or later, Apple Silicon. This machine hosts the server, so it should be one that's usually on and at home.</p>
+        <h3>A Mac to host it</h3>
+        <p>macOS 12 or later on Apple Silicon. This is the machine that runs the server, so pick the one that stays home.</p>
       </div>
       <div>
-        <h3>Ollama, with a model</h3>
-        <p>The assistant thinks with a model you pull yourself. It must support tool calling — that's a property of the model, not of this app.</p>
+        <h3>Ollama, and a model</h3>
+        <p>The assistant thinks with a model you pull yourself. It has to support tool calling — that's a property of the model, not of this app.</p>
       </div>
       <div>
         <h3>Phones on the same network</h3>
-        <p>The iOS and Android apps find the server over the local network, or you can point them at it by address.</p>
+        <p>The iOS and Android apps discover the server over your local network, or you can point them straight at its address.</p>
       </div>
     </div>
+  </section>
+
+  <section class="closing">
+    <h2 style="margin-inline:auto">Free, MIT licensed, and yours to read.</h2>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/tianhaoz95/family-agent/releases/latest">Download for macOS</a>
+      <a class="btn btn-ghost" href="https://github.com/tianhaoz95/family-agent">Browse the source</a>
+    </div>
+    <p class="small">Including the reasoning behind every non-obvious decision, written down as it was made.</p>
   </section>
 
   <footer>
