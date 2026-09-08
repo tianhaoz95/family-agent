@@ -278,6 +278,13 @@ spctl -a -vvv -t exec "$APP" 2>&1 | sed 's/^/    /' || true
 # to everybody on the next update. Rebuilding it last is the whole point.
 
 echo "==> building the updater artifact from the signed app"
+# `tauri build` also emits an updater tarball, during bundling — i.e. from the
+# UNSIGNED app, before any of the work above. Shipping that one would push an
+# unsigned app to every installed copy. Delete it so there is only ever one
+# candidate to attach to a release.
+for stale in "$BUNDLE_DIR/macos/Family Agent.app.tar.gz" "$BUNDLE_DIR/macos/Family Agent.app.tar.gz.sig"; do
+  [ -f "$stale" ] && { rm -f "$stale"; echo "    discarded the pre-signing tarball tauri build left in macos/"; }
+done
 UPDATER_DIR="$BUNDLE_DIR/updater"
 mkdir -p "$UPDATER_DIR"
 TARBALL="$UPDATER_DIR/Family Agent.app.tar.gz"

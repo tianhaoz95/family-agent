@@ -215,14 +215,34 @@ X.Y.Z` to bump it as part of the release; the updater compares against it, so an
 unbumped version means installed copies are never offered the update. The script
 also refuses to run if the tag already exists on the remote.
 
-### The updater key, and a variable that bites
+### The updater key, and a variable that bites twice
 
 `TAURI_SIGNING_PRIVATE_KEY` holds the key's **contents**;
-`TAURI_SIGNING_PRIVATE_KEY_PATH` holds a **path** to it. Putting a path in the
-first one fails with `failed to decode base64 secret key` — and it fails at the
-*end* of a twenty-minute build, right after notarization. Preflight now signs a
-throwaway file with the key rather than just checking one exists, so this is
-caught in a second.
+`TAURI_SIGNING_PRIVATE_KEY_PATH` holds a **path** to it. Two different failures
+come out of confusing them:
+
+- A path in the contents variable → `failed to decode base64 secret key`, at the
+  *end* of the build, right after notarization has been paid for.
+- Only `_PATH` set when running `tauri build` → **`A public key has been found,
+  but no private key`**. `tauri build` reads only `TAURI_SIGNING_PRIVATE_KEY`; it
+  does not fall back to `_PATH`. This one costs the whole compile.
+
+`release-mac.sh` resolves the key to its contents once, before anything runs, so
+both the build and the later signing inherit a form they accept. If you build by
+hand, export it yourself:
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/family-agent-updater.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+```
+
+Preflight signs a throwaway file with the configured key rather than checking a
+file exists, so a bad setup surfaces in a second instead of twenty minutes.
+
+One consequence of `createUpdaterArtifacts: true`: `tauri build` emits its own
+updater tarball during bundling — from the **unsigned** app, before any signing.
+`sign-desktop.sh` deletes it, so the only tarball left to attach is the one built
+from the signed and stapled app.
 
 ## Known gaps
 

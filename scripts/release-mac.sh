@@ -102,6 +102,15 @@ else
 fi
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
+# `tauri build` insists on TAURI_SIGNING_PRIVATE_KEY specifically — it will not
+# read _PATH, and fails with "A public key has been found, but no private key"
+# after the compile has already happened. So resolve the key to its contents
+# once, here, and let everything downstream inherit it.
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  TAURI_SIGNING_PRIVATE_KEY="$(cat "$TAURI_SIGNING_PRIVATE_KEY_PATH")"
+  export TAURI_SIGNING_PRIVATE_KEY
+fi
+
 # Actually sign something. "The file exists" proves nothing — it did not catch a
 # real case of the path being passed in the contents variable, which only fails
 # at the very end of a twenty-minute build.
