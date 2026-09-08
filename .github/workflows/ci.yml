@@ -28,9 +28,25 @@ jobs:
 
   ios:
     name: iOS build
-    runs-on: macos-15
+    # Needs Xcode 26. DesignSystem/Glass.swift calls glassEffect,
+    # buttonStyle(.glass) and GlassEffectContainer — `#available(iOS 26, *)`
+    # gates them at runtime, but the symbols still have to exist at compile
+    # time, so an older SDK fails with a wall of "cannot find in scope".
+    # macos-15 ships Xcode 16 / the iOS 18 SDK and cannot build this.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check the toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep iphonesimulator || true
+          # Fail loudly and specifically if the image ever moves off Xcode 26.
+          if ! xcodebuild -showsdks | grep -qE 'iphonesimulator(2[6-9]|[3-9][0-9])'; then
+            echo "::error::need the iOS 26 SDK or newer for the Liquid Glass APIs in Glass.swift"
+            exit 1
+          fi
+
       - name: Build for the simulator
         run: |
           set -o pipefail
