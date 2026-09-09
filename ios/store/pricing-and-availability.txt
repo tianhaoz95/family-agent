@@ -1,0 +1,40 @@
+PRICING AND AVAILABILITY
+(App Store Connect → your app → "Pricing and Availability")
+
+  Price:                 Free (price tier 0 / "USD 0.00")
+  In-app purchases:      None
+  Subscriptions:         None
+
+  Availability:          All countries and regions
+                         (nothing in the app is region-specific; it talks only
+                         to a server the user runs. You may still want to
+                         exclude regions you don't want to deal with legally —
+                         optional.)
+
+  Pre-orders:            No
+
+  Distribution methods:  Public App Store  (leave "Make app available on the
+                         Apple Vintage/Custom apps" off unless you specifically
+                         want private distribution)
+
+  App Store Connect / volume purchase for business or education: leave default.
+
+CONTENT RIGHTS
+(App Store Connect → your app → "App Information" → "Content Rights")
+
+  "Does your app contain, show, or access third-party content?"
+      NO.
+  All UI, copy, icon and fonts are the developer's own or open-licensed and
+  bundled (Inter, Source Serif 4 — SIL OFL). Any documents/photos shown at
+  runtime belong to the user and live on the user's server.
+
+ACCOUNT DELETION
+(App Store Connect → "App Information", and Guideline 5.1.1(v))
+
+  The app must point users to how they delete their account. Since accounts
+  live on the self-hosted server, the in-app path is: Settings screen explains
+  that an admin removes an account on the server (Users and Access on the
+  desktop app), and deleting the server's data directory erases everything.
+  Confirm the Settings screen actually says this before submitting; if not,
+  add a line. The privacy policy already covers it
+  ("Deleting your data" section).

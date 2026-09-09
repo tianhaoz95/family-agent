@@ -1,0 +1,14 @@
+household,organizer,planner,documents,calendar,tasks,private,selfhosted,offline,assistant,vault
+
+--
+App Store Connect limit: 100 characters including the commas. The line above is
+95. The previous list (family,household,organizer,documents,calendar,tasks,
+private,local,offline,selfhosted,assistant,notes,vault) was 106 and would have
+been rejected.
+
+Dropped to fit: "family" (already indexed from the app name "Family Agent" — do
+not repeat words from the name), "local" (kept "offline"), "notes" (kept
+"organizer" / "planner").
+
+Do not put spaces after the commas — they count and they waste the budget.
+Only the first line is the field value.

@@ -1,0 +1,52 @@
+AGE RATING QUESTIONNAIRE
+(App Store Connect → your app → the version → "Age Rating" → Edit)
+
+Answer every content category: NONE / NO. The app has no violence, no sexual
+content, no profanity, no drugs/alcohol/tobacco references, no gambling, no
+horror, no mature themes.
+
+Specific questions and answers:
+
+  Cartoon or Fantasy Violence ............................ None
+  Realistic Violence .................................... None
+  Prolonged / graphic / sadistic violence .............. None
+  Sexual Content or Nudity ............................. None
+  Profanity or Crude Humor ............................ None
+  Alcohol, Tobacco, or Drug Use or References ......... None
+  Mature / Suggestive Themes ......................... None
+  Horror / Fear Themes .............................. None
+  Medical / Treatment Information ................... None
+  Gambling (simulated) ............................. None
+
+  Unrestricted Web Access .......................... NO
+    (No in-app browser. The optional web-search capability is a server-side
+    admin switch, off by default, and only the assistant reads pages — the
+    user is never handed an open browser.)
+
+  Gambling and Contests ........................... NO
+
+  ----------------------------------------------------------------------------
+  User-Generated Content / does the app include messaging or user-to-user
+  interaction? .................................... YES  (see note)
+  ----------------------------------------------------------------------------
+  The app has family messaging (1:1 and group channels) and a shared note
+  board. This is a CLOSED group: every participant is an account on one
+  household's self-hosted server, created by that household's admin. There is
+  no public feed, no discovery of strangers, no way for an outside user to
+  reach a household's server or content.
+
+  Apple may still expect UGC safeguards (Guideline 1.2): a way to report
+  content, block a user, and a published point of contact. TODAY THE APP HAS
+  NONE OF THESE. Before a public submission, either:
+    (a) add in-app report/block + a moderation contact, or
+    (b) ship messaging as a later update and submit 1.0 without the Messages
+        tab, or
+    (c) go the TestFlight-internal route (../RELEASE.md), where this is not
+        evaluated.
+  This is the single most likely public-review rejection. Flagged in
+  SUBMISSION.md → "Known blockers".
+
+Expected resulting rating: 4+ (with the UGC caveat above resolved).
+
+Made for Kids: NO. Do not enrol in the Kids Category — it forbids the kind of
+open-ended assistant and external-server model this app is built on.

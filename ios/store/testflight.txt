@@ -1,0 +1,49 @@
+TESTFLIGHT
+(App Store Connect → your app → TestFlight)
+
+../RELEASE.md recommends this route over a public listing: internal testing needs
+no App Review, so the "reviewer can't reach a server" problem never comes up.
+
+--------------------------------------------------------------------------------
+TEST INFORMATION  (TestFlight → "Test Information", app-level)
+--------------------------------------------------------------------------------
+  Beta App Description:
+      Family Agent is the iPhone companion to a home server you run on your own
+      Mac (the free Family Agent desktop app). It finds that server on your
+      Wi-Fi and gives everyone in the household chat, a calendar, document
+      filing, messaging, routines and an encrypted vault. Nothing is sent to a
+      cloud service.
+
+  Feedback Email:            jacksonzhou666@gmail.com
+  Marketing URL:             https://tianhaoz95.github.io/family-agent/
+  Privacy Policy URL:        https://tianhaoz95.github.io/family-agent/privacy.html
+
+  Beta App Review Information (only needed for EXTERNAL testers, not internal):
+      Contact: <your name / phone> / jacksonzhou666@gmail.com
+      Demo account: same hosted-server requirement as a public submission —
+      see app-review-information.txt item 2.
+
+--------------------------------------------------------------------------------
+WHAT TO TEST  (per build — the one field internal testing requires)
+--------------------------------------------------------------------------------
+  First build. Please check:
+   - The app finds your Family Agent server on the same Wi-Fi, or accepts the
+     address from the desktop app's Settings when typed in.
+   - Sign in with your household account.
+   - Chat: ask something that needs your data ("what's on this week?"). Replies
+     take 30-120s on local hardware — that's expected.
+   - Events: add an event with +, check the week and month views.
+   - Documents: scan or attach a photo of a bill; confirm it's filed with dates.
+   - Messages: DM another family member; try "@agent ..." in a channel.
+   - Board, Routines, Vault: open each, add an item.
+   - Voice: tap the mic to dictate; hold it to talk and hear the reply.
+  Report anything that hangs, crashes, or looks wrong on your device size.
+
+--------------------------------------------------------------------------------
+INTERNAL TESTERS
+--------------------------------------------------------------------------------
+  1. Users and Access → add each tester as a user on the team first.
+  2. TestFlight → Internal Testing → new group → add those users.
+  3. Attach the processed build. Goes live immediately, no review.
+
+  Export compliance won't prompt (ITSAppUsesNonExemptEncryption = false).

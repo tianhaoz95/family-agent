@@ -1,0 +1,13 @@
+First release.
+
+Family Agent for iPhone: chat with your home assistant, keep a calendar, file
+documents by photo, message the household, run scheduled routines, and open an
+encrypted password vault — all against a server running on your own Mac.
+
+Requires the free Family Agent desktop app on a Mac at home. Feedback and issues:
+https://github.com/tianhaoz95/family-agent
+
+--
+This is the "What's New in This Version" / release-notes field (limit 4000
+chars). Required for every version after the first; harmless to fill in for 1.0.0
+too. Everything above the "--" line is the field value.

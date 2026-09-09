@@ -1,0 +1,97 @@
+VERSION INFORMATION  —  the fields on the version page itself
+(App Store Connect → your app → "iOS App 1.0" in the left sidebar)
+
+--------------------------------------------------------------------------------
+VERSION NUMBER
+--------------------------------------------------------------------------------
+  1.0.0
+  Must match CFBundleShortVersionString / MARKETING_VERSION in the project
+  (currently 1.0.0). The build's CFBundleVersion (CURRENT_PROJECT_VERSION) is
+  stamped per upload by scripts/release-ios.sh and just has to be unique and
+  increasing for this version string.
+
+--------------------------------------------------------------------------------
+PROMOTIONAL TEXT   (metadata/promotional-text.txt — 170 char limit, currently 165)
+--------------------------------------------------------------------------------
+  Editable without a new build. Shown above the description.
+
+--------------------------------------------------------------------------------
+DESCRIPTION        (metadata/description.txt — 4000 char limit)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+KEYWORDS           (metadata/keywords.txt — 100 char limit incl. commas, now 95)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+WHAT'S NEW         (metadata/whats-new.txt — 4000 char limit)
+--------------------------------------------------------------------------------
+  Only shown for updates; fill it in anyway.
+
+--------------------------------------------------------------------------------
+SUPPORT URL        (required)   https://tianhaoz95.github.io/family-agent/support.html
+MARKETING URL      (optional)   https://tianhaoz95.github.io/family-agent/
+--------------------------------------------------------------------------------
+  (Privacy Policy URL is set in the App Privacy section — see app-privacy.txt.)
+
+--------------------------------------------------------------------------------
+SCREENSHOTS
+--------------------------------------------------------------------------------
+  iPhone 6.9" Display — upload the 6 PNGs in screenshots/6.9-inch/ (1320 x 2868).
+  That single size now satisfies every iPhone; App Store Connect down-scales it
+  for the 6.5"/5.5" slots. No iPad screenshots — the app is iPhone-only
+  (TARGETED_DEVICE_FAMILY = 1). Order and captions: screenshots/README.md.
+
+--------------------------------------------------------------------------------
+APP PREVIEW (video)
+--------------------------------------------------------------------------------
+  None. Optional.
+
+--------------------------------------------------------------------------------
+BUILD
+--------------------------------------------------------------------------------
+  Attach the build uploaded by scripts/release-ios.sh --upload after it finishes
+  processing (~5-30 min).
+
+--------------------------------------------------------------------------------
+AGE RATING         → age-rating.txt
+APP REVIEW INFO    → app-review-information.txt
+EXPORT COMPLIANCE  → export-compliance.txt
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+VERSION RELEASE
+--------------------------------------------------------------------------------
+  Recommended: "Manually release this version" for a first launch, so you press
+  the button once it's approved.
+  Consider "Release using phased release for automatic updates" ON for later
+  updates.
+
+--------------------------------------------------------------------------------
+ROUTING APP COVERAGE FILE
+--------------------------------------------------------------------------------
+  None (not a maps/routing app).
+
+
+================================================================================
+APP INFORMATION  —  the app-level fields (left sidebar → "App Information")
+================================================================================
+
+  NAME:               Family Agent            (metadata/app-name.txt; 30 char limit)
+  SUBTITLE:           Local-first family assistant   (metadata/subtitle.txt; 30 char limit, now 28)
+  PRIVACY POLICY URL: https://tianhaoz95.github.io/family-agent/privacy.html
+  CATEGORY:
+      Primary:        Productivity
+      Secondary:      Utilities            (see metadata/categories.txt)
+  CONTENT RIGHTS:     Does not contain third-party content  (pricing-and-availability.txt)
+  AGE RATING:         set via the questionnaire (age-rating.txt)
+
+  LOCALIZATION:       English (U.S.) only.
+
+  BUNDLE ID:          app.familyagent.ios   (register under Identifiers first)
+  SKU:                any stable string, e.g.  familyagent-ios-001
+  PRIMARY LANGUAGE:   English (U.S.)
+
+  COPYRIGHT:          2026 HEJI TECHNOLOGY LLC   (metadata/copyright.txt)
+
+  APPLE TEAM:         DEVELOPMENT_TEAM = 68CTFST8W2 (already in project.pbxproj)

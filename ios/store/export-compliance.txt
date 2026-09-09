@@ -1,0 +1,22 @@
+EXPORT COMPLIANCE
+(Asked at build submission, or per-build under TestFlight / the version)
+
+Info.plist already sets:  ITSAppUsesNonExemptEncryption = false
+
+So App Store Connect will NOT prompt you. If it ever does, the answers are:
+
+  Does your app use encryption? ................................. YES
+    (It makes HTTPS connections and uses the system Keychain.)
+
+  Does your app qualify for any of the exemptions? ............. YES
+    Exemption: the app uses only:
+      - encryption built into the operating system (TLS via URLSession,
+        Keychain), and
+      - standard encryption for authentication (the bearer-token flow over
+        TLS to the user's own server).
+    It implements no proprietary or non-standard cryptography of its own.
+    (The password-vault cryptography lives entirely in the SERVER, agent-core;
+    the iOS app never performs it.)
+
+  => "Non-exempt encryption": NO. No CCATS / year-end self-classification
+     report is required. This matches ITSAppUsesNonExemptEncryption = false.

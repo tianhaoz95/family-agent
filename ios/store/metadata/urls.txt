@@ -1,0 +1,6 @@
+Support URL       https://tianhaoz95.github.io/family-agent/support.html
+Marketing URL     https://tianhaoz95.github.io/family-agent/
+Privacy Policy    https://tianhaoz95.github.io/family-agent/privacy.html
+
+All three are live and verified 200. Support and Privacy are mandatory fields;
+Marketing is optional but the landing page is there, so use it.

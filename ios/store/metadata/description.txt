@@ -1,0 +1,38 @@
+Family Agent is a household organiser that runs on a computer in your home — not in the cloud.
+
+Install the free Family Agent desktop app on a Mac that stays home. It runs a small server and thinks with a language model on that same machine through Ollama. The iPhone app is a companion: it finds that server on your Wi-Fi and gives everyone in the house a way to reach it from their pocket. Your documents, messages and photos go to your machine and stop there. There is no account to create, no subscription, and nothing sent to a hosted AI service.
+
+WHAT IT DOES
+
+Chat — Ask in plain language for what you need. The assistant reads your calendar, searches your documents, adds tasks, and shows you the steps it took.
+
+Events — Everything you mentioned in passing, on a calendar. List, day, three-day, week and month views.
+
+Documents — Photograph a bill, a school letter or a form. The server reads it (text layer or OCR), pulls out the dates and amounts, and files it so you can find it later by meaning, not just by filename.
+
+Family messaging — Direct messages and group channels for the household. Mention @agent to pull the assistant into a thread.
+
+Board — A shared sticky-note board for the things that never quite become tasks, alongside your own private notes.
+
+Routines — Saved instructions the assistant runs on a schedule: a morning briefing, a bill reminder, a weekly review.
+
+Vault — An encrypted store for passwords and two-factor codes, private to you or shared with the family. Only the secret itself is encrypted, so the list still works while the vault is locked.
+
+Voice — Dictate a message, or hold to talk and hear the reply read back.
+
+WHAT YOU NEED
+
+- A Mac at home running the free Family Agent desktop app (macOS 12 or later, Apple silicon), with Ollama and a tool-calling model installed.
+- Your iPhone on the same network as that Mac, or another way to reach it such as a VPN.
+
+Without a running server there is nothing for this app to connect to. Setup instructions: https://tianhaoz95.github.io/family-agent/support.html
+
+PRIVACY
+
+Family Agent collects nothing. No analytics, no advertising identifier, no third-party SDK, and no account with the developer. Replies come from a model on your own hardware. Microphone, camera and photo access are each used only for the obvious feature, and in every case the recording or image goes only to your own server. Full policy: https://tianhaoz95.github.io/family-agent/privacy.html
+
+Open source, MIT licensed: https://github.com/tianhaoz95/family-agent
+
+--
+App Store Connect limit: 4000 characters. Everything above the "--" line is the
+field value (currently well under the limit). Localisation: English (U.S.) only.

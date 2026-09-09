@@ -1,0 +1,40 @@
+APP PRIVACY QUESTIONNAIRE
+(App Store Connect → your app → App Privacy → "Get Started" / Edit)
+
+This is app-level, not per-version, and it is cross-checked against
+FamilyAgent/PrivacyInfo.xcprivacy. That manifest declares: NSPrivacyTracking =
+false, no NSPrivacyCollectedDataTypes, and one required-reason API
+(UserDefaults, reason CA92.1). Keep the answers below in step with it.
+
+--------------------------------------------------------------------------------
+Q: Do you or your third-party partners collect data from this app?
+--------------------------------------------------------------------------------
+    NO — select "No, we do not collect data from this app".
+
+Rationale (keep for your records):
+  - Everything the user types, uploads, photographs or dictates is sent to a
+    server the USER runs on their own machine. The developer has no access to
+    that server and no copy of anything on it.
+  - There is no analytics SDK, no crash reporter, no advertising identifier, no
+    third-party network call of any kind from the app.
+  - The app stores on-device only: server URL, display names, a couple of view
+    preferences (UserDefaults), and a session token (Keychain). None of it
+    leaves the device except to the user's own server.
+  - "Data collected" in Apple's sense means data transmitted off the device AND
+    linked to the user/device by you or a partner. Neither happens here.
+
+If Apple's flow forces you past the first question, the honest position is still
+"Data Not Collected" for every category. Do not declare Contacts, Messages,
+Photos, Audio, etc. just because the app can access them — access used solely to
+deliver an obvious in-app feature, sent only to the user's own server, is not
+collection.
+
+--------------------------------------------------------------------------------
+Privacy Policy URL (required, App Privacy section)
+--------------------------------------------------------------------------------
+    https://tianhaoz95.github.io/family-agent/privacy.html
+
+--------------------------------------------------------------------------------
+Privacy Choices URL (optional)
+--------------------------------------------------------------------------------
+    Leave blank — there is nothing to opt out of.

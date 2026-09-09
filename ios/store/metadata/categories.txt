@@ -1,0 +1,6 @@
+Primary:   Productivity
+Secondary: Utilities
+
+Rationale: the app organises a household's documents, schedule and tasks.
+"Lifestyle" was considered and rejected — the primary job is organisation, and
+Productivity is where people search for it.
