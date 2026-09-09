@@ -57,3 +57,31 @@ The script uses the DEBUG launch hooks (`FA_SERVER_URL` / `FA_AUTOLOGIN` /
 `FA_START`, and `FA_CHAT_PROMPT` for `chat.png`) to land directly on a screen
 with content. Turn off Apple-Intelligence / system banners on the sim first, or
 just retry until a capture lands clean.
+
+## How these were captured
+
+`agent-core` on port **4373** against the seeded `/tmp/fa-ios` data with
+`FAMILY_AGENT_VAULT=1`, so the Vault screen has entries. Port 4373 rather than
+the default, so the installed `Family Agent.app` sidecar on 4173 was never
+touched.
+
+```
+simctl status_bar <sim> override --time 9:41 --batteryState charged \
+  --batteryLevel 100 --cellularBars 4 --wifiBars 3
+SIMCTL_CHILD_FA_SERVER_URL=http://localhost:4373 \
+SIMCTL_CHILD_FA_AUTOLOGIN=dad:testpass \
+SIMCTL_CHILD_FA_START=<screen> simctl launch --terminate-running-process <sim> app.familyagent.ios
+simctl io <sim> screenshot <screen>.png
+```
+
+`chat.png` additionally used `FA_CHAT_PROMPT` so the transcript shows a real
+answer from the local model instead of the empty state — worth redoing that way
+if you ever recapture, since an empty Chat screen is a weak lead image.
+
+Those `FA_*` hooks are `#if DEBUG`, so this needs a Debug build.
+`.claude/skills/update-landing-page/capture/capture-ios.sh` scripts the same
+approach; point it at a Pro Max simulator to get this size.
+
+`xcrun` will not find `simctl` while `xcode-select -p` points at
+CommandLineTools — use the full path
+`/Applications/Xcode.app/Contents/Developer/usr/bin/simctl`, or repoint it.
