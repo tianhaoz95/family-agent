@@ -291,7 +291,28 @@ TARBALL="$UPDATER_DIR/Family Agent.app.tar.gz"
 rm -f "$TARBALL" "$TARBALL.sig"
 # -C so the archive holds "Family Agent.app" at its root, which is what the
 # updater expects to swap into place.
-tar -czf "$TARBALL" -C "$(dirname "$APP")" "$(basename "$APP")"
+#
+# COPYFILE_DISABLE=1 is not optional. Without it macOS tar stores every file's
+# extended attributes as a parallel AppleDouble member — 13,043 of them for this
+# bundle — and the FIRST entry in the archive becomes `._Family Agent.app`.
+# Tauri's updater unpacks entries in order, hits that, and dies with
+#   failed to unpack `._Family Agent.app`
+# after the user has already downloaded 260 MB.
+#
+# `tar -tzf` will NOT show you these: bsdtar recognises its own Mac metadata and
+# hides it while listing. Verify with something that doesn't, e.g.
+#   python3 -c "import tarfile;print(sum('._' in n for n in tarfile.open('<f>').getnames()))"
+COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$TARBALL" \
+  -C "$(dirname "$APP")" "$(basename "$APP")"
+
+APPLEDOUBLE=$(python3 -c "
+import tarfile,sys
+print(sum(1 for n in tarfile.open(sys.argv[1]).getnames() if '._' in n))" "$TARBALL")
+if [ "$APPLEDOUBLE" != "0" ]; then
+  echo "!! the updater tarball still has $APPLEDOUBLE AppleDouble entries — updates would fail" >&2
+  exit 1
+fi
+echo "    no AppleDouble entries"
 
 if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
   if [ -f "$HOME/.tauri/family-agent-updater.key" ]; then
