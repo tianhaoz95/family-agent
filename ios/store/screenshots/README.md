@@ -85,3 +85,23 @@ approach; point it at a Pro Max simulator to get this size.
 `xcrun` will not find `simctl` while `xcode-select -p` points at
 CommandLineTools — use the full path
 `/Applications/Xcode.app/Contents/Developer/usr/bin/simctl`, or repoint it.
+
+## Two things that ruined a capture run
+
+**System notification banners.** A first run caught *"Ready for Apple
+Intelligence"* across the top of `board.png`, covering the title. Simulator
+banners appear shortly after boot and are not affected by `status_bar override`.
+Boot, wait ~45s for them to clear, and only then capture. Always review the set
+before uploading — a contact sheet makes this one glance instead of six.
+
+**Other apps on the simulator.** The iPhone 17 Pro Max simulator had an unrelated
+app installed and a pending link prompt (*"Open in TinyTaps?"*) that appeared
+over the app, and in one run stole the foreground entirely so the screenshot
+captured a different app altogether. `chat.png` was therefore captured on the
+**iPhone 16 Pro Max** simulator, which is clean and the same 6.9" / 1320×2868.
+Prefer a simulator with nothing else installed; don't `simctl erase` one that
+holds someone's other work.
+
+Known cosmetic nit: `chat.png`'s battery icon is not the green charging state the
+other five have — `--batteryState charged` didn't take on that device. Harmless,
+but re-shoot it if you want the set perfectly uniform.
