@@ -34,18 +34,9 @@ mistakes and fixes) behind every non-obvious choice below.
 
 ## How it's put together
 
-```
-┌─────────────┐        ┌───────────────────────────┐        ┌────────────┐
-│   desktop    │──HTTP──▶│    agent-core (:4173)     │──HTTP──▶│   Ollama   │
-│  (Tauri)     │  spawns │  Fastify · SQLite · watch │        │  (:11434)  │
-└─────────────┘        └──────────────┬────────────┘        └────────────┘
-                                        ▲
-                                        │ HTTP (LAN)
-                                 ┌──────┴──────┐
-                                 │   android    │
-                                 │  (Compose)   │
-                                 └─────────────┘
-```
+<p align="center">
+  <img src="assets/architecture.svg" alt="desktop, android and ios talk over HTTP to agent-core (:4173); agent-core talks to a local Ollama (:11434)" width="820">
+</p>
 
 **agent-core** is the only thing that talks to Ollama or touches the
 filesystem. It owns:
