@@ -6,6 +6,10 @@ A local-first agentic app for organizing a family's documents, schedules, and
 misc to-dos. Everything — the model, the storage, the document processing —
 runs on hardware you own. Nothing is sent to a cloud API.
 
+<p align="center">
+  <img src="assets/promo.svg" alt="Family Agent on macOS and iPhone — the same conversation, answered by a model running on your own laptop" width="960">
+</p>
+
 It's **multi-user**: the home laptop runs the master node, an admin does a
 one-time setup, and each family member gets a local account with their own
 isolated tasks, documents, history, and tools. Clients sign in with a
