@@ -2,39 +2,48 @@
   <img src="assets/header.svg" alt="Family Agent — local-first family organizer" width="760">
 </p>
 
-A local-first agentic app for organizing a family's documents, schedules, and
-misc to-dos. Everything — the model, the storage, the document processing —
-runs on hardware you own. Nothing is sent to a cloud API.
+A local-first agentic app for a household's documents, calendar, tasks, notes
+and passwords. Everything — the model, the storage, the document and speech
+processing — runs on hardware you own. There's no account to create and no
+service to trust, because the server is the laptop in your house.
 
 <p align="center">
   <img src="assets/promo.svg" alt="Family Agent on macOS and iPhone — the same conversation, answered by a model running on your own laptop" width="960">
 </p>
 
-It's **multi-user**: the home laptop runs the master node, an admin does a
-one-time setup, and each family member gets a local account with their own
-isolated tasks, documents, history, and tools. Clients sign in with a
-username + password; the Android app finds the master node on the LAN
-automatically (mDNS). Sharing things *between* accounts is the next step, not
-built yet.
+It's **multi-user**. The home laptop runs the master node; an admin does a
+one-time setup and creates a local account per family member. Each account has
+its own isolated tasks, documents, chat history, tools and watched folder.
+Clients sign in with a username + password and the phone apps find the server
+on the LAN automatically (mDNS, plus a QR you can scan from the desktop). The
+things that are *shared* are shared on purpose: family chat (1:1 DMs and
+group channels, with `@agent` pulling the assistant in), a shared sticky-note
+board, and a password vault you can open to the household.
 
-Four apps share one backend:
+Four apps share one HTTP backend:
 
 - **agent-core** — a Node/TypeScript service that runs a local LLM-backed
   planner (via [deepagents](https://github.com/langchain-ai/deepagentsjs))
   behind a small HTTP API, backed by SQLite and a local Ollama instance.
 - **desktop** — a [Tauri](https://tauri.app) app that spawns agent-core as a
-  sidecar process and gives it a UI. Builds on Linux (`.deb`/`.appimage`) and
-  macOS (`.app`/`.dmg`, with agent-core + a Node runtime bundled in).
-- **android** — a native Kotlin/Compose companion app that talks to
-  agent-core over the LAN.
-- **ios** — a native SwiftUI companion app, full feature parity with Android,
-  using Apple Liquid Glass on iOS 26 (with an iOS 18 fallback). See
+  sidecar and gives it a UI. Ships for macOS (`.dmg`, signed + notarized, with
+  agent-core and a Node runtime bundled and a built-in auto-updater); builds
+  on Linux too (`.deb`/`.AppImage`).
+- **android** — a native Kotlin/Compose companion app.
+- **ios** — a native SwiftUI companion app with feature parity, Apple Liquid
+  Glass on iOS 26 and a `.ultraThinMaterial` fallback to iOS 18. See
   [`ios/README.md`](ios/README.md).
 
+The types on the wire are duplicated by hand in each client rather than shared
+through a package — the four apps have no shared code.
+
+**[Download for macOS →](https://github.com/tianhaoz95/family-agent/releases/latest)** · [family-agent site](https://tianhaoz95.github.io/family-agent/)
+
 This is a working prototype, not a finished product — see
-[**docs/STATUS.md**](docs/STATUS.md) for exactly what's verified vs. not, and
-[**docs/DECISIONS.md**](docs/DECISIONS.md) for the reasoning (including
-mistakes and fixes) behind every non-obvious choice below.
+[**docs/STATUS.md**](docs/STATUS.md) for what's verified vs. not,
+[**docs/DECISIONS.md**](docs/DECISIONS.md) for the reasoning (and the mistakes)
+behind every non-obvious choice, and [**CLAUDE.md**](CLAUDE.md) for the full
+architecture reference.
 
 ## How it's put together
 
@@ -42,79 +51,98 @@ mistakes and fixes) behind every non-obvious choice below.
   <img src="assets/architecture.svg" alt="desktop, android and ios talk over HTTP to agent-core (:4173); agent-core talks to a local Ollama (:11434)" width="820">
 </p>
 
-**agent-core** is the only thing that talks to Ollama or touches the
+**agent-core** is the only thing that talks to a model or touches the
 filesystem. It owns:
 
-- **A planner + two subagents** (`agents/index.ts`) — `task-agent` for
-  to-dos, `document-agent` for reading/classifying documents. The planner
-  reaches for a `task` delegation tool rather than acting on domain requests
-  itself; conversational requests go through this path, and it's been tuned
-  (with worked examples, not just instructions — abstract prompting alone
-  wasn't reliable) against real small-model failure modes like confusing
-  "documents" with its own scratch filesystem.
-- **A local-by-default model policy** — every agent runs against Ollama
-  locally (`gemma4:e2b` by default); there's no cloud fallback wired up at
-  all. `FAMILY_AGENT_MODEL` picks a different model if you've pulled one.
-- **File ingestion** three ways: paste text (`POST /documents/ingest`),
-  upload a PDF/photo/scan (`POST /documents/upload` — PDF text-layer
-  extraction via `pdf-parse`, image OCR via `tesseract.js`), or drop a file
-  into a watched folder (`inboxWatcher.ts`, chokidar). Document field
-  extraction (category/summary/dates) is done via a single tool bound
-  directly to the model rather than routed through the planner — a
-  deliberate choice after a small model garbled a document id mid-transcription
-  when that path went through subagent delegation instead.
-- **Local accounts + sessions** (`auth.ts`, `users`/`sessions` tables) —
-  scrypt-hashed passwords, opaque bearer tokens (only the sha256 is stored).
-  A `preHandler` hook attaches the caller's `ScopedStore`; every
-  task/document/activity/tool query is scoped by `user_id`. One deepagents
-  planner and one watched folder per account. Machine settings (model, Ollama
-  URL, OCR, home name) are admin-only; the watched folder is per-user and
-  live-editable. `GET`/`PUT /settings` and `GET /health` still work the same
-  otherwise.
-- **LAN discovery** — the node advertises itself over mDNS
-  (`_familyagent._tcp`, via `bonjour-service`); binds `0.0.0.0` so phones can
-  reach it. `FAMILY_AGENT_MDNS=0` turns advertising off.
-- **An activity log** that every mutating action writes to itself, so it
-  can't drift out of sync with what actually happened.
+- **A planner and ten specialist subagents** (`agents/index.ts`). The planner
+  delegates rather than acting on domain requests itself:
+  `task-agent` (to-dos and reminders), `document-agent` (search and read
+  documents, extract fields), `builder-agent` (generate a small web tool),
+  `notes-agent` (the sticky board), `tools-agent` (use a tool the family
+  built), `routine-agent` (scheduled instructions), plus — when the operator
+  turns them on — `research-agent` (web search), `workshop-agent` (run CLI
+  tools over a file), `skill-agent` (taught playbooks) and `connections-agent`
+  (external MCP servers). Leaf tools sit directly on the planner too:
+  `run_code` (a sandboxed JS snippet for exact arithmetic/date math),
+  `render_card` (an inline chart/checklist) and `render_artifact` (a whole
+  generated page, browsable in an Artifacts tab). Password/2FA lookups are a
+  separate forced-turn agent, never in the planner's reach. The prompts carry
+  worked examples, not just instructions — abstract prompting alone wasn't
+  reliable against small-model failure modes.
+- **A local-by-default model policy.** Every agent runs against Ollama
+  (`gemma4:e2b` by default; `FAMILY_AGENT_MODEL` picks another). There is no
+  cloud fallback wired anywhere. Speech-to-text (Whisper), text-to-speech
+  (Kokoro) and the optional embedding model for semantic document search all
+  run in-process or through the same local Ollama.
+- **Document ingestion, three ways into one pipeline:** paste text
+  (`POST /documents/ingest`), upload a PDF / photo / scan
+  (`POST /documents/upload`), or drop a file into a per-user watched folder
+  (`inboxWatcher.ts`, chokidar). PDFs use the text layer when there is one and
+  OCR the page images when there isn't; photos and scans go through OCR
+  (`tesseract.js`, or an Ollama vision model if configured). Field extraction
+  (category, summary, important dates) is a single tool bound straight to the
+  model — deliberately *not* routed through the planner, after a small model
+  garbled a document id doing that. Search is keyword (FTS5), typo-tolerant
+  (trigram) and by-meaning (local embeddings), merged.
+- **Local accounts + sessions** (`auth.ts`) — scrypt-hashed passwords, opaque
+  bearer tokens (only the sha256 is stored). A `preHandler` hook scopes every
+  query to the caller via a `ScopedStore` (`WHERE user_id = ?`); one planner
+  and one watched folder per account. Phone pairing can carry a single-use,
+  5-minute token in the QR so a scan signs straight in.
+- **Cross-account chat and a shared board** — the only data that isn't
+  per-account, added narrowly rather than by loosening the scoping boundary.
+- **Scheduled routines** — a saved instruction the assistant runs on a cron /
+  interval / one-off schedule (a morning briefing, a bill nudge), with catch-up
+  after downtime. A routine can never run the code-builder unattended.
+- **Generated tools** — `builder-agent` writes a small self-contained web tool
+  (a checklist, a tracker, a budget splitter); static ones are inline HTML
+  under a strict CSP, backed ones get a Deno process in a deny-by-default
+  sandbox with a private SQLite database. Tools are improved in place, with a
+  one-step revert.
+- **LAN discovery + an activity log.** The node advertises over mDNS
+  (`_familyagent._tcp`) and binds `0.0.0.0`; `FAMILY_AGENT_MDNS=0` turns that
+  off. Every mutating action writes its own audit-log row, so the log can't
+  drift from what happened.
 
-**desktop** and **android** are both thin HTTP clients over the same API —
-Chat, Tasks, Documents, Activity, Settings, and (desktop, admin only) a
-Family screen for managing accounts. First launch shows setup (desktop) or
-server-discovery + login (Android).
+The clients are thin HTTP wrappers over that API — Chat, Events, Messages,
+Board, Documents, Tools, Artifacts, Routines, Skills, Connections, Vault,
+Activity, Settings, and (admin only) a Family screen — health-gating the
+screens for capabilities the server has turned off. First launch shows setup
+(desktop) or discovery + login (phones).
 
 ## Prerequisites
 
-- **Node.js 22.5+** (uses `node:sqlite`, no native module build) and **Rust
-  + Cargo** for the Tauri desktop app.
-- **[Ollama](https://ollama.com)**, running locally, with the model pulled:
+- **Node.js 22.5+** (uses `node:sqlite` — no native module build) and **Rust +
+  Cargo** for the Tauri desktop app.
+- **[Ollama](https://ollama.com)** running locally with the model pulled:
   ```bash
   ollama serve &
   ollama pull gemma4:e2b
   ```
-  The model has to support tool-calling in Ollama's serving layer — that's a
-  property of the specific model, not something this app can route around.
-  See `docs/DECISIONS.md` for what happens if it doesn't.
-- **Android toolchain**, only if you're building the Android app: JDK 17 +
-  Android SDK. `.toolchains/` at the repo root holds a machine-local copy
-  (gitignored) if you've already set one up; see `docs/BUILD_LOG.md`'s
-  "android" section for how to install one from scratch without root access.
+  The model must support tool-calling in Ollama's serving layer — a property
+  of the specific model, not something this app can route around. Optionally
+  `ollama pull nomic-embed-text` to enable by-meaning document search (it
+  falls back to keyword + fuzzy without it).
+- **Xcode 16+** with an iOS 18+ simulator, only for the iOS app.
+- **Android toolchain** (JDK 17 + Android SDK), only for the Android app.
+  `.toolchains/` at the repo root holds a machine-local, gitignored copy if
+  you've set one up; `docs/BUILD_LOG.md` has how to install one without root.
+- *Optional, off by default:* `bubblewrap` + CLI tools (`ffmpeg`, `qpdf`,
+  `imagemagick`, …) for the file-processing capability; a web-search provider
+  for the research capability. See `CLAUDE.md`.
 
 ## Running it
 
-**Easiest path** — two scripts from the repo root, each does its own
+**Easiest path** — launcher scripts from the repo root, each does its own
 readiness checks:
 
 ```bash
-./scripts/start-desktop.sh   # checks Ollama/model, then launches the Tauri app
-./scripts/start-android.sh   # detects a running emulator or boots one, then
-                              # builds, installs, and launches the app on it
-                              #   --memory MB   RAM for a newly-booted emulator (default 2048)
+./scripts/start-desktop.sh   # rebuilds agent-core, launches the Tauri app (Linux or macOS)
+./scripts/start-android.sh   # detects/boots an emulator, builds, installs, launches
+./scripts/start-ios.sh       # boots an iOS simulator, builds, installs, launches
+./scripts/show-accounts.sh   # prints local accounts (for a forgotten admin username)
+./scripts/reset-password.sh <username> [password]   # for a locked-out admin
 ```
-
-`start-android.sh` is safe to re-run — it reuses whatever emulator is
-already up rather than starting a second one. Set
-`FAMILY_AGENT_EMULATOR_HEADLESS=1` to boot headless instead of with a
-visible window (useful for CI or a machine with no display).
 
 **Manual path**, piece by piece:
 
@@ -122,61 +150,76 @@ visible window (useful for CI or a machine with no display).
 # agent-core (build once, or `npm run dev` for live reload)
 cd agent-core && npm install && npm run build && npm start
 
-# Desktop app (spawns agent-core itself — no need to start it separately)
+# Desktop app — spawns agent-core itself, no need to start it separately
 cd desktop && npm install && npm run tauri:dev
-# or: npm run tauri:build   → .deb/.AppImage in src-tauri/target/release/bundle
+#   or: npm run tauri:build       → .deb/.AppImage/.dmg in src-tauri/target/release/bundle
 
 # Android
 cd android
 export JAVA_HOME=$(pwd)/../.toolchains/jdk17
 export ANDROID_HOME=$(pwd)/../.toolchains/android-sdk
-./gradlew installDebug   # needs a device/emulator already connected (adb devices)
+./gradlew installDebug            # needs a connected device/emulator (adb devices)
+
+# iOS
+cd ios && xcodebuild -project FamilyAgent.xcodeproj -scheme FamilyAgent \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
 
 **First launch:**
 
 - **desktop** shows a setup screen (create the owner/admin account, name the
-  home), then the app. Add family members from the **Family** screen.
-- **android** scans the LAN for the master node and lists it; tap it and sign
-  in. If discovery doesn't find it (some networks block mDNS), use "Enter an
-  address manually" — `http://10.0.2.2:4173` from an emulator, or
-  `http://<lan-ip>:4173` from a real phone.
+  home). Add family members from the **Family** screen; pair their phones from
+  **Settings → Pair a phone**.
+- **android / ios** discover the master node on the LAN and show a login
+  screen — or scan the pairing QR. If discovery misses it (some networks block
+  mDNS), enter the address by hand: `http://<lan-ip>:4173`, or
+  `http://10.0.2.2:4173` / `http://localhost:4173` from an emulator/simulator.
 - A dev/test server can be bootstrapped directly:
-  `curl -XPOST localhost:4173/auth/bootstrap -H 'content-type: application/json' -d '{"username":"me","displayName":"Me","password":"secret123"}'`.
+  ```bash
+  curl -XPOST localhost:4173/auth/bootstrap -H 'content-type: application/json' \
+    -d '{"username":"me","displayName":"Me","password":"secret123"}'
+  ```
+
+The SQLite database, per-user inbox folders, cached models (OCR / ASR / TTS /
+embeddings) and `settings.json` all live under `$XDG_DATA_HOME/family-agent`
+(`~/.local/share/family-agent`) — **not** the repo tree.
+`FAMILY_AGENT_DATA_DIR` overrides it; use a throwaway dir for any manual
+testing so you never touch a real install.
 
 ## Testing
 
 ```bash
-npm test                                    # from repo root: agent-core, then desktop
+npm test                                    # repo root: agent-core, then desktop
 cd android && ./gradlew testDebugUnitTest   # Android unit tests, no device needed
 ```
 
 `agent-core`'s suite has two tiers: fast unit tests (SQLite storage, HTTP
-routes, file extraction, CORS, the model-reply retry logic) and slower
-live-model integration tests that make real calls to Ollama — those
-**skip themselves automatically** if the configured model isn't reachable,
-so `npm test` still passes green without Ollama running, just with fewer
-tests executed. A full run against a live model takes a few minutes; small
-local models are genuinely slow, and several real bugs in this codebase
-were only ever caught by these tests, not the fast ones — see
-`docs/DECISIONS.md` for two concrete examples.
+routes, file extraction, auth, cards/artifacts/pairing, …) and slower
+live-model integration tests that make real calls to Ollama. The integration
+tests **skip themselves** when the configured model isn't reachable, so
+`npm test` stays green without Ollama — just with fewer tests run. Several real
+bugs in this codebase were only ever caught by the live-model tests; small
+local models are unreliable enough that prompt/tool-wiring bugs routinely don't
+show up in the fast tests.
 
-## What's deliberately not here
+## What's local — and the exceptions
 
-The original brainstorm for this app (worth a read if you want the fuller
-vision) describes more than what's built: a compute mesh across family
-devices, Tailscale/relay transport for the phone app, a bundled/managed
-local-model runtime, and a sandboxed agent that builds one-off interactive
-tools on request. None of that exists yet. The sandboxed builder agent in
-particular is deferred on purpose — it implies arbitrary local code
-execution, and that's not something to stand up without a human reviewing
-the sandbox boundary first. Full reasoning for every scope cut is in
-`docs/DECISIONS.md`.
+Nothing about your data leaves the machine. The exceptions are all either
+one-time or opt-in, and none of them send your documents anywhere:
 
-PDF support is text-layer extraction only (no OCR fallback for a scanned
-PDF with no embedded text). Photos and camera scans go through OCR
-instead — that's the actual "scan a document" path. The first OCR call
-downloads an ~4MB English language model from a CDN and caches it locally
-under `agent-core/data/tessdata/`; every call after that is fully offline.
-It's the one deliberate exception to "nothing leaves the machine" in this
-codebase, and it's flagged here on purpose, not hidden.
+- **One-time model downloads.** The first OCR / speech / TTS / embedding call
+  pulls its model (a few MB to ~90 MB) from a public CDN and caches it under
+  the data dir; every call after that is fully offline.
+- **Web search** (`research-agent`) is **off by default**. An admin turns it
+  on in Settings; it's SSRF-guarded, never follows a redirect, and logs every
+  request in Activity.
+- **External MCP servers** (`connections-agent`) and **file processing**
+  (`workshop-agent`) are **off unless an operator sets an env var**. The file
+  sandbox has no network at all.
+
+## What's not built yet
+
+The original brainstorm describes more than what's here: a compute mesh across
+family devices, a Tailscale/relay transport for the phone apps, and a
+bundled/managed local-model runtime so Ollama isn't a separate install. None
+of that exists. Full reasoning for every scope cut is in `docs/DECISIONS.md`.
