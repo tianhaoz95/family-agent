@@ -7,6 +7,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.familyagent.android.data.AGENT_SENDER_ID
 import app.familyagent.android.data.ActivityEntry
+import app.familyagent.android.data.Artifact
+import app.familyagent.android.data.ArtifactSummary
 import app.familyagent.android.data.Channel
 import app.familyagent.android.data.Document
 import app.familyagent.android.data.DocumentSearchHit
@@ -127,6 +129,10 @@ data class AppUiState(
     val toolStatus: String? = null,
     /** Base URL of the tools server, derived from serverUrl + /health's toolsPort. */
     val toolsBaseUrl: String? = null,
+    /** /health.artifacts: "on" when render_artifact + the Artifacts tab work. */
+    val artifactsMode: String = "off",
+    val artifacts: List<ArtifactSummary> = emptyList(),
+    val artifactsLoading: Boolean = false,
     /** Tasks screen: list | day | 3day | week | month (persisted in DataStore). */
     val taskView: String = "week",
     /** Anchor day for the calendar range (day/3day/week start from it; month uses its month). */
@@ -333,6 +339,7 @@ class AppViewModel(
                         vaultMode = h.vault,
                         vaultAiEnabled = h.vaultAi,
                         cardsMode = h.cards,
+                        artifactsMode = h.artifacts,
                     )
                 }
                 .onFailure {
@@ -375,6 +382,33 @@ class AppViewModel(
     fun deleteTool(id: String) {
         viewModelScope.launch {
             apiCall { api.deleteTool(id) }.onSuccess { refreshTools() }
+        }
+    }
+
+    // ---- artifacts (render_artifact) ----
+
+    fun refreshArtifacts() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(artifactsLoading = true)
+            val list = apiCall { api.listArtifacts() }.getOrNull()
+            _state.value = _state.value.copy(
+                artifacts = list ?: _state.value.artifacts,
+                artifactsLoading = false,
+            )
+        }
+    }
+
+    suspend fun loadArtifact(id: String): Artifact? = apiCall { api.getArtifact(id) }.getOrNull()
+
+    fun renameArtifact(id: String, title: String) {
+        viewModelScope.launch {
+            apiCall { api.renameArtifact(id, title) }.onSuccess { refreshArtifacts() }
+        }
+    }
+
+    fun deleteArtifact(id: String) {
+        viewModelScope.launch {
+            apiCall { api.deleteArtifact(id) }.onSuccess { refreshArtifacts() }
         }
     }
 

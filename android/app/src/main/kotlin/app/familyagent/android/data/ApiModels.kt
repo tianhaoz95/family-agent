@@ -108,6 +108,8 @@ data class HealthResponse(
     val vaultAi: Boolean = false,
     /** "on" when the assistant may answer with a generated HTML card (render_card). */
     val cards: String = "off",
+    /** "on" when render_artifact + the Artifacts tab are available. */
+    val artifacts: String = "off",
 )
 
 @Serializable
@@ -148,6 +150,44 @@ data class Tool(
 
 @Serializable
 data class ToolsResponse(val tools: List<Tool>)
+
+// ---- artifacts (render_artifact) ----
+
+@Serializable
+data class ArtifactSummary(
+    val id: String,
+    val title: String,
+    val source: String? = null,
+    val sourceId: String? = null,
+    val createdAt: String = "",
+    val updatedAt: String? = null,
+)
+
+@Serializable
+data class Artifact(
+    val id: String,
+    val title: String,
+    val source: String? = null,
+    val sourceId: String? = null,
+    val createdAt: String = "",
+    val updatedAt: String? = null,
+    /** The raw <body> fragment the model wrote. */
+    val html: String = "",
+    /** The full sandboxed HTML document — load into a sealed WebView. */
+    val document: String = "",
+)
+
+@Serializable
+data class ArtifactListResponse(val artifacts: List<ArtifactSummary> = emptyList())
+
+@Serializable
+data class ArtifactResponse(val artifact: Artifact)
+
+@Serializable
+data class ArtifactSummaryResponse(val artifact: ArtifactSummary)
+
+@Serializable
+data class RenameArtifactRequest(val title: String)
 
 @Serializable
 data class BuildToolRequest(val prompt: String)

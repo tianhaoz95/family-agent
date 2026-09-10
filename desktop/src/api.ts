@@ -289,11 +289,29 @@ export interface RoutineInput {
 }
 
 /** Something the assistant used while answering — rendered as a clickable chip.
- *  "link" is a web page the research agent opened (`id` is the URL). */
+ *  "link" is a web page the research agent opened (`id` is the URL).
+ *  "artifact" is a full page render_artifact generated (`id` is the artifact id). */
 export interface ChatReference {
-  type: "document" | "task" | "tool" | "link";
+  type: "document" | "task" | "tool" | "link" | "artifact";
   id: string;
   label: string;
+}
+
+/** A full-page artifact the assistant generated (render_artifact). List view. */
+export interface ArtifactSummary {
+  id: string;
+  title: string;
+  source: string | null;
+  sourceId: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+/** One artifact with its raw fragment and the wrapped, sandboxed document. */
+export interface Artifact extends ArtifactSummary {
+  html: string;
+  /** The full sandboxed HTML document — load into an opaque-origin iframe. */
+  document: string;
 }
 
 /** An operation a server tool exposes to the chat assistant (its MCP tools/list). */
@@ -398,6 +416,8 @@ export interface Health {
   skills?: "full" | "docs-only" | "off";
   /** "on" = MCP enabled with ≥1 connected server; "no-servers" = enabled, none configured; "off". */
   mcp?: "on" | "no-servers" | "off";
+  /** "on" when render_artifact + the Artifacts tab are available. */
+  artifacts?: "on" | "off";
   /** "on" when the password vault feature is enabled — the Vault nav item hides when "off". */
   vault?: "on" | "off";
   /** Whether the assistant may read the vault via the "/vault" chat command. */
@@ -644,6 +664,9 @@ export const api = {
     }),
   logout: () => request<{ ok: true }>("/auth/logout", { method: "POST" }),
   me: () => request<{ user: User }>("/auth/me"),
+  /** Mint a single-use QR pairing token for the signed-in account (5-min TTL). */
+  startPairing: () =>
+    request<{ token: string; expiresAt: string }>("/auth/pair/start", { method: "POST" }),
 
   // ---- users (admin) ----
   listUsers: () => request<{ users: User[] }>("/users"),
@@ -662,7 +685,8 @@ export const api = {
     images: string[] = [],
     sessionId?: string,
     signal?: AbortSignal,
-    turnId?: string
+    turnId?: string,
+    documentIds: string[] = []
   ) =>
     request<{
       reply: string;
@@ -675,6 +699,7 @@ export const api = {
       body: JSON.stringify({
         message,
         ...(images.length ? { images } : {}),
+        ...(documentIds.length ? { documentIds } : {}),
         ...(sessionId ? { sessionId } : {}),
         ...(turnId ? { turnId } : {}),
       }),
@@ -916,6 +941,16 @@ export const api = {
   revertTool: (id: string) => request<{ tool: Tool; note: string }>(`/tools/${id}/revert`, { method: "POST" }),
   deleteTool: (id: string) => request<{ deleted: true }>(`/tools/${id}`, { method: "DELETE" }),
   getTool: (id: string) => request<{ tool: Tool }>(`/tools/${id}`),
+
+  // ---- artifacts (render_artifact) ----
+  listArtifacts: () => request<{ artifacts: ArtifactSummary[] }>("/artifacts"),
+  getArtifact: (id: string) => request<{ artifact: Artifact }>(`/artifacts/${id}`),
+  renameArtifact: (id: string, title: string) =>
+    request<{ artifact: ArtifactSummary }>(`/artifacts/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    }),
+  deleteArtifact: (id: string) => request<{ deleted: true }>(`/artifacts/${id}`, { method: "DELETE" }),
   toolDb: (id: string) => request<ToolDbOverview>(`/tools/${id}/db`),
   toolDbRows: (
     id: string,

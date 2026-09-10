@@ -2427,3 +2427,131 @@ signed, `--verify --deep --strict` clean, `flags=0x10000(runtime)`,
 `TeamIdentifier=68CTFST8W2`, `get-task-allow` gone, and — the part that actually
 matters — the signed hardened-runtime app launches and its bundled `node`
 serves `/health`. Only the certificate type is missing; see `desktop/RELEASE.md`.
+
+
+## QR phone pairing without a password (`/auth/pair/*`)
+
+Scanning the desktop's "Pair a phone" QR used to hand the phone only the server
+*address* — you still typed a username + password. The QR panel now has a
+toggle (**default on**, device-local `localStorage familyAgent.pairAutoLogin`):
+on, the QR also carries a **single-use pairing token** and the phone signs
+straight into the scanning desktop's account.
+
+**Why a token, not credentials or a long-lived bearer, in the QR.** The QR is
+shown on a screen — a shoulder-surf or a stale photo must not equal account
+takeover. `POST /auth/pair/start` (authed) mints a random token bound to
+`req.authUser`, stored **sha256-only** (`pairing_tokens`, mirrors `sessions`),
+**5-minute TTL**, and **one live per user** (minting drops the previous). `POST
+/auth/pair/redeem` (public, like `/auth/login`) trades it for a normal session
+and **deletes the row whatever the outcome** — single-use is structural, not a
+flag. No vault auto-unlock (there's no password), same as after an admin
+password reset. Worst case for a leaked QR photo: a ≤5-min window to join as
+that one already-consenting account, once.
+
+**Why "same account", not an account picker.** The desktop is signed into one
+account at a time; "pair my phone" almost always means "…to the account I'm
+already using here". A picker is v2 if a shared family laptop needs to pair
+several members' phones without each logging in.
+
+**Payload shape.** Bare `http://host:port` string when the toggle is off
+(unchanged); a `{"url","name","t":"<token>"}` JSON envelope when on.
+`PairingPayload` on iOS parses both. Desktop re-mints the token when Settings
+opens, on toggle, on address change, and every 3.5 min the panel stays open, so
+a left-open QR never goes dead. **iOS-only** for now — Android discovery is
+mDNS + manual entry with no scanner (adding CameraX/MLKit is its own task).
+
+Files: `db.ts` (`pairing_tokens`, `PAIRING_TOKEN_TTL_MS`, `createPairingToken` /
+`redeemPairingToken`), `server.ts` (`/auth/pair/start` + `/auth/pair/redeem`,
+the latter in `PUBLIC_ROUTES`). Desktop: `qr.ts` payload + a checkbox in
+`index.html` / `main.ts`. iOS: `PairingPayload`, `AppModel.handleScannedPairing`
+/ `redeemPairing`. Tests: `agent-core/test/pairing.test.ts`.
+
+
+## AI-generated full-page artifacts (`render_artifact`, the Artifacts tab)
+
+The sibling of `render_card`, one level up. A card is a *fragment* that floats
+inside a chat bubble under the app's card chrome; an **artifact** is a *whole
+page* the assistant writes to explain something — a walkthrough with sections
+and diagrams, an interactive explainer, a data dashboard, a rendered document —
+that gets its **own full-viewport view** and a **persistent home in an
+Artifacts tab** next to Tools, not just a slot in one reply. "Explain how our
+mortgage amortises" → a page with a schedule, a chart, and a paydown slider.
+"Summarise the HOA rules doc" → a formatted read.
+
+**Why a separate thing and not just "big cards".** Three real differences, none
+cosmetic: (1) **lifecycle** — a card lives and dies with its message; an
+artifact is a durable object you revisit, so it needs a table and a browser,
+like `tools` / `documents`, not a JSON blob on `chat_messages`. (2) **framing**
+— a card is visually caged (inset, "✨ Generated" chrome, height cap) precisely
+so it can't impersonate app UI inside a conversation; an artifact is *expected*
+to fill the screen, so that cage is wrong for it. (3) **prompt guidance** — the
+card prompt says "compact, fits in a bubble"; the artifact prompt says "a full
+page, use the space". Same generator philosophy (raw HTML, not a `kind` enum —
+see the card entry), different product.
+
+**Storage + identity.** `artifacts` table on `ScopedStore` (per-user, exactly
+like `tools`): 8-char `shortId` (a small model has to say it back to reference
+it — same reason tasks/tools/docs aren't UUIDs), `title`, `html` (the raw
+`<body>` fragment, ≤ 128 KB — 4× a card), `source` / `source_id` (the chat
+session or channel it was born in, for a "back to conversation" affordance),
+`created_at` / `updated_at`. Every mutation logs to `activity` inline, like the
+rest of the store. Routes: `GET /artifacts`, `GET /artifacts/:id`,
+`PATCH /artifacts/:id` (rename), `DELETE /artifacts/:id`.
+
+**The document pipeline mirrors cards.** Model provides a `<body>` fragment via
+`render_artifact({ title, html })`; the server **stores only the fragment** and
+wraps it at read time (`artifacts/wrap.ts` — doctype, the same sealed CSP as
+cards, the **full** `HOUSE_STYLE` page look rather than the card's trimmed
+transparent variant, and the shared `CARD_RUNTIME` for the `window.onerror`
+trap + the optional `Card` chart helper). Same `validate…()` cheap structural
+checks (size, `new Function()` syntax check per `<script>`, no
+`<html>/<head>/<body>`) returning an error string the model self-repairs from.
+
+**Security is identical to cards — and that's the whole point of copying it.**
+`<iframe sandbox="allow-scripts">` **without** `allow-same-origin` (opaque
+origin, no `window.parent`, no app `localStorage`, no cookies); inline CSP
+`default-src 'none'` with **no `connect-src`** so `fetch`/XHR/WebSocket/beacon
+are all dead and `img-src data: blob:` only. Full-viewport vs. inline changes
+*nothing* about the boundary: the artifact still can't reach the app or the
+network, and prompt injection tops out at "shows a wrong page", the ceiling
+already accepted for research-agent. Android: the `CardWebView` isolation
+(`loadDataWithBaseURL(null, …)`, `blockNetworkLoads`, `shouldInterceptRequest`
+→ empty, nav blocked, no DOM storage) reused verbatim at full size. iOS:
+`CardWebView.swift` (`loadHTMLString(html, baseURL: nil)` + a block-all
+`WKContentRuleList` + a nav-deny delegate) reused the same way.
+
+**How a reply points at one — reuse `ChatReference`, don't invent a badge.**
+`render_artifact` calls the existing `onReference` hook with a new
+`{ type: "artifact", id }` hint. It then flows through the *exact* pipeline
+that already renders task/document/tool/link chips under a reply and persists
+them in `chat_messages.refs` / `messages.refs` — so replay, the family channel,
+and every client's chip rendering work with near-zero new code. The only
+per-client addition is: an `artifact` chip is styled as a little "open page"
+badge, and clicking it opens the Artifacts view on that id (desktop:
+`showView("artifacts")` + select; mobile: navigate to the viewer). No new
+response field, no new persisted column on messages.
+
+**Wiring + gating.** Leaf tool like `render_card`, bound on the planner +
+`document-agent` + `research-agent` + `connections-agent` (whoever holds the
+data can draw the page). `config.artifactsEnabled` — **on by default,
+`FAMILY_AGENT_ARTIFACTS=0` to disable**, env-only (no Settings toggle): it
+introduces no trust boundary the card sandbox didn't already establish, so it
+follows `compute`'s "pure capability, on by default" precedent rather than
+`cards`' admin switch. `/health.artifacts` = `"on" | "off"`; clients hide the
+tab and the open-artifact affordance when off. Per-user `chatArtifacts`
+collector is unnecessary — the reference hint carries it.
+
+**v1 cuts.** No iterate-in-place (a re-ask makes a new artifact — `tools`-style
+`iterateTool` is the obvious v2). No export/download, no sharing to a family
+channel, no pinning/folders. No `/artifact` forced-turn command. The generator
+isn't given `render_artifact` *and* `render_card` guidance in the same breath —
+the planner prompt gets one added paragraph: card = glanceable-in-bubble, artifact
+= a page worth navigating to.
+
+Files: `agent-core/src/artifacts/wrap.ts`, `agents/artifactTools.ts`,
+`config.ts` (`artifactsEnabled`), `db.ts` (`artifacts` table + CRUD),
+`server.ts` (routes + tool wiring + `artifact` reference resolution),
+`agents/references.ts` (`artifact` hint type). Desktop: `#view-artifacts` in
+`index.html` / `main.ts` + `.artifact-*` CSS. iOS: `Destination.artifacts`,
+`ArtifactsView` + `ArtifactViewerView`. Android: `Destination.Artifacts`,
+`ArtifactsScreen`. Tests: `agent-core/test/artifacts.test.ts`.

@@ -98,9 +98,20 @@ struct DiscoveryView: View {
         .sheet(isPresented: $showScanner) {
             NavigationStack {
                 QRScanSheet { payload in
-                    if let url = PairingPayload.serverURL(from: payload) {
-                        model.pickServer(url)
+                    model.handleScannedPairing(payload)
+                }
+            }
+        }
+        .overlay {
+            if model.pairing {
+                ZStack {
+                    Color.black.opacity(0.35).ignoresSafeArea()
+                    HStack(spacing: 12) {
+                        ProgressView().tint(.white)
+                        Text("Pairing…").appBody().foregroundStyle(.white)
                     }
+                    .padding(.horizontal, 22).padding(.vertical, 16)
+                    .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 14))
                 }
             }
         }

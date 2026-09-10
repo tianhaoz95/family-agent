@@ -188,6 +188,19 @@ forces it off. Each card runs in a sealed sandbox — opaque-origin iframe /
 the app, your data, or the network. Full design: `docs/DECISIONS.md` →
 "AI-generated HTML cards"; contract in `CLAUDE.md` → "Generated HTML cards".
 
+## Full-page artifacts + the Artifacts tab
+
+Bigger than a card: the assistant can generate a **whole page** — a walkthrough,
+an interactive explainer, a small dashboard — with `render_artifact`. It's saved
+per-user, browsable in a new **Artifacts tab** (next to Tools) on all four
+clients, and the reply carries a chip that opens it. Same sealed sandbox as a
+card (opaque origin, `default-src 'none'` no-network CSP), just full-viewport.
+**On by default; `FAMILY_AGENT_ARTIFACTS=0`** on the server turns it off (env
+only — no new trust boundary beyond cards, so no Settings toggle). Android has
+no QR-scanner-style camera dependency here; the tab works everywhere. Full
+design: `docs/DECISIONS.md` → "AI-generated full-page artifacts"; contract in
+`CLAUDE.md`. Tests: `agent-core/test/artifacts.test.ts`.
+
 ## Desktop opens to a blank window
 
 If a previous run left an orphaned `node dist/server.js` holding port 4174 (the

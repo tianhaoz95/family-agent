@@ -1,6 +1,6 @@
-# Family Agent
-
-<img src="logo.png" alt="Family Agent logo" width="96" height="96" />
+<p align="center">
+  <img src="assets/header.svg" alt="Family Agent — local-first family organizer" width="760">
+</p>
 
 A local-first agentic app for organizing a family's documents, schedules, and
 misc to-dos. Everything — the model, the storage, the document processing —

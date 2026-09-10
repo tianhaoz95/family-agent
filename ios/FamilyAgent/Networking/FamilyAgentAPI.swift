@@ -130,6 +130,10 @@ struct FamilyAgentAPI: Sendable {
     func bootstrap(_ req: BootstrapRequest) async throws -> LoginResponse {
         try await send("POST", "/auth/bootstrap", body: req)
     }
+    /// Trade a QR pairing token for a real session (no password). Public route.
+    func redeemPairing(_ token: String) async throws -> LoginResponse {
+        try await send("POST", "/auth/pair/redeem", body: PairRedeemRequest(token: token))
+    }
     func me() async throws -> User { try await get("/auth/me", as: MeResponse.self).user }
     func logout() async { _ = try? await sendVoid("POST", "/auth/logout") }
 
@@ -322,6 +326,19 @@ struct FamilyAgentAPI: Sendable {
     func listTools() async throws -> [Tool] { try await get("/tools", as: ToolsResponse.self).tools }
     func buildTool(_ prompt: String) async throws { try await sendVoid("POST", "/tools", body: BuildToolRequest(prompt: prompt)) }
     func deleteTool(_ id: String) async throws { try await sendVoid("DELETE", "/tools/\(id)") }
+
+    // MARK: - Artifacts (render_artifact)
+
+    func listArtifacts() async throws -> [ArtifactSummary] {
+        try await get("/artifacts", as: ArtifactListResponse.self).artifacts
+    }
+    func getArtifact(_ id: String) async throws -> Artifact {
+        try await get("/artifacts/\(id)", as: ArtifactResponse.self).artifact
+    }
+    func renameArtifact(_ id: String, title: String) async throws -> ArtifactSummary {
+        try await send("PATCH", "/artifacts/\(id)", body: ["title": title], as: ArtifactSummaryResponse.self).artifact
+    }
+    func deleteArtifact(_ id: String) async throws { try await sendVoid("DELETE", "/artifacts/\(id)") }
 
     // MARK: - Vault
 

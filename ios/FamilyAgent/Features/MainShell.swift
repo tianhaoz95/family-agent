@@ -1,13 +1,14 @@
 import SwiftUI
 
 enum Destination: String, CaseIterable, Identifiable, Hashable {
-    case chat, messages, events, board, documents, tools, routines, skills, connections, vault, activity, settings
+    case chat, messages, events, board, documents, tools, artifacts, routines, skills, connections, vault, activity, settings
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .chat: "Chat"; case .messages: "Messages"; case .events: "Events"
         case .board: "Board"; case .documents: "Documents"; case .tools: "Tools"
+        case .artifacts: "Artifacts"
         case .routines: "Routines"; case .skills: "Skills"; case .connections: "Connections"
         case .vault: "Vault"; case .activity: "Activity"; case .settings: "Settings"
         }
@@ -20,6 +21,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .board: "square.grid.2x2"
         case .documents: "doc.text"
         case .tools: "wrench.and.screwdriver"
+        case .artifacts: "rectangle.on.rectangle.angled"
         case .routines: "clock.arrow.circlepath"
         case .skills: "graduationcap"
         case .connections: "point.3.connected.trianglepath.dotted"
@@ -51,6 +53,7 @@ struct MainShell: View {
     private var visibleDestinations: [Destination] {
         Destination.allCases.filter { d in
             switch d {
+            case .artifacts: return model.artifactsMode == "on"
             case .routines: return model.routinesEnabled
             case .skills: return model.skillsMode != "off"
             case .connections: return model.mcpMode != "off" && model.isAdmin
@@ -188,6 +191,7 @@ struct MainShell: View {
         case .board:       BoardView()
         case .documents:   DocumentsView()
         case .tools:       ToolsView()
+        case .artifacts:   ArtifactsView()
         case .routines:    RoutinesView()
         case .skills:      SkillsView()
         case .connections: ConnectionsView()

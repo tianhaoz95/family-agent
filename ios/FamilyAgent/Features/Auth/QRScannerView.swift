@@ -2,12 +2,13 @@ import SwiftUI
 @preconcurrency import AVFoundation
 
 /// A full-screen QR scanner used to pair with the desktop app. The desktop
-/// Settings screen ("Pair a phone") shows a QR that encodes the home server's
-/// LAN address as a plain `http://host:port` string; we also accept a small
-/// JSON envelope `{"url": "...", "name": "..."}` for forward compatibility.
+/// Settings screen ("Pair a phone") shows a QR that encodes either the home
+/// server's `http://host:port` address as a plain string, or a JSON envelope
+/// `{"url": "...", "name": "...", "t": "<token>"}` where `t` auto-signs the
+/// phone into that account. Parsed by `PairingPayload`.
 struct QRScanSheet: View {
     /// Called with the raw payload string once a code is read. The caller
-    /// dismisses the sheet and hands the value to `AppModel.pickServer`.
+    /// dismisses the sheet and routes it through `PairingPayload`.
     let onScan: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var permission = AVCaptureDevice.authorizationStatus(for: .video)
@@ -148,20 +149,28 @@ private struct QRCameraView: UIViewRepresentable {
     }
 }
 
-/// Turns a scanned pairing payload into a server URL. Accepts a bare
-/// `http(s)://…` string or a `{"url": "...", "name": "..."}` JSON envelope.
-enum PairingPayload {
-    static func serverURL(from raw: String) -> String? {
+/// A scanned pairing QR. The desktop encodes either a bare `http(s)://…`
+/// string (address only) or a `{"url": "...", "name": "...", "t": "<token>"}`
+/// JSON envelope — `t` is a single-use token that signs the phone straight into
+/// the desktop's account (see `AppModel.redeemPairing`).
+struct PairingPayload {
+    let serverURL: String
+    let serverName: String?
+    /// Present when the desktop had "sign in automatically" enabled.
+    let token: String?
+
+    static func parse(from raw: String) -> PairingPayload? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
         if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
-            return trimmed
+            return PairingPayload(serverURL: trimmed, serverName: nil, token: nil)
         }
         if let data = trimmed.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let url = obj["url"] as? String,
            url.lowercased().hasPrefix("http") {
-            return url
+            let token = (obj["t"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return PairingPayload(serverURL: url, serverName: obj["name"] as? String, token: token)
         }
         return nil
     }

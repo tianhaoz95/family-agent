@@ -565,7 +565,11 @@ private fun ChatBubble(
                     },
                     label = {
                         Text(
-                            if (ref.type == "link") ref.label.removePrefix("https://").removePrefix("http://").removePrefix("www.").take(40) else ref.label,
+                            when (ref.type) {
+                                "link" -> ref.label.removePrefix("https://").removePrefix("http://").removePrefix("www.").take(40)
+                                "artifact" -> "↗ " + ref.label
+                                else -> ref.label
+                            },
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.labelMedium,

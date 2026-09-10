@@ -85,7 +85,36 @@ struct HealthResponse: Codable, Sendable {
     var vault: String = "off"
     var vaultAi: Bool = false
     var cards: String = "off"
+    var artifacts: String = "off"
 }
+
+// MARK: - Artifacts (render_artifact)
+
+struct ArtifactSummary: Codable, Sendable, Hashable, Identifiable {
+    let id: String
+    let title: String
+    var source: String? = nil
+    var sourceId: String? = nil
+    var createdAt: String = ""
+    var updatedAt: String? = nil
+}
+
+struct Artifact: Codable, Sendable, Hashable, Identifiable {
+    let id: String
+    let title: String
+    var source: String? = nil
+    var sourceId: String? = nil
+    var createdAt: String = ""
+    var updatedAt: String? = nil
+    /// The raw <body> fragment the model wrote (for "view source").
+    var html: String = ""
+    /// The full sandboxed HTML document — load into a sealed WKWebView.
+    var document: String = ""
+}
+
+struct ArtifactListResponse: Codable, Sendable { var artifacts: [ArtifactSummary] = [] }
+struct ArtifactResponse: Codable, Sendable { let artifact: Artifact }
+struct ArtifactSummaryResponse: Codable, Sendable { let artifact: ArtifactSummary }
 
 struct User: Codable, Sendable, Identifiable, Hashable {
     let id: String
@@ -108,6 +137,12 @@ struct LoginRequest: Codable, Sendable {
 struct LoginResponse: Codable, Sendable {
     let token: String
     let user: User
+}
+
+/// Body for `POST /auth/pair/redeem` — the token lifted out of a pairing QR.
+struct PairRedeemRequest: Codable, Sendable {
+    let token: String
+    var deviceLabel: String? = "ios"
 }
 
 struct MeResponse: Codable, Sendable { let user: User }

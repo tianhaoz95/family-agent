@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Description
@@ -62,6 +63,8 @@ import app.familyagent.android.data.FamilyAgentApi
 import app.familyagent.android.data.ServerDiscovery
 import app.familyagent.android.data.SettingsStore
 import app.familyagent.android.ui.ActivityScreen
+import app.familyagent.android.ui.ArtifactViewScreen
+import app.familyagent.android.ui.ArtifactsScreen
 import app.familyagent.android.ui.AtmosphereBackground
 import app.familyagent.android.ui.VaultScreen
 import app.familyagent.android.ui.BoardScreen
@@ -92,6 +95,7 @@ private enum class Destination(val route: String, val label: String, val icon: a
     Board("board", "Board", Icons.Rounded.GridView),
     Documents("documents", "Documents", Icons.Rounded.Description),
     Tools("tools", "Tools", Icons.Rounded.Build),
+    Artifacts("artifacts", "Artifacts", Icons.Rounded.Article),
     Routines("routines", "Routines", Icons.Rounded.Schedule),
     Skills("skills", "Skills", Icons.Rounded.School),
     Connections("connections", "Connections", Icons.Rounded.Hub),
@@ -101,6 +105,7 @@ private enum class Destination(val route: String, val label: String, val icon: a
 }
 
 private const val TOOL_VIEW_ROUTE = "toolview/{url}"
+private const val ARTIFACT_VIEW_ROUTE = "artifactview/{id}"
 private const val CONVERSATION_ROUTE = "conversation/{id}"
 private const val CHAT_SESSIONS_ROUTE = "chatsessions"
 
@@ -183,6 +188,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
             Destination.Board -> viewModel.refreshNotes()
             Destination.Documents -> viewModel.refreshDocuments()
             Destination.Tools -> viewModel.refreshTools()
+            Destination.Artifacts -> viewModel.refreshArtifacts()
             Destination.Routines -> viewModel.refreshRoutines()
             Destination.Skills -> viewModel.refreshSkills()
             Destination.Connections -> viewModel.refreshConnections()
@@ -206,6 +212,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                 connectionsEnabled = state.mcpMode != "off" &&
                     (state.auth as? AuthState.Authenticated)?.user?.role == "admin",
                 vaultEnabled = state.vaultMode == "on",
+                artifactsEnabled = state.artifactsMode == "on",
                 onSelect = { dest ->
                     scope.launch { drawerState.close() }
                     val alreadyHere = currentDestination?.hierarchy?.any { it.route == dest.route } == true
@@ -254,7 +261,10 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onSend = viewModel::sendChat,
                         onTranscribe = viewModel::transcribeVoice,
                         onVoiceSend = viewModel::sendChatVoice,
-                        onReferenceClick = viewModel::openReferenceDetail,
+                        onReferenceClick = { ref ->
+                            if (ref.type == "artifact") navController.navigate("artifactview/${ref.id}")
+                            else viewModel.openReferenceDetail(ref)
+                        },
                         onNewChat = viewModel::startNewChatSession,
                         onOpenHistory = { navController.navigate(CHAT_SESSIONS_ROUTE) },
                         tools = state.tools,
@@ -375,6 +385,27 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                 composable(TOOL_VIEW_ROUTE) { entry ->
                     val url = android.net.Uri.decode(entry.arguments?.getString("url") ?: "")
                     ToolWebViewScreen(url = url, onClose = { navController.popBackStack() })
+                }
+                composable(Destination.Artifacts.route) {
+                    ArtifactsScreen(
+                        artifacts = state.artifacts,
+                        loading = state.artifactsLoading,
+                        onRefresh = viewModel::refreshArtifacts,
+                        onOpen = { id -> navController.navigate("artifactview/$id") },
+                        onDelete = viewModel::deleteArtifact,
+                    )
+                }
+                composable(ARTIFACT_VIEW_ROUTE) { entry ->
+                    val id = entry.arguments?.getString("id") ?: ""
+                    ArtifactViewScreen(
+                        artifactId = id,
+                        load = viewModel::loadArtifact,
+                        onClose = { navController.popBackStack() },
+                        onDelete = {
+                            viewModel.deleteArtifact(id)
+                            navController.popBackStack()
+                        },
+                    )
                 }
                 composable(Destination.Routines.route) {
                     RoutinesScreen(
@@ -519,6 +550,7 @@ private fun AppDrawer(
     skillsEnabled: Boolean,
     connectionsEnabled: Boolean,
     vaultEnabled: Boolean,
+    artifactsEnabled: Boolean,
     onSelect: (Destination) -> Unit,
 ) {
     // Opaque, not glass: Android has no cheap backdrop blur, so a translucent
@@ -549,6 +581,7 @@ private fun AppDrawer(
             }
 
             Destination.entries.forEach { dest ->
+                if (dest == Destination.Artifacts && !artifactsEnabled) return@forEach
                 if (dest == Destination.Routines && !routinesEnabled) return@forEach
                 if (dest == Destination.Skills && !skillsEnabled) return@forEach
                 if (dest == Destination.Connections && !connectionsEnabled) return@forEach

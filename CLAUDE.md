@@ -188,6 +188,18 @@ data from a migrated single-user DB (owned by the `_legacy_` sentinel). Machine 
 (`model`, `ollamaBaseUrl`, `ocrModel`, `serverName`) are admin-only; `inboxDir` is per-user.
 An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with a DEFAULT).
 
+**QR phone pairing.** The desktop "Pair a phone" panel has a toggle (device-local
+`localStorage` `familyAgent.pairAutoLogin`, **default on**): on, the QR carries a
+`{url,name,t}` JSON envelope where `t` is a single-use pairing token
+(`pairing_tokens` table, sha256-stored, 5-min TTL, `PAIRING_TOKEN_TTL_MS`) minted by
+`POST /auth/pair/start` (authed — bound to the signed-in desktop account, one live at
+a time); the phone reads it via `PairingPayload` and `POST /auth/pair/redeem` (public)
+trades it for a real session — no password, no vault auto-unlock. Toggle off = the QR
+is the bare `http://host:port` string and the phone still shows the login screen.
+Only iOS has a scanner (`QRScanSheet` → `AppModel.handleScannedPairing`); the desktop
+re-mints the token when Settings opens and every ~3.5 min it stays open. Tests:
+`agent-core/test/pairing.test.ts`.
+
 **agent-core** (`agent-core/src/`):
 - `server.ts` — Fastify app. `buildServer(store, hooks?, supervisor?)` is the testable factory
   (used directly by tests via `app.inject` — tests seed a user + token with
@@ -294,7 +306,14 @@ An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with
     hypothetical. It also takes an optional `images: string[]` (data URIs) — the chat UI in
     both apps can attach photos/screenshots, and it builds a multimodal `HumanMessage`
     content array for the (multimodal) planner model. Subagents only ever get a text
-    `description`, so an image never propagates past the planner turn. It also takes an
+    `description`, so an image never propagates past the planner turn. **A non-image
+    file** (PDF, scan, `.txt`/`.md`) attached in the desktop chat composer is uploaded via
+    `POST /documents/upload` first; its id rides along in `POST /chat`'s `documentIds`, and
+    the route **prepends that document's extracted `rawText`** (per-doc 8 KB cap) to the
+    model's copy of the message — the stored transcript keeps the user's own words, and each
+    attached doc is pushed as a `document` `ChatReference` so a chip renders under the reply.
+    Family channels stay image-only (`{ allowDocs: false }` on their tray); iOS/Android
+    composers pick images only, so this is desktop-only for now. It also takes an
     optional `history: {role, content}[]` — prior turns of the same persisted chat session,
     prepended ahead of the current message in the `messages` array passed to `agent.invoke`
     (text only; images aren't replayed, to avoid multiplying an already-slow CPU turn). See
@@ -429,7 +448,9 @@ wire types are hand-mirrored in `ios/FamilyAgent/Networking/DTOs.swift` (the cou
   (`agent-core` `/health.lanAddrs` = `{url, kind}[]`, `kind` ∈ `tailscale`/`lan`/`other`,
   Tailscale first — MagicDNS name (`tailscale status --json`, best-effort) then `100.x` IP —
   because it works off-Wi-Fi; `src/lan.ts`; desktop `src/qr.ts`, a clickable list picks which
-  address the QR encodes).
+  address the QR encodes) — and, with the panel's "sign in automatically" toggle on
+  (default), a single-use pairing token so the scan needs no password (see "QR phone
+  pairing" above; `PairingPayload` parses the `{url,name,t}` envelope).
   Token in the Keychain (`Keychain.swift`), rest in `UserDefaults` (`SettingsStore.swift`).
 - **Design** (`ios/FamilyAgent/DesignSystem/`): `Theme.swift` ports the Kotlin `Pal`/`AppAccents`/
   shape/type tokens (warm `#F6F5F4`, one `#0075DE` accent, Inter, light only). `Glass.swift` is
@@ -558,6 +579,35 @@ collector like `chatRefs`; capped 2/reply. Android renders it in an isolated
 `@JavascriptInterface postHeight`). Desktop `renderCard` in `main.ts` +
 `.chat-card` CSS; Android `ui/CardWebView.kt` + `DetailContent.CardSource`.
 Tests: `test/cards.test.ts`. See `docs/DECISIONS.md` → "AI-generated HTML cards".
+
+**Full-page artifacts (`render_artifact`).** The card's bigger sibling. When
+`config.artifactsEnabled` (**on by default, `FAMILY_AGENT_ARTIFACTS=0`
+disables** — env-only, no Settings toggle, since it adds no trust boundary the
+card sandbox didn't; `/health.artifacts` = `"on"|"off"`), the assistant has a
+leaf `render_artifact({ title, html })` tool (same placement as `render_card`:
+planner + document/research/connections subagents). It generates a **whole
+page** — a walkthrough, an interactive explainer, a dashboard — persisted
+per-user in the **`artifacts` table on `ScopedStore`** (8-char `shortId`,
+`title`, `html` fragment ≤ 128 KB, `source`/`source_id`). `artifacts/wrap.ts`
+wraps the stored fragment at read time (doctype + the **same** sealed
+`default-src 'none'` no-`connect-src` CSP + opaque-origin sandbox as a card +
+the full `HOUSE_STYLE` page look + the shared `CARD_RUNTIME`). Routes:
+`GET /artifacts` (list, no html), `GET /artifacts/:id` (raw `html` + wrapped
+`document`), `PATCH /artifacts/:id` (rename), `DELETE /artifacts/:id`. The
+reply links to one via a **new `ChatReference` type `artifact`** (`id` = the
+artifact id) — `render_artifact` calls `onReference` and it rides the existing
+`chatRefs` → `resolveReferences` → persisted `refs` pipeline, so no new
+response field. Each client has an **Artifacts tab** (next to Tools,
+`/health.artifacts`-gated) with a list + a sealed full-size viewer, and the
+reply's `artifact` chip opens it: desktop `#view-artifacts` (`main.ts`,
+`.artifact-*` CSS, `<iframe sandbox="allow-scripts">`), iOS
+`Destination.artifacts` → `ArtifactsView` + `ArtifactViewerView` (a
+fullScreenCover from the chip), Android `Destination.Artifacts` →
+`ArtifactsScreen` + `ArtifactViewScreen` (a nested `artifactview/{id}` route),
+both reusing the `CardWebView` isolation full-size. v1 has no iterate-in-place,
+export, channel-sharing, or `/artifact` forced turn. Tests:
+`test/artifacts.test.ts`. See `docs/DECISIONS.md` → "AI-generated full-page
+artifacts".
 
 ## "/" forces a chat turn to one specialist agent
 
@@ -940,7 +990,9 @@ Ten subagents ship: `task-agent`, `document-agent`, `builder-agent`,
 `notes-agent`, `tools-agent`, `routine-agent`, `research-agent` (web access
 on), `workshop-agent` (file processing on), `skill-agent` (skills, default on),
 and `connections-agent` (MCP on) — plus `run_code`, a leaf tool
-on the planner + `document-agent` (see "Code sandbox" above). The
+on the planner + `document-agent` (see "Code sandbox" above), and the leaf
+`render_card` / `render_artifact` tools (planner + document/research/connections
+subagents). The
 **`vault-agent`** (`FAMILY_AGENT_VAULT=1`) is forced-turn-only (`/vault`) and
 never wired as a planner subagent — see "Password vault" above. `builder-agent`
 generates small self-contained web tools (`agent-core/src/tools/*`, and a "Tools" screen in

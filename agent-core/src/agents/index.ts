@@ -14,6 +14,7 @@ import { makeSkillTools, type SkillToolDeps } from "./skillTools.js";
 import { makeMcpTools, type McpToolDeps } from "./mcpTools.js";
 import { makeVaultTools, type VaultToolDeps } from "./vaultTools.js";
 import { makeCardTools, type CardToolDeps } from "./cardTools.js";
+import { makeArtifactTools, type ArtifactToolDeps } from "./artifactTools.js";
 import { StepRecorder } from "./steps.js";
 import { config } from "../config.js";
 import { makeFamilyToolTools, type FamilyToolDeps } from "./toolTools.js";
@@ -186,6 +187,16 @@ snippet the app embeds inline) when a chart, a comparison, a checklist, a
 table, or a diagram would read better than text. Call render_card, then reply
 with one short sentence summarising it — don't also repeat it as a text table.`;
 
+const PLANNER_ARTIFACTS_SECTION = `
+
+You also have a "render_artifact" tool: generate a whole web page when the
+answer deserves more room than a chat bubble — a multi-section explainer, a
+walkthrough with diagrams, an interactive demo, a dashboard, a formatted
+document. It's saved to the user's Artifacts tab and linked under your reply.
+Rule of thumb: one small chart or checklist → render_card; a page worth
+opening full-screen → render_artifact. After calling it, reply with one short
+sentence pointing the user to it.`;
+
 /**
  * The planner system prompt for a user, including ONLY the capability sections
  * for subagents that are actually wired. `PLANNER_PROMPT` (the base) is what
@@ -199,6 +210,7 @@ export function buildPlannerPrompt(caps: {
   skills?: boolean;
   mcp?: boolean;
   cards?: boolean;
+  artifacts?: boolean;
 }): string {
   let p = PLANNER_PROMPT;
   if (caps.tools) p += PLANNER_TOOLS_SECTION;
@@ -207,6 +219,7 @@ export function buildPlannerPrompt(caps: {
   if (caps.skills) p += PLANNER_SKILLS_SECTION;
   if (caps.mcp) p += PLANNER_MCP_SECTION;
   if (caps.cards) p += PLANNER_CARDS_SECTION;
+  if (caps.artifacts) p += PLANNER_ARTIFACTS_SECTION;
   return p;
 }
 
@@ -423,6 +436,10 @@ export interface FamilyAgentDeps {
   /** AI-generated HTML cards — `render_card` bound onto the planner and the
    *  data-facing subagents. Omit to disable (config.cardsEnabled off). */
   cards?: CardToolDeps;
+  /** AI-generated full-page artifacts — `render_artifact` bound onto the
+   *  planner and the data-facing subagents. Omit to disable
+   *  (config.artifactsEnabled off). */
+  artifacts?: ArtifactToolDeps;
 }
 
 /**
@@ -505,6 +522,9 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
   // `render_card` — a leaf tool like run_code, bound on the planner and on the
   // subagents that hold chartable data (document / research / connections).
   const cardTools = deps.cards ? makeCardTools(deps.cards) : [];
+  // `render_artifact` — same placement as render_card: a full page instead of
+  // an inline fragment.
+  const artifactTools = deps.artifacts ? makeArtifactTools(deps.artifacts) : [];
 
   return createDeepAgent({
     name: "family-planner",
@@ -518,8 +538,9 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
       skills: !!deps.skills,
       mcp: !!deps.mcp,
       cards: !!deps.cards,
+      artifacts: !!deps.artifacts,
     }),
-    tools: [...computeTools, ...skillTools, ...cardTools],
+    tools: [...computeTools, ...skillTools, ...cardTools, ...artifactTools],
     // deepagents bakes in generic ls/read_file/write_file tools for the
     // agent's own "working memory" filesystem. A 3B-class model reliably
     // confused those with our domain concept of "documents" — asked "what
@@ -554,6 +575,7 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
           ...makeDocumentTools(store, deps.onReference, deps.getEmbedder),
           ...computeTools,
           ...cardTools,
+          ...artifactTools,
         ],
       },
       {
@@ -591,6 +613,7 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
               tools: [
                 ...makeWebTools({ logActivity: deps.web.logActivity, onReference: deps.onReference }),
                 ...cardTools,
+                ...artifactTools,
               ],
             },
           ]
@@ -632,7 +655,7 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
                 "Uses tools from external services the family has connected (a calendar, a knowledge base, home automation, a company system…) via MCP — to look something up or take an action there.",
               systemPrompt: CONNECTIONS_AGENT_PROMPT,
               model,
-              tools: [...makeMcpTools(deps.mcp), ...cardTools],
+              tools: [...makeMcpTools(deps.mcp), ...cardTools, ...artifactTools],
             },
           ]
         : []),

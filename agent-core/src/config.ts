@@ -207,6 +207,14 @@ export const config = {
   computeMemoryBytes: Number(process.env.FAMILY_AGENT_COMPUTE_MEMORY_BYTES ?? 64 * 1024 * 1024),
   computeMaxOutputChars: Number(process.env.FAMILY_AGENT_COMPUTE_MAX_OUTPUT ?? 10_000),
 
+  // ---- AI-generated full-page artifacts (artifacts/*, agents/artifactTools.ts) ----
+  // `render_artifact` — the assistant writes a whole HTML page to explain
+  // something, browsable in an Artifacts tab. Same sealed opaque-origin sandbox
+  // as render_card (no network, no app access), so it adds no trust boundary
+  // the card feature didn't already establish → on by default, env-only.
+  // FAMILY_AGENT_ARTIFACTS=0 disables it.
+  artifactsEnabled: process.env.FAMILY_AGENT_ARTIFACTS !== "0",
+
   // ---- Skills (skills/*, agents/skillTools.ts) ----
   // A skill is a folder the family adds under <dataDir>/skills/<name>/ with a
   // SKILL.md (front-matter + instructions) and optional scripts/. The planner

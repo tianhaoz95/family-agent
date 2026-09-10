@@ -2,7 +2,14 @@ import Fastify, { type FastifyRequest, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import { z } from "zod";
-import { Store, ScopedStore, AGENT_SENDER_ID, type UserRecord, type RoutineRecord } from "./db.js";
+import {
+  Store,
+  ScopedStore,
+  AGENT_SENDER_ID,
+  type UserRecord,
+  type RoutineRecord,
+  type ArtifactRecord,
+} from "./db.js";
 import { config, dbPath, envLocked, userInboxDir } from "./config.js";
 import { webEnabled } from "./web/search.js";
 import { sandboxAvailable } from "./shell/sandbox.js";
@@ -76,6 +83,8 @@ import { startInboxWatcher } from "./inboxWatcher.js";
 import { persistSettings } from "./settingsFile.js";
 import { verifyPassword, bearerToken } from "./auth.js";
 import { wrapCard, type CardRecord, type RenderedCard } from "./cards/wrap.js";
+import { wrapArtifact } from "./artifacts/wrap.js";
+import type { ReferenceHint } from "./agents/references.js";
 import { VaultKeyring } from "./vault/keyring.js";
 import {
   VaultService,
@@ -143,7 +152,14 @@ function mimeFromFilename(filename: string): string {
 
 // Routes reachable without a bearer token: discovery, and the auth handshake
 // itself. Everything else 401s without a valid session.
-const PUBLIC_ROUTES = new Set(["/health", "/_diag", "/auth/status", "/auth/login", "/auth/bootstrap"]);
+const PUBLIC_ROUTES = new Set([
+  "/health",
+  "/_diag",
+  "/auth/status",
+  "/auth/login",
+  "/auth/bootstrap",
+  "/auth/pair/redeem",
+]);
 
 export interface ServerHooks {
   /** A user changed their watched folder — restart just their watcher. */
@@ -296,7 +312,10 @@ export function buildServer(
   // since every builder's onReference closes over it.
   const chatRefs = new Map<
     string,
-    ({ type: "document" | "task" | "tool"; id: string } | { type: "link"; id: string; label: string })[]
+    (
+      | { type: "document" | "task" | "tool" | "artifact"; id: string }
+      | { type: "link"; id: string; label: string }
+    )[]
   >();
   // Generated HTML cards the model rendered this turn (render_card). One
   // collector array per in-flight turn, keyed by user (a set of them, so two
@@ -315,6 +334,16 @@ export function buildServer(
     onCard: (card: CardRecord) => {
       for (const c of chatCards.get(userId) ?? []) c.push(card);
     },
+    logActivity: (a: string, ac: string, d: string) => store.scoped(userId).logActivity(a, ac, d),
+  });
+  // `render_artifact` deps — persist the fragment straight to the user's store
+  // and push an `artifact` reference so the reply carries a chip that opens it.
+  const artifactDeps = (userId: string) => ({
+    saveArtifact: ({ title, html }: { title: string; html: string }) => {
+      const a = store.scoped(userId).createArtifact({ title, html, source: "chat" });
+      return { id: a.id, title: a.title };
+    },
+    onReference: (ref: ReferenceHint) => chatRefs.get(userId)?.push(ref),
     logActivity: (a: string, ac: string, d: string) => store.scoped(userId).logActivity(a, ac, d),
   });
   // Live tool-call visibility: a turn's steps, keyed by a client-supplied
@@ -490,6 +519,7 @@ export function buildServer(
       skills: skillsDeps(userId),
       mcp: mcpDeps(userId),
       cards: config.cardsEnabled ? cardDeps(userId) : undefined,
+      artifacts: config.artifactsEnabled ? artifactDeps(userId) : undefined,
     })
   );
   // The four "/<keyword>" caches only ever get built when that keyword was
@@ -581,7 +611,7 @@ export function buildServer(
     const collected = chatRefs.get(userId) ?? [];
     chatRefs.delete(userId);
     const seen = new Set<string>();
-    const out: { type: "document" | "task" | "tool" | "link"; id: string; label: string }[] = [];
+    const out: { type: "document" | "task" | "tool" | "link" | "artifact"; id: string; label: string }[] = [];
     for (const r of collected) {
       const key = `${r.type}:${r.id}`;
       if (seen.has(key)) continue;
@@ -592,6 +622,9 @@ export function buildServer(
       } else if (r.type === "tool") {
         const t = userStore.getTool(r.id);
         if (t) out.push({ type: "tool", id: r.id, label: t.name });
+      } else if (r.type === "artifact") {
+        const a = userStore.getArtifact(r.id);
+        if (a) out.push({ type: "artifact", id: r.id, label: a.title });
       } else if (r.type === "link") {
         // A web page the research agent opened — id is the URL, label the title.
         out.push({ type: "link", id: r.id, label: r.label || r.id });
@@ -830,6 +863,9 @@ export function buildServer(
     // AI-generated HTML cards (render_card). Admin-toggleable in Settings;
     // clients hide the card render path when "off".
     cards: config.cardsEnabled ? "on" : "off",
+    // AI-generated full-page artifacts (render_artifact + the Artifacts tab).
+    // Clients hide the tab and the open-artifact chip when "off".
+    artifacts: config.artifactsEnabled ? "on" : "off",
     };
   });
 
@@ -916,6 +952,36 @@ export function buildServer(
     if (token) store.deleteSession(token);
     if (req.authUser) vault.lock(req.authUser.id);
     return { ok: true };
+  });
+
+  // ---- phone pairing (QR auto sign-in) ----
+  // The desktop "Pair a phone" panel can bake a token into its QR so a phone
+  // signs straight into the scanning-desktop's own account, no password. The
+  // token is bound to req.authUser, single-use, and expires in minutes — a
+  // stale photo of the QR is worthless. Authed route: only a signed-in desktop
+  // can mint one, and only for itself.
+  app.post("/auth/pair/start", async (req) => {
+    const { token, expiresAt } = store.createPairingToken(req.authUser.id);
+    return { token, expiresAt };
+  });
+
+  const PairRedeemBody = z.object({
+    token: z.string().min(1),
+    deviceLabel: z.string().trim().max(80).optional(),
+  });
+  app.post("/auth/pair/redeem", async (req, reply) => {
+    const parsed = PairRedeemBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const user = store.redeemPairingToken(parsed.data.token);
+    if (!user) {
+      return reply
+        .code(401)
+        .send({ error: "This pairing code has expired or was already used — generate a new one on the computer." });
+    }
+    const { token } = store.createSession(user.id, parsed.data.deviceLabel ?? "Paired phone");
+    // No vault auto-unlock: pairing carries no password (same as after an admin
+    // password reset — the vault stays locked until the user unlocks it).
+    return { token, user: publicUser(user) };
   });
 
   app.get("/auth/me", async (req) => ({ user: publicUser(req.authUser) }));
@@ -1026,6 +1092,10 @@ export function buildServer(
   const ChatBody = z.object({
     message: z.string().min(1),
     images: z.array(z.string().regex(/^data:image\/[a-z+.-]+;base64,/i)).max(4).optional(),
+    /** Ids of documents attached to this turn (uploaded via /documents/upload
+     *  by the composer). Their extracted text is prepended to the model's copy
+     *  of the message so the assistant can actually read a PDF/scan/doc. */
+    documentIds: z.array(z.string().min(1)).max(5).optional(),
     sessionId: z.string().min(1).optional(),
     /** Client-generated id so it can poll GET /chat/turns/:turnId for live
      *  tool-call visibility while this request is in flight. */
@@ -1034,21 +1104,43 @@ export function buildServer(
   app.post("/chat", { bodyLimit: 24 * 1024 * 1024 }, async (req, reply) => {
     const parsed = ChatBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
-    const { message, images = [], sessionId, turnId } = parsed.data;
+    const { message, images = [], documentIds = [], sessionId, turnId } = parsed.data;
 
     let session = sessionId ? req.userStore.getChatSession(sessionId) : undefined;
     if (sessionId && !session) return reply.code(404).send({ error: "No such chat session." });
     if (!session) session = req.userStore.createChatSession(message);
 
+    // Attached documents: pull each one's extracted text and build the block
+    // the model actually sees. The stored transcript keeps the user's original
+    // wording plus a short "[+N document(s)]" note (same shape as images).
+    const attachedDocs = documentIds
+      .map((id) => req.userStore.getDocument(id))
+      .filter((d): d is NonNullable<typeof d> => !!d);
+    const PER_DOC_CHARS = 8000;
+    const docBlock = attachedDocs.length
+      ? "The user attached the following document(s) to this message — use them to answer:\n\n" +
+        attachedDocs
+          .map((d) => {
+            const body = (d.rawText || "").trim();
+            const clipped = body.length > PER_DOC_CHARS ? body.slice(0, PER_DOC_CHARS) + "\n…(truncated)" : body;
+            return `===== ${d.filename} =====\n${clipped || "(no readable text was extracted)"}\n===== end of ${d.filename} =====`;
+          })
+          .join("\n\n") +
+        "\n\n"
+      : "";
+    const modelMessage = docBlock + message;
+
     // Prior turns of this session, as context for the model — captured before
     // this turn's own message is stored, so it isn't echoed back to itself.
     const priorMessages = req.userStore.listChatMessages(session.id).slice(-20);
     req.userStore.addChatMessage(session.id, "user", message, images);
-    req.userStore.logActivity(
-      "user",
-      "chat.message",
-      images.length ? `${message}  [+${images.length} image${images.length > 1 ? "s" : ""}]` : message
-    );
+    const attachNote = [
+      images.length ? `+${images.length} image${images.length > 1 ? "s" : ""}` : "",
+      attachedDocs.length ? `+${attachedDocs.length} document${attachedDocs.length > 1 ? "s" : ""}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    req.userStore.logActivity("user", "chat.message", attachNote ? `${message}  [${attachNote}]` : message);
     const revealCollector = new Set<string>();
     const cardCollector: CardRecord[] = [];
     const recorder = turnId ? startTurn(turnId, req.authUser.id) : undefined;
@@ -1057,13 +1149,16 @@ export function buildServer(
       addRevealCollector(req.authUser.id, revealCollector);
       addCardCollector(req.authUser.id, cardCollector);
       const history = priorMessages.map((m) => ({ role: m.role, content: m.body }));
+      // Attached documents show up as chips under the reply, like a retrieval hit.
+      for (const d of attachedDocs) chatRefs.get(req.authUser.id)?.push({ type: "document", id: d.id });
       // A leading "/" (typed by hand, or via the client's command/tool
       // autocomplete) skips the planner's own delegation decision — unreliable
       // on a small model — and runs one specialist agent directly.
       const forced = parseForcedAgentCommand(message);
+      if (forced && docBlock) forced.text = docBlock + forced.text;
       const responseText = forced
         ? await runForcedAgentTurn(req.authUser.id, forced, images, history, false, recorder)
-        : await askFamilyAgent(agentFor(req.authUser.id), message, images, history, recorder);
+        : await askFamilyAgent(agentFor(req.authUser.id), modelMessage, images, history, recorder);
       const references = resolveReferences(req.userStore, req.authUser.id);
       const steps = recorder?.steps ?? [];
       if (turnId) finishTurn(turnId);
@@ -2259,6 +2354,49 @@ export function buildServer(
     req.userStore.deleteTool(id);
     // Drop the planner graphs so tools-agent stops offering the removed tool.
     dropAgents(req.authUser.id);
+    return { deleted: true };
+  });
+
+  // ---- AI-generated full-page artifacts (render_artifact) ----
+  // Per-user, browsable in the Artifacts tab. The list omits the (large) html;
+  // GET /:id returns both the raw fragment and the wrapped sandboxed document.
+  const artifactSummary = (a: ArtifactRecord) => ({
+    id: a.id,
+    title: a.title,
+    source: a.source,
+    sourceId: a.sourceId,
+    createdAt: a.createdAt,
+    updatedAt: a.updatedAt,
+  });
+
+  app.get("/artifacts", async (req, reply) => {
+    if (!config.artifactsEnabled) return reply.code(404).send({ error: "Artifacts are disabled." });
+    return { artifacts: req.userStore.listArtifacts().map(artifactSummary) };
+  });
+
+  app.get("/artifacts/:id", async (req, reply) => {
+    if (!config.artifactsEnabled) return reply.code(404).send({ error: "Artifacts are disabled." });
+    const { id } = req.params as { id: string };
+    const a = req.userStore.getArtifact(id);
+    if (!a) return reply.code(404).send({ error: "artifact not found" });
+    return { artifact: wrapArtifact(a) };
+  });
+
+  app.patch("/artifacts/:id", async (req, reply) => {
+    if (!config.artifactsEnabled) return reply.code(404).send({ error: "Artifacts are disabled." });
+    const { id } = req.params as { id: string };
+    const parsed = z.object({ title: z.string().trim().min(1).max(120) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const a = req.userStore.renameArtifact(id, parsed.data.title);
+    if (!a) return reply.code(404).send({ error: "artifact not found" });
+    return { artifact: artifactSummary(a) };
+  });
+
+  app.delete("/artifacts/:id", async (req, reply) => {
+    if (!config.artifactsEnabled) return reply.code(404).send({ error: "Artifacts are disabled." });
+    const { id } = req.params as { id: string };
+    const a = req.userStore.deleteArtifact(id);
+    if (!a) return reply.code(404).send({ error: "artifact not found" });
     return { deleted: true };
   });
 

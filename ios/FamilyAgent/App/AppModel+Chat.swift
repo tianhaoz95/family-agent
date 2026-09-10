@@ -73,6 +73,7 @@ extension AppModel {
         switch ref.type {
         case "task", "event": openTaskDetail(ref.id)
         case "document": openDocumentDetail(ref.id)
+        case "artifact": openArtifact(ref.id)
         case "link":
             if let url = URL(string: ref.id) { externalURL = url }
         default: break

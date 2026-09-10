@@ -133,6 +133,11 @@ export const AGENT_SENDER_ID = "_agent_";
 // lost/old phone eventually stops working.
 export const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
+// A QR pairing token (desktop "Pair a phone" → auto sign-in) is single-use and
+// dies fast: it grants a full session for one account with no password, so a
+// stale photo of the QR must be worthless within minutes.
+export const PAIRING_TOKEN_TTL_MS = 5 * 60 * 1000;
+
 export type UserRole = "admin" | "member";
 
 export interface UserRecord {
@@ -237,6 +242,33 @@ export interface ToolRecord {
   revisionState: string | null;
 }
 
+// ---- AI-generated artifacts (render_artifact) ----
+
+export interface ArtifactRecord {
+  id: string;
+  title: string;
+  /** The raw <body> fragment the model wrote; artifacts/wrap.ts wraps it. */
+  html: string;
+  /** Where it was generated: "chat" | "channel" | null. */
+  source: string | null;
+  /** The chat session id / channel id it was born in, for a "back" link. */
+  sourceId: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+function rowToArtifact_(r: any): ArtifactRecord {
+  return {
+    id: r.id,
+    title: r.title,
+    html: r.html,
+    source: r.source ?? null,
+    sourceId: r.source_id ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at ?? null,
+  };
+}
+
 // ---- family chat ----
 // The first cross-account data in the app. A `channel` is either a 1:1 "dm" or
 // a named "group" (Slack-style); `channel_members` is the access boundary —
@@ -309,8 +341,10 @@ export interface ChatSessionSummary extends ChatSessionRecord {
 }
 
 export interface ChatReference {
-  /** "link" is a web page the research agent opened — `id` is the URL. */
-  type: "document" | "task" | "tool" | "link";
+  /** "link" is a web page the research agent opened — `id` is the URL.
+   *  "artifact" is a full-page artifact render_artifact generated — `id` is
+   *  the artifact id; the chip opens the Artifacts view. */
+  type: "document" | "task" | "tool" | "link" | "artifact";
   id: string;
   label: string;
 }
@@ -444,6 +478,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at TEXT NOT NULL
 );
 
+-- Short-lived, single-use tokens minted for the desktop "Pair a phone" QR when
+-- auto sign-in is on. Only the sha256 is stored (same as sessions). Redeeming
+-- one deletes the row; a sweep clears anything past expires_at.
+CREATE TABLE IF NOT EXISTS pairing_tokens (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}',
@@ -494,6 +538,22 @@ CREATE TABLE IF NOT EXISTS tools (
   -- reason the last improve failed (shown as a warning, tool still works).
   revision_state TEXT
 );
+
+-- AI-generated full-page artifacts (render_artifact). Per-user, browsable in
+-- the Artifacts tab. We store only the raw <body> fragment the model wrote and
+-- wrap it (doctype + sealed CSP + house style) at read time — artifacts/wrap.ts.
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}',
+  title TEXT NOT NULL,
+  html TEXT NOT NULL,
+  -- where it was born, for a "back to the conversation" link: 'chat' | 'channel'
+  source TEXT,
+  source_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_artifacts_user ON artifacts(user_id, created_at);
 
 CREATE TABLE IF NOT EXISTS channels (
   id TEXT PRIMARY KEY,
@@ -1489,6 +1549,41 @@ export class Store {
     return Number(info.changes ?? 0);
   }
 
+  // ---- phone pairing (QR auto sign-in) ----
+
+  /**
+   * Mint a single-use pairing token for `userId`. Any prior unredeemed token
+   * for that user is dropped first — only the QR currently on screen is live.
+   */
+  createPairingToken(userId: string): { token: string; expiresAt: string } {
+    const now = Date.now();
+    this.db
+      .prepare("DELETE FROM pairing_tokens WHERE user_id = ? OR expires_at < ?")
+      .run(userId, new Date(now).toISOString());
+    const token = newSessionToken();
+    const expiresAt = new Date(now + PAIRING_TOKEN_TTL_MS).toISOString();
+    this.db
+      .prepare("INSERT INTO pairing_tokens (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
+      .run(sha256Hex(token), userId, new Date(now).toISOString(), expiresAt);
+    return { token, expiresAt };
+  }
+
+  /**
+   * Consume a pairing token. The row is deleted whatever the outcome (so a
+   * token works exactly once); returns the bound user only if it existed and
+   * hadn't expired.
+   */
+  redeemPairingToken(token: string): UserRecord | undefined {
+    const hash = sha256Hex(token);
+    const row = this.db.prepare("SELECT * FROM pairing_tokens WHERE token_hash = ?").get(hash) as
+      | { user_id: string; expires_at: string }
+      | undefined;
+    this.db.prepare("DELETE FROM pairing_tokens WHERE token_hash = ?").run(hash);
+    if (!row) return undefined;
+    if (new Date(row.expires_at).getTime() < Date.now()) return undefined;
+    return this.getUser(row.user_id);
+  }
+
   /**
    * Look up a tool by its (globally unique) id regardless of owner. Only the
    * tools HTTP server uses this — it serves a generated tool's static assets
@@ -2302,6 +2397,63 @@ export class ScopedStore {
       )
       .run(this.userId);
     return Number(info.changes ?? 0);
+  }
+
+  // ---- AI-generated artifacts (render_artifact) ----
+
+  createArtifact(input: {
+    title: string;
+    html: string;
+    source?: string | null;
+    sourceId?: string | null;
+  }): ArtifactRecord {
+    const rec: ArtifactRecord = {
+      id: shortId(),
+      title: input.title,
+      html: input.html,
+      source: input.source ?? null,
+      sourceId: input.sourceId ?? null,
+      createdAt: new Date().toISOString(),
+      updatedAt: null,
+    };
+    this.db
+      .prepare(
+        "INSERT INTO artifacts (id, user_id, title, html, source, source_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run(rec.id, this.userId, rec.title, rec.html, rec.source, rec.sourceId, rec.createdAt);
+    this.logActivity("artifact-agent", "artifact.created", `Generated an artifact: "${rec.title}"`);
+    return rec;
+  }
+
+  listArtifacts(): ArtifactRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM artifacts WHERE user_id = ? ORDER BY created_at DESC")
+      .all(this.userId) as any[];
+    return rows.map(rowToArtifact_);
+  }
+
+  getArtifact(id: string): ArtifactRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM artifacts WHERE id = ? AND user_id = ?").get(id, this.userId) as any;
+    return row ? rowToArtifact_(row) : undefined;
+  }
+
+  renameArtifact(id: string, title: string): ArtifactRecord | undefined {
+    const t = title.trim().slice(0, 120);
+    if (!t) return this.getArtifact(id);
+    this.db
+      .prepare("UPDATE artifacts SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(t, new Date().toISOString(), id, this.userId);
+    const a = this.getArtifact(id);
+    if (a) this.logActivity("user", "artifact.renamed", `Renamed an artifact to "${a.title}"`);
+    return a;
+  }
+
+  deleteArtifact(id: string): ArtifactRecord | undefined {
+    const a = this.getArtifact(id);
+    if (!a) return undefined;
+    this.db.prepare("DELETE FROM artifacts WHERE id = ? AND user_id = ?").run(id, this.userId);
+    this.logActivity("user", "artifact.deleted", `Deleted artifact "${a.title}"`);
+    return a;
   }
 
   // ---- sticky notes ----

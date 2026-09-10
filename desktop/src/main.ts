@@ -17,6 +17,8 @@ import {
   type Tool,
   type ToolDbColumn,
   type ToolOperation,
+  type ArtifactSummary,
+  type Artifact,
   type Health,
   type User,
   AGENT_SENDER_ID,
@@ -102,6 +104,7 @@ function showView(name: string) {
       if (tools.some((t) => t.status === "building" || t.revisionState === "revising")) void pollTools();
     });
   }
+  if (name === "artifacts") void refreshArtifacts();
   if (name === "activity") void refreshActivity();
   if (name === "vault") void renderVault();
   if (name === "routines") void refreshRoutines();
@@ -110,6 +113,8 @@ function showView(name: string) {
   if (name === "settings") {
     void refreshSettings();
     if (mcpMode !== "off" && currentUser?.role === "admin") void refreshConnections();
+    // Re-mint the pairing QR's token so an old one isn't shown on reopen.
+    void repaintPairingQr();
   }
 }
 
@@ -202,6 +207,9 @@ let vaultAiEnabled = false;
 const navVault = document.getElementById("nav-vault") as HTMLButtonElement;
 // Mirrors /health.cards — whether the assistant may attach generated HTML cards.
 let cardsEnabled = false;
+// Mirrors /health.artifacts — hides the Artifacts nav item + open-artifact chip.
+let artifactsEnabled = false;
+const navArtifacts = document.getElementById("nav-artifacts") as HTMLButtonElement;
 
 async function refreshStatus() {
   try {
@@ -228,6 +236,8 @@ async function refreshStatus() {
     vaultAiEnabled = health.vaultAi === true;
     navVault.hidden = !vaultEnabled;
     cardsEnabled = health.cards === "on";
+    artifactsEnabled = health.artifacts === "on";
+    navArtifacts.hidden = !artifactsEnabled;
     void renderPairing(health);
     const meaningOpt = documentSearchMode.querySelector<HTMLOptionElement>('option[value="semantic"]');
     if (meaningOpt) {
@@ -302,6 +312,7 @@ let chatAbort: AbortController | null = null;
 // imageTray (see makeImageTray) — the same composer attachment behaviour is
 // reused by the family-chat message composer.
 const MAX_IMAGES = 4;
+const MAX_DOCS = 3;
 // Phone photos are huge; the planner model is slow. Cap the long edge and
 // re-encode as JPEG before sending — a 4000px photo becomes ~150 KB.
 const MAX_IMAGE_EDGE = 1536;
@@ -540,39 +551,72 @@ function fileToScaledDataUrl(file: File): Promise<string> {
   });
 }
 
-/** A composer image tray: staged data URIs + a thumbnail strip with remove
- *  buttons. Chat and family-chat both use one so attaching behaves identically. */
-interface ImageTray {
+/** A composer attachment tray: images go inline as data URIs; other files
+ *  (PDF, scan, .txt/.md) are uploaded as documents and their extracted text is
+ *  sent with the turn. A thumbnail/chip strip with remove buttons. Chat and
+ *  family-chat both use one so attaching behaves identically. */
+interface AttachmentTray {
   images: string[];
+  docs: { id: string; filename: string }[];
   addFiles(files: Iterable<File>): Promise<void>;
   clear(): void;
 }
-function makeImageTray(trayEl: HTMLElement, notify: (msg: string) => void): ImageTray {
-  const tray: ImageTray = {
+function makeImageTray(
+  trayEl: HTMLElement,
+  notify: (msg: string) => void,
+  opts: { allowDocs?: boolean } = {}
+): AttachmentTray {
+  const allowDocs = opts.allowDocs !== false;
+  let uploading = 0;
+  const tray: AttachmentTray = {
     images: [],
+    docs: [],
     async addFiles(files) {
       for (const file of files) {
-        if (!file.type.startsWith("image/")) continue;
-        if (tray.images.length >= MAX_IMAGES) {
-          notify(`Up to ${MAX_IMAGES} images per message.`);
-          break;
-        }
-        try {
-          tray.images.push(await fileToScaledDataUrl(file));
-        } catch (err) {
-          notify(`Couldn't attach ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+        if (file.type.startsWith("image/")) {
+          if (tray.images.length >= MAX_IMAGES) {
+            notify(`Up to ${MAX_IMAGES} images per message.`);
+            continue;
+          }
+          try {
+            tray.images.push(await fileToScaledDataUrl(file));
+          } catch (err) {
+            notify(`Couldn't attach ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        } else {
+          // A document (PDF / scan / text). Upload it through the same ingest
+          // pipeline as the Documents tab; the id rides along with the message.
+          if (!allowDocs) {
+            notify(`${file.name}: attach documents in the private Chat with the assistant, not a family channel.`);
+            continue;
+          }
+          if (tray.docs.length >= MAX_DOCS) {
+            notify(`Up to ${MAX_DOCS} documents per message.`);
+            continue;
+          }
+          uploading++;
+          render();
+          try {
+            const { document } = await api.uploadDocument(file);
+            tray.docs.push({ id: document.id, filename: document.filename });
+          } catch (err) {
+            notify(`Couldn't attach ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+          } finally {
+            uploading--;
+          }
         }
       }
       render();
     },
     clear() {
       tray.images = [];
+      tray.docs = [];
       render();
     },
   };
   function render() {
     trayEl.innerHTML = "";
-    trayEl.hidden = tray.images.length === 0;
+    trayEl.hidden = tray.images.length === 0 && tray.docs.length === 0 && uploading === 0;
     tray.images.forEach((src, i) => {
       const chip = document.createElement("div");
       chip.className = "chat-attachment";
@@ -591,16 +635,43 @@ function makeImageTray(trayEl: HTMLElement, notify: (msg: string) => void): Imag
       chip.append(img, remove);
       trayEl.appendChild(chip);
     });
+    tray.docs.forEach((doc, i) => {
+      const chip = document.createElement("div");
+      chip.className = "chat-attachment chat-attachment-doc";
+      chip.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>';
+      const name = document.createElement("span");
+      name.className = "chat-attachment-doc-name";
+      name.textContent = doc.filename;
+      name.title = doc.filename;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.setAttribute("aria-label", "Remove document");
+      remove.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+      remove.addEventListener("click", () => {
+        tray.docs.splice(i, 1);
+        render();
+      });
+      chip.append(name, remove);
+      trayEl.appendChild(chip);
+    });
+    if (uploading > 0) {
+      const chip = document.createElement("div");
+      chip.className = "chat-attachment chat-attachment-doc is-uploading";
+      chip.textContent = `Reading ${uploading} file${uploading > 1 ? "s" : ""}…`;
+      trayEl.appendChild(chip);
+    }
   }
   return tray;
 }
 
-/** Wire a text input for image paste + a drop target to feed an ImageTray. */
-function wireImagePasteAndDrop(tray: ImageTray, pasteTarget: HTMLElement, dropTarget: HTMLElement) {
+/** Wire a text input for paste + a drop target to feed an AttachmentTray. */
+function wireImagePasteAndDrop(tray: AttachmentTray, pasteTarget: HTMLElement, dropTarget: HTMLElement) {
   pasteTarget.addEventListener("paste", (e) => {
     const ev = e as ClipboardEvent;
     const files = Array.from(ev.clipboardData?.items ?? [])
-      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .filter((it) => it.kind === "file")
       .map((it) => it.getAsFile())
       .filter((f): f is File => f !== null);
     if (files.length) {
@@ -1345,15 +1416,19 @@ chatForm.addEventListener("submit", async (e) => {
   const typed = chatInput.value.trim();
   const cmd = chatSlash.getCommand();
   const images = chatTray.images.slice();
+  const documentIds = chatTray.docs.map((d) => d.id);
+  const docNames = chatTray.docs.map((d) => d.filename);
   const speakReply = speakChatReply;
   speakChatReply = false;
-  if (!typed && !images.length && !cmd) return;
-  // Rebuild the wire form: "/cmd rest", or the plain text (with an image-only
-  // default), and show the same in the transcript bubble.
+  if (!typed && !images.length && !documentIds.length && !cmd) return;
+  // Rebuild the wire form: "/cmd rest", or the plain text (with an
+  // attachment-only default), and show the same in the transcript bubble.
   const message = cmd
     ? `/${cmd} ${typed}`.trimEnd()
-    : typed || "What's in this image?";
-  const shown = cmd ? `/${cmd} ${typed}`.trimEnd() : typed;
+    : typed || (documentIds.length ? "Please look at the attached document." : "What's in this image?");
+  const shown =
+    (cmd ? `/${cmd} ${typed}`.trimEnd() : typed) +
+    (docNames.length ? `${typed ? "\n\n" : ""}📎 ${docNames.join(", ")}` : "");
   chatInput.value = "";
   chatGrow.reset();
   chatSlash.clear();
@@ -1388,7 +1463,8 @@ chatForm.addEventListener("submit", async (e) => {
       images,
       activeChatSessionId ?? undefined,
       chatAbort.signal,
-      turnId
+      turnId,
+      documentIds
     );
     stopPoll = true;
     pending.remove();
@@ -3710,6 +3786,8 @@ const settingsQuitBtn = document.getElementById("settings-quit-btn") as HTMLButt
 const pairingQrImg = document.getElementById("pairing-qr") as HTMLImageElement;
 const pairingHintEl = document.getElementById("pairing-hint")!;
 const pairingAddrList = document.getElementById("pairing-addr-list")!;
+const pairingAutologinCheckbox = document.getElementById("pairing-autologin-checkbox") as HTMLInputElement;
+const pairingModeHintEl = document.getElementById("pairing-mode-hint")!;
 const accountNameEl = document.getElementById("account-name")!;
 const accountRoleEl = document.getElementById("account-role")!;
 const passwordForm = document.getElementById("password-form") as HTMLFormElement;
@@ -3724,14 +3802,70 @@ const accountStatusEl = document.getElementById("account-status")!;
 // permission). Only re-render when the address set changes (refreshStatus runs
 // every 5s). `./qr` (the qrcode package) loads on demand as its own chunk.
 type PairAddr = NonNullable<Health["lanAddrs"]>[number];
+const PAIR_AUTOLOGIN_KEY = "familyAgent.pairAutoLogin";
+// Default ON — scanning a phone signs it straight into this desktop's account
+// with no password (a short-lived, single-use token in the QR). Off = the QR
+// carries only the address and the phone still asks for a username + password.
+let pairAutoLogin = (() => {
+  try {
+    return localStorage.getItem(PAIR_AUTOLOGIN_KEY) !== "0";
+  } catch {
+    return true;
+  }
+})();
 let pairingRenderedFor = "";
 let pairingSelected = "";
+let pairingServerName = "";
+
+pairingAutologinCheckbox.checked = pairAutoLogin;
+pairingAutologinCheckbox.addEventListener("change", () => {
+  pairAutoLogin = pairingAutologinCheckbox.checked;
+  try {
+    localStorage.setItem(PAIR_AUTOLOGIN_KEY, pairAutoLogin ? "1" : "0");
+  } catch {
+    /* private mode — the toggle still works for this session */
+  }
+  updatePairingModeHint();
+  void repaintPairingQr();
+});
+
+function updatePairingModeHint() {
+  pairingModeHintEl.textContent = pairAutoLogin
+    ? `The phone signs in as ${currentUser?.displayName ?? "you"} — no password needed. The code works once and expires after 5 minutes.`
+    : "The phone gets only this machine's address; each person then signs in with their own account.";
+}
+
+// Render the QR for the currently-selected address. When auto sign-in is on we
+// mint a fresh single-use pairing token each time (it expires in 5 min, so this
+// also runs on a timer while Settings is open).
+async function repaintPairingQr() {
+  if (!pairingSelected) return;
+  for (const li of Array.from(pairingAddrList.children) as HTMLLIElement[]) {
+    li.classList.toggle("is-selected", li.dataset.url === pairingSelected);
+  }
+  try {
+    const { qrDataUrl } = await import("./qr");
+    let payload = pairingSelected;
+    if (pairAutoLogin) {
+      const { token } = await api.startPairing();
+      payload = JSON.stringify({ url: pairingSelected, name: pairingServerName, t: token });
+    }
+    pairingQrImg.src = await qrDataUrl(payload);
+    pairingQrImg.hidden = false;
+  } catch (err) {
+    pairingQrImg.hidden = true;
+    pairingHintEl.textContent = `Couldn't render the QR code: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 async function renderPairing(health: Health) {
+  pairingServerName = health.serverName ?? "";
   const addrs: PairAddr[] =
     health.lanAddrs ?? (health.lanUrls ?? []).map((url) => ({ url, kind: "lan" as const }));
-  const key = addrs.map((a) => a.url).join(",");
+  const key = addrs.map((a) => a.url).join(",") + "|" + (pairAutoLogin ? "auto" : "addr");
   if (key === pairingRenderedFor) return;
   pairingRenderedFor = key;
+  updatePairingModeHint();
   pairingAddrList.replaceChildren();
   if (addrs.length === 0) {
     pairingQrImg.hidden = true;
@@ -3747,19 +3881,6 @@ async function renderPairing(health: Health) {
   pairingSelected = addrs[0].url;
   const label = (k: PairAddr["kind"]) =>
     k === "tailscale" ? " — Tailscale" : k === "other" ? " — other network" : "";
-  const paint = async () => {
-    for (const li of Array.from(pairingAddrList.children) as HTMLLIElement[]) {
-      li.classList.toggle("is-selected", li.dataset.url === pairingSelected);
-    }
-    try {
-      const { qrDataUrl } = await import("./qr");
-      pairingQrImg.src = await qrDataUrl(pairingSelected);
-      pairingQrImg.hidden = false;
-    } catch (err) {
-      pairingQrImg.hidden = true;
-      pairingHintEl.textContent = `Couldn't render the QR code: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  };
   for (const a of addrs) {
     const li = document.createElement("li");
     li.dataset.url = a.url;
@@ -3769,7 +3890,7 @@ async function renderPairing(health: Health) {
       li.setAttribute("role", "button");
       const pick = () => {
         pairingSelected = a.url;
-        void paint();
+        void repaintPairingQr();
       };
       li.addEventListener("click", pick);
       li.addEventListener("keydown", (e) => {
@@ -3781,8 +3902,16 @@ async function renderPairing(health: Health) {
     }
     pairingAddrList.appendChild(li);
   }
-  await paint();
+  await repaintPairingQr();
 }
+
+// A pairing token lives ~5 min; refresh the QR while Settings is on screen so a
+// left-open panel never shows a dead code.
+setInterval(() => {
+  if (!pairAutoLogin) return;
+  if (!document.getElementById("view-settings")?.classList.contains("is-active")) return;
+  void repaintPairingQr();
+}, 210_000);
 
 // The signed-in user, set during boot() and after any account change.
 let currentUser: User | null = null;
@@ -4580,7 +4709,7 @@ messageHelpBtn.addEventListener("click", () =>
   openSidePanel("Commands & @agent", slashHelpHtml({ mention: true }))
 );
 
-const messageTray = makeImageTray(messageAttachmentsEl, appendMessageError);
+const messageTray = makeImageTray(messageAttachmentsEl, appendMessageError, { allowDocs: false });
 messageAttachBtn.addEventListener("click", () => messageImageInput.click());
 messageImageInput.addEventListener("change", () => {
   if (messageImageInput.files) void messageTray.addFiles(Array.from(messageImageInput.files));
@@ -5898,11 +6027,15 @@ function appendReferences(afterEl: HTMLElement, references: ChatReference[]) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = `ref-chip ref-chip-${ref.type}`;
-    chip.textContent = ref.label;
+    chip.textContent = ref.type === "artifact" ? `↗ ${ref.label}` : ref.label;
+    if (ref.type === "artifact") chip.title = "Open this page in the Artifacts tab";
     chip.addEventListener("click", () => {
       if (ref.type === "document") void openDocumentPanel(ref.id);
       else if (ref.type === "tool") void openToolPanel(ref.id);
-      else void openTaskPanel(ref.id);
+      else if (ref.type === "artifact") {
+        showView("artifacts");
+        void refreshArtifacts(ref.id);
+      } else void openTaskPanel(ref.id);
     });
     wrap.appendChild(chip);
   }
@@ -6192,6 +6325,124 @@ function attachMessageCards(msgEl: HTMLElement, cards: Card[] | undefined): void
     (anchor ?? msgEl).insertAdjacentElement(anchor ? "afterend" : "beforeend", el);
     anchor = el;
   }
+}
+
+// ---------- Artifacts tab (full-page render_artifact output) ----------
+// A browsable list of the pages the assistant generated. Each renders in the
+// same sealed opaque-origin iframe as a card (allow-scripts only, no network),
+// just full-size. A reply's "artifact" reference chip jumps straight here.
+
+const artifactListEl = document.getElementById("artifact-list") as HTMLUListElement;
+const artifactDetailEl = document.getElementById("artifact-detail") as HTMLElement;
+let artifactsCache: ArtifactSummary[] = [];
+let selectedArtifactId: string | null = null;
+
+async function refreshArtifacts(selectId?: string): Promise<void> {
+  try {
+    artifactsCache = (await api.listArtifacts()).artifacts;
+  } catch {
+    artifactsCache = [];
+  }
+  renderArtifactList();
+  const want = selectId ?? selectedArtifactId ?? artifactsCache[0]?.id ?? null;
+  if (want && artifactsCache.some((a) => a.id === want)) void selectArtifact(want);
+  else if (!artifactsCache.length) {
+    selectedArtifactId = null;
+    artifactDetailEl.replaceChildren();
+    const p = document.createElement("p");
+    p.className = "settings-hint";
+    p.textContent = "No artifacts yet. Ask the assistant to explain something with a page.";
+    artifactDetailEl.appendChild(p);
+  }
+}
+
+function renderArtifactList(): void {
+  artifactListEl.replaceChildren();
+  for (const a of artifactsCache) {
+    const li = document.createElement("li");
+    li.className = "artifact-row" + (a.id === selectedArtifactId ? " is-selected" : "");
+    li.tabIndex = 0;
+    li.setAttribute("role", "button");
+    li.innerHTML = `<span class="artifact-row-title">${escapeHtml(a.title)}</span>
+      <span class="artifact-row-date">${new Date(a.createdAt).toLocaleDateString()}</span>`;
+    const open = () => void selectArtifact(a.id);
+    li.addEventListener("click", open);
+    li.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        open();
+      }
+    });
+    artifactListEl.appendChild(li);
+  }
+}
+
+async function selectArtifact(id: string): Promise<void> {
+  selectedArtifactId = id;
+  renderArtifactList();
+  artifactDetailEl.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "settings-hint";
+  loading.textContent = "Loading…";
+  artifactDetailEl.appendChild(loading);
+  let artifact: Artifact;
+  try {
+    artifact = (await api.getArtifact(id)).artifact;
+  } catch (err) {
+    artifactDetailEl.replaceChildren();
+    const p = document.createElement("p");
+    p.className = "settings-hint";
+    p.textContent = `Couldn't load this artifact: ${err instanceof Error ? err.message : String(err)}`;
+    artifactDetailEl.appendChild(p);
+    return;
+  }
+
+  const head = document.createElement("div");
+  head.className = "artifact-detail-head";
+  head.innerHTML = `<span class="artifact-detail-title">${escapeHtml(artifact.title)}</span>`;
+  const actions = document.createElement("div");
+  actions.className = "artifact-detail-actions";
+
+  const renameBtn = document.createElement("button");
+  renameBtn.type = "button";
+  renameBtn.className = "ghost-btn";
+  renameBtn.textContent = "Rename";
+  renameBtn.addEventListener("click", async () => {
+    const next = prompt("Rename artifact", artifact.title);
+    if (!next || next.trim() === artifact.title) return;
+    try {
+      await api.renameArtifact(id, next.trim());
+      await refreshArtifacts(id);
+    } catch (err) {
+      alert(`Rename failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "ghost-btn danger";
+  deleteBtn.textContent = "Delete";
+  deleteBtn.addEventListener("click", async () => {
+    if (!confirm(`Delete "${artifact.title}"? This can't be undone.`)) return;
+    try {
+      await api.deleteArtifact(id);
+      selectedArtifactId = null;
+      await refreshArtifacts();
+    } catch (err) {
+      alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+  actions.append(renameBtn, deleteBtn);
+  head.appendChild(actions);
+
+  const frame = document.createElement("iframe");
+  frame.className = "artifact-frame";
+  // allow-scripts ONLY — no allow-same-origin => opaque origin, no app/network.
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.setAttribute("referrerpolicy", "no-referrer");
+  frame.srcdoc = artifact.document;
+
+  artifactDetailEl.replaceChildren(head, frame);
 }
 
 // ---- steps in the Messages (family channel) view ----

@@ -65,9 +65,16 @@ final class AppModel {
     var vaultMode = "off"
     var vaultAiEnabled = false
     var cardsMode = "off"
+    var artifactsMode = "off"
     var semanticSearchEnabled = true
     var toolsMode = "off"
     var toolsPort = 4174
+
+    // ---- artifacts (render_artifact → the Artifacts tab) ----
+    var artifacts: [ArtifactSummary] = []
+    var artifactsLoading = false
+    /// Set to open the full-screen artifact viewer (from a reply's chip).
+    var viewingArtifactId: String?
 
     // ---- chat ----
     var chatMessages: [ChatMessage] = []
@@ -226,6 +233,40 @@ final class AppModel {
 
     func backToServerPick() { auth = .pickServer }
 
+    /// True while a scanned pairing QR is being redeemed (brief).
+    var pairing = false
+
+    /// Handle a payload read from a "Pair a phone" QR. With a token it signs
+    /// straight in; without one it's just an address → the normal login screen.
+    func handleScannedPairing(_ raw: String) {
+        guard let payload = PairingPayload.parse(from: raw) else { return }
+        if let token = payload.token {
+            redeemPairing(url: payload.serverURL, serverName: payload.serverName, token: token)
+        } else {
+            pickServer(payload.serverURL)
+        }
+    }
+
+    private func redeemPairing(url: String, serverName: String?, token: String) {
+        let clean = url.trimmingCharacters(in: .whitespaces)
+        serverURL = clean
+        api = FamilyAgentAPI(baseURL: clean, authToken: nil)
+        settings.setServerURL(clean)
+        pairing = true
+        Task {
+            defer { pairing = false }
+            do {
+                let resp = try await api.redeemPairing(token)
+                finishSignIn(url: clean, name: serverName ?? "", resp: resp)
+            } catch {
+                // Token expired / already used / server unreachable — fall back
+                // to signing in by hand on the same server.
+                auth = .needLogin(serverURL: clean, serverName: serverName ?? "",
+                                  error: error.localizedDescription)
+            }
+        }
+    }
+
     func login(username: String, password: String) {
         guard case let .needLogin(url, name, _) = auth else { return }
         Task {
@@ -300,6 +341,7 @@ final class AppModel {
             vaultMode = h.vault
             vaultAiEnabled = h.vaultAi
             cardsMode = h.cards
+            artifactsMode = h.artifacts
             semanticSearchEnabled = h.semanticSearch == "on"
             toolsMode = h.toolsEnabled
             toolsPort = h.toolsPort

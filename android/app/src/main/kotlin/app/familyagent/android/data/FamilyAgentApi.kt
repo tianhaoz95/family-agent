@@ -435,6 +435,23 @@ class FamilyAgentApi(
         sendNoBody("DELETE", "/tools/$id")
     }
 
+    // ---- artifacts (render_artifact) ----
+
+    suspend fun listArtifacts(): List<ArtifactSummary> =
+        json.decodeFromString<ArtifactListResponse>(get("/artifacts")).artifacts
+
+    suspend fun getArtifact(id: String): Artifact =
+        json.decodeFromString<ArtifactResponse>(get("/artifacts/$id")).artifact
+
+    suspend fun renameArtifact(id: String, title: String): ArtifactSummary =
+        json.decodeFromString<ArtifactSummaryResponse>(
+            send("PATCH", "/artifacts/$id", json.encodeToString(RenameArtifactRequest(title)))
+        ).artifact
+
+    suspend fun deleteArtifact(id: String) {
+        sendNoBody("DELETE", "/artifacts/$id")
+    }
+
     // ---- password vault ----
 
     suspend fun vaultStatus(): VaultStatus = json.decodeFromString(get("/vault/status"))
