@@ -24,6 +24,7 @@ struct ChatView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var showHistory = false
     @State private var showSlashHelp = false
+    @FocusState private var composerFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,6 +62,9 @@ struct ChatView: View {
                     }
                     .padding(16)
                 }
+                // Drag the transcript down to dismiss the keyboard (iPhone has no
+                // hardware dismiss); a "Done" key above the keyboard also works.
+                .scrollDismissesKeyboard(.interactively)
                 .onChange(of: model.chatMessages.count) { _, _ in
                     withAnimation { proxy.scrollTo(model.chatMessages.last?.id, anchor: .bottom) }
                 }
@@ -191,6 +195,17 @@ struct ChatView: View {
                 .padding(.vertical, 7)
                 .padding(.leading, 4)
                 .tint(Theme.accent)
+                .focused($composerFocused)
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button { composerFocused = false } label: {
+                            Image(systemName: "keyboard.chevron.compact.down")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .tint(Theme.accentInk)
+                    }
+                }
 
             if model.voiceEnabled {
                 HoldToTalkMic(enabled: !model.chatSending, transcribing: model.chatTranscribing,

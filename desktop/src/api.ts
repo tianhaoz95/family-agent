@@ -373,6 +373,10 @@ export interface Health {
   ok: boolean;
   model: string;
   serverName: string;
+  /** This machine's LAN base URLs — the "Pair a phone" QR encodes the first. */
+  lanUrls?: string[];
+  /** Same list with the kind of each address (tailscale addresses sort first). */
+  lanAddrs?: { url: string; kind: "tailscale" | "lan" | "other" }[];
   needsSetup: boolean;
   toolsPort: number;
   toolsEnabled: "full" | "static-only" | "off";

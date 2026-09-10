@@ -565,6 +565,22 @@
             <p class="view-sub">This machine's local configuration.</p>
           </div>
 
+          <div class="settings-section" id="settings-pairing-section">
+            <h3>Pair a phone</h3>
+            <p class="settings-hint">
+              Open Family Agent on your phone, tap <strong>Scan QR code</strong> on the
+              "Find your home" screen, and point it at this code. Then sign in with that
+              person's own account.
+            </p>
+            <div class="pairing-row">
+              <img id="pairing-qr" class="pairing-qr" alt="Pairing QR code" hidden />
+              <div class="pairing-addrs">
+                <p class="settings-hint" id="pairing-hint">Finding this machine's network address…</p>
+                <ul id="pairing-addr-list" class="pairing-addr-list"></ul>
+              </div>
+            </div>
+          </div>
+
           <div class="settings-section">
             <h3>Chat model</h3>
             <p class="settings-hint">

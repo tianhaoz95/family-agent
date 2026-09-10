@@ -11,6 +11,7 @@ struct ConversationView: View {
     @State private var showDelete = false
     @State private var attached: [String] = []
     @State private var photoItem: PhotosPickerItem?
+    @FocusState private var composerFocused: Bool
 
     private let mentionNames: Set<String> = ["agent", "ai", "assistant"]
 
@@ -51,6 +52,9 @@ struct ConversationView: View {
                     }
                     .padding(16)
                 }
+                // Drag the transcript down to dismiss the keyboard (iPhone has no
+                // hardware dismiss); a "Done" key above the keyboard also works.
+                .scrollDismissesKeyboard(.interactively)
                 .onChange(of: model.channelMessages.count) { _, _ in
                     withAnimation { proxy.scrollTo(model.channelMessages.last?.id, anchor: .bottom) }
                 }
@@ -148,6 +152,17 @@ struct ConversationView: View {
                 .padding(.vertical, 7)
                 .padding(.leading, mentionPill ? 0 : 4)
                 .tint(Theme.accent)
+                .focused($composerFocused)
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button { composerFocused = false } label: {
+                            Image(systemName: "keyboard.chevron.compact.down")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .tint(Theme.accentInk)
+                    }
+                }
                 .onChange(of: input) { _, v in
                     guard !mentionPill, v.hasPrefix("@") else { return }
                     if let sp = v.firstIndex(where: { $0 == " " || $0 == "\t" }) {

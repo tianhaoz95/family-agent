@@ -2208,6 +2208,52 @@ input[type="file"]::file-selector-button:hover {
   flex: none;
 }
 
+/* "Pair a phone" — QR beside the machine's scannable addresses. */
+.pairing-row {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.pairing-qr {
+  width: 180px;
+  height: 180px;
+  border-radius: var(--r-md, 12px);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  flex: none;
+}
+.pairing-addrs {
+  min-width: 200px;
+  flex: 1;
+}
+.pairing-addr-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px;
+  color: var(--text-2, var(--text));
+}
+.pairing-addr-list li {
+  margin: 2px 0;
+  padding: 3px 8px;
+  border-radius: var(--r-sm, 8px);
+  border: 1px solid transparent;
+}
+.pairing-addr-list li[role="button"] {
+  cursor: pointer;
+}
+.pairing-addr-list li[role="button"]:hover {
+  background: var(--surface-2);
+}
+.pairing-addr-list li.is-selected {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* Each field has its own Save — keep them quiet so the page isn't a column
    of identical blue buttons. They fill in on hover / focus. */
 .settings-section .inline-form button[type="submit"] {

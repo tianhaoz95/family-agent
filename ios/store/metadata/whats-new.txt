@@ -1,13 +1,21 @@
-First release.
+Version 1.1.2
 
-Family Agent for iPhone: chat with your home assistant, keep a calendar, file
-documents by photo, message the household, run scheduled routines, and open an
-encrypted password vault — all against a server running on your own Mac.
+- The menu drawer is easier to use: tapping an item anywhere along the row now
+  registers, instead of only on the icon or label.
+- You can now dismiss the keyboard in Chat and Messages — swipe down over the
+  conversation, or tap the new hide-keyboard button above the keys.
+
+Earlier in 1.1.x:
+- Pairing over Tailscale: scan the desktop's QR code (Settings → Pair a phone)
+  to connect whether you're on home Wi-Fi, cellular, or another network.
+- The desktop "Pair a phone" list shows every way to reach the server and you
+  pick the one your phone can use.
+- Fixed invisible text in the manual address field on devices set to Dark Mode.
+- More reliable automatic discovery on the home network.
 
 Requires the free Family Agent desktop app on a Mac at home. Feedback and issues:
 https://github.com/tianhaoz95/family-agent
 
 --
 This is the "What's New in This Version" / release-notes field (limit 4000
-chars). Required for every version after the first; harmless to fill in for 1.0.0
-too. Everything above the "--" line is the field value.
+chars). Everything above the "--" line is the field value.

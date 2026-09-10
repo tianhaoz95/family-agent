@@ -134,6 +134,7 @@ struct MainShell: View {
                 .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
                 .elevation(Theme.E.pop)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleStyle(scale: 0.92))
         .padding(.leading, 12)
@@ -287,6 +288,11 @@ private struct AppDrawer: View {
                                             .strokeBorder(Theme.accentInk.opacity(0.10), lineWidth: 1))
                                 }
                             }
+                            // Without this the tap target is only the glyph + text
+                            // (an unselected row draws no background) — the padding
+                            // and the trailing gap swallow taps, so a row needs a
+                            // few tries to hit. Make the whole row hittable.
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(PressScaleStyle(scale: 0.97))
                     }

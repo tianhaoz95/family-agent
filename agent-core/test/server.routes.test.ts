@@ -48,6 +48,17 @@ describe("HTTP API", () => {
     expect(body.compute).toBe(true); // code sandbox on by default
     expect(body.web).toBe("off");
     expect(body.shell).toBe("off");
+    // Addresses for the desktop "Pair a phone" QR — http://<host>:<port>, each
+    // tagged tailscale/lan/other; lanUrls is the same list without the tags.
+    // (host may be a MagicDNS name, not just an IP, when Tailscale is up here.)
+    expect(Array.isArray(body.lanUrls)).toBe(true);
+    for (const u of body.lanUrls) expect(u).toMatch(/^http:\/\/[\w.-]+:\d+$/);
+    expect(Array.isArray(body.lanAddrs)).toBe(true);
+    for (const a of body.lanAddrs) {
+      expect(a.url).toMatch(/^http:\/\/[\w.-]+:\d+$/);
+      expect(["tailscale", "lan", "other"]).toContain(a.kind);
+    }
+    expect(body.lanAddrs.map((a: { url: string }) => a.url)).toEqual(body.lanUrls);
   });
 
   it("rejects an unauthenticated request to a protected route", async () => {

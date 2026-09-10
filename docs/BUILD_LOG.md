@@ -597,3 +597,101 @@ Tests: `desktop/test/api.test.ts` +2 (mode/limit in the query string; omitted
 when absent) → 33/33. `android/.../FamilyAgentApiTest.kt` +2 (mode/limit;
 `semanticSearch` parse + default) → 21/21. Desktop `tsc --noEmit` + `vite
 build` clean; Android `assembleDebug` clean. No agent-core change in this pass.
+
+## iOS "Find your home" — invisible field text, flaky scan, QR pairing
+
+Three problems the user hit on the iOS app's server-picker screen.
+
+- **Invisible manual-address text.** The whole iOS design is light-only
+  (`Theme.swift`, DESIGN.md) but nothing forced the colour scheme, so on a
+  device in Dark Mode the system label colour (white) was used for typed text
+  inside our pale-paper `AppFieldStyle` — invisible. Fix: `.preferredColorScheme(.light)`
+  on the root (`FamilyAgentApp.swift`), plus a belt-and-braces explicit
+  `.foregroundStyle(Theme.text)` in `AppFieldStyle` (`Buttons.swift`). This was
+  never iOS-specific to the field — every system-derived colour in the app was
+  wrong in Dark Mode; the field just made it obvious.
+- **Auto-scan missed an available server.** The active `/health` /24 probe ran
+  exactly once. On a fresh install that first pass is also what trips iOS's
+  "Local Network" permission prompt — every request already in flight when the
+  user taps *Allow* has failed, so the one-shot probe finds nothing even with
+  the server sitting right there. `ServerDiscovery.discover()` now loops the
+  probe pass (3s gap for the first two sweeps, then every 10s), shares one
+  `URLSession` per pass, and is cancellable. `DiscoveryView` gained a "Scan
+  again" button and a clearer empty-state that points at the Local Network
+  setting.
+- **QR pairing with the desktop.** New: `agent-core` `/health` returns
+  `lanUrls` (this machine's LAN base URLs, `src/lan.ts`, home ranges first).
+  Desktop Settings has a "Pair a phone" section (`#settings-pairing-section`)
+  showing a QR of the first LAN URL — `desktop/src/qr.ts` wraps the `qrcode`
+  package, lazy-loaded as its own chunk. iOS `DiscoveryView` has a "Scan QR
+  code" button → `QRScanSheet` (`Features/Auth/QRScannerView.swift`, an
+  `AVCaptureSession` QR reader via a `UIViewRepresentable` + coordinator,
+  `@preconcurrency import AVFoundation` like `VoiceRecorder`). `PairingPayload`
+  accepts a bare `http://host:port` string or a `{"url":…}` JSON envelope, then
+  hands it to `AppModel.pickServer`. Android has no scanner yet — the desktop
+  QR is format-compatible when it gets one.
+
+Tests: `desktop` 35/35, `agent-core` `server.routes` 87/87, both `tsc`
+clean; iOS `xcodebuild` (Swift 6 strict concurrency) **BUILD SUCCEEDED**.
+`qrcode` + `@types/qrcode` added to the `desktop` workspace.
+
+iOS version bumped `1.0.0` → **`1.1.0`** (`MARKETING_VERSION` in both build
+configs; `CURRENT_PROJECT_VERSION` 1 → 2 — the release script stamps the real
+build number per upload). Updated the hardcoded `1.0.0` in `ios/RELEASE.md`,
+`ios/store/SUBMISSION.md`, `ios/store/version-information.txt`,
+`ios/store/README.txt`, and rewrote `ios/store/metadata/whats-new.txt` with
+the 1.1.0 notes (QR pairing, discovery fix, Dark Mode field fix).
+
+### Follow-up: Tailscale addresses in the pairing QR
+
+A phone paired with the Mac **over Tailscale** (not the same Wi-Fi) got "could
+not reach" after scanning: `lanBaseUrls` returned the Mac's *physical* LAN IP
+(192.168.x) first and the QR encoded that — unroutable from the phone, which
+only had a path to the `100.x` Tailscale address. (Even on the same Wi-Fi the
+Tailscale address is the better bet: it isn't gated by iOS's Local Network
+permission, which only covers the physical LAN, not the VPN tunnel.)
+
+`src/lan.ts` now classifies each address — `tailscale` (a `100.64/10` addr on a
+`utun*`/`tailscale*` interface), `lan` (RFC1918), or `other` — and sorts
+**Tailscale first**. `/health` gained `lanAddrs: {url, kind}[]` alongside the
+plain `lanUrls`. The desktop "Pair a phone" panel now lists every address as a
+**clickable row** (labelled "— Tailscale" / "— other network"); clicking one
+re-renders the QR for it, so you pick whichever the phone can actually reach.
+`test/lan.test.ts` covers the classification; the `/health` route test
+asserts the new field.
+
+### Follow-up 2: it *still* "could not reach" — App Transport Security
+
+With the QR now encoding the Tailscale address, the phone reported "the app
+policy requires a secure connection" — iOS **ATS** (`NSURLErrorDomain -1022`),
+confirmed in the simulator log (`FA_SERVER_URL=http://100.69.50.67:4173` +
+`FA_AUTOLOGIN`). `NSAllowsLocalNetworking` exempts cleartext http to localhost,
+`*.local` and **RFC1918** IPs (which is why LAN pairing always worked) but
+**not** the `100.64.0.0/10` CGNAT range Tailscale uses, and an ATS exception
+can't take a CIDR. So ATS has to be off for the app: it's a pure client of a
+server the user runs on their own hardware and points it at by hand — there is
+no https to require.
+
+**The gotcha:** on iOS 10+, if `NSAllowsLocalNetworking` (or `*InWebContent` /
+`*ForMedia`) is present *alongside* `NSAllowsArbitraryLoads`, the system
+**ignores `NSAllowsArbitraryLoads`**. The first attempt kept both keys "to be
+safe" and stayed broken. `NSAppTransportSecurity` now has
+`NSAllowsArbitraryLoads = true` and nothing else. (`NSBonjourServices` +
+`NSLocalNetworkUsageDescription` are separate keys, untouched — mDNS discovery
+still needs them.)
+
+`src/lan.ts` also now leads the address list with the **Tailscale MagicDNS
+name** (`tailscale status --json` → `.Self.DNSName`, tried at the usual binary
+paths incl. `/Applications/Tailscale.app/…`, cached 60s, best-effort → `null`) —
+a stable name survives a Tailscale IP change and is nicer to type. So `/health`
+returns e.g. `[{mac.tailXXХХ.ts.net → tailscale}, {100.x → tailscale}, {192.168.x
+→ lan}]`.
+
+**Verified end to end**: simulator app → `http://100.69.50.67:4173` (this Mac's
+Tailscale IP) → `POST /auth/login` `200`, landed on Chat. Before the plist fix
+the same launch failed with `-1022`. `test/lan.test.ts` 4/4; `agent-core` +
+`desktop` `tsc` / `vite build` clean; iOS `xcodebuild` **BUILD SUCCEEDED**.
+
+iOS version bumped `1.1.0` → **`1.1.1`** (`CURRENT_PROJECT_VERSION` 2 → 3);
+doc refs + `whats-new.txt` updated, ATS-off rationale added to `ios/RELEASE.md`
+and `ios/store/app-review-information.txt` for the future public-submission path.

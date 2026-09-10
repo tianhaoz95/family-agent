@@ -73,6 +73,14 @@ The app collects no data and contains no analytics or advertising SDK. All
 content shown is on the demo server. Microphone / camera / photo prompts appear
 only when you use voice input, document scanning, or a photo attachment.
 
+App Transport Security is disabled (NSAllowsArbitraryLoads). The app only ever
+connects to a Family Agent server the user runs on their own hardware and
+supplies by hand — a private LAN address, or a Tailscale / VPN address in the
+100.64.0.0/10 range that NSAllowsLocalNetworking does not cover. There is no
+first-party or public endpoint and no HTTPS option for a user's home server.
+The hosted demo above is HTTPS; arbitrary loads is for real users' local
+servers, the same pattern as other self-hosted-server clients.
+
 --------------------------------------------------------------------------------
 5. ATTACHMENT  (optional)
 --------------------------------------------------------------------------------

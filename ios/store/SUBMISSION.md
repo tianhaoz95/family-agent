@@ -40,7 +40,7 @@ because a public listing needs almost all the same fields plus a few blockers.
 |---|---|
 | Bundle ID | `app.familyagent.ios` |
 | Apple Team | `68CTFST8W2` (`DEVELOPMENT_TEAM` in `project.pbxproj`) |
-| Version | `1.0.0` (`MARKETING_VERSION`) |
+| Version | `1.1.2` (`MARKETING_VERSION`) |
 | Build number | stamped per upload by `scripts/release-ios.sh` (UTC timestamp) |
 | Device family | iPhone only, portrait only |
 | Min iOS | 18.0 |

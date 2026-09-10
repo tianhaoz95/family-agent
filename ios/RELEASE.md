@@ -100,10 +100,11 @@ to find a server.
 | App icon | Regenerated 1024×1024, **opaque, no alpha, full-bleed**. It had an alpha channel — a hard upload rejection — and its own rounded corners, which iOS would have masked a second time. Redrawn geometrically from the same four brand discs rather than upscaled from the 256px logo. |
 | Privacy manifest | `FamilyAgent/PrivacyInfo.xcprivacy`. Required for every submission since May 2024; without it the upload fails with `ITMS-91053`. Declares no tracking, no collected data, and the one required-reason API the app uses (`UserDefaults` in `SettingsStore`, reason `CA92.1`). |
 | Launch screen | `UILaunchScreen` → `LaunchBackground` colour set (`#F6F5F4`), so there's no white flash before the first frame. It previously named an empty colour asset. |
-| Version | `MARKETING_VERSION = 1.0.0`; build number stamped per upload by the script. |
+| Version | `MARKETING_VERSION = 1.1.2`; build number stamped per upload by the script. |
 | Device scope | iPhone only (`TARGETED_DEVICE_FAMILY = 1`), portrait only. |
 | Debug hooks | `FA_SERVER_URL` / `FA_AUTOLOGIN` / `FA_START` / `FA_CHAT_PROMPT` / `FA_DRAWER` are all `#if DEBUG`, and verified absent from the Release binary with `strings`. |
 | Usage strings | Microphone, camera, photo library and local network, each saying *why*. |
+| App Transport Security | Off — `NSAllowsArbitraryLoads` only (see the ATS note under "public App Store" below). The app is a plain-http client of a server the user runs; there is no https to require. |
 | Release build | Archives clean at `-O`, `dwarf-with-dsym`, `VALIDATE_PRODUCT = YES`, zero warnings. |
 
 ---
@@ -115,9 +116,15 @@ Three things become blockers that internal TestFlight lets you ignore:
 - **Reviewer access.** Either build an in-app demo mode backed by canned data, or
   host one internet-reachable `agent-core` with a valid TLS certificate and put
   its URL plus a demo login in App Review Information. A note asking the reviewer
-  to install a server will not be actioned. (Plain `http://` to a public host
-  would need an ATS exception Apple scrutinises — don't; a real `https://` host
-  passes ATS with no change, since `NSAllowsLocalNetworking` only covers local names.)
+  to install a server will not be actioned.
+- **ATS is off** (`NSAllowsArbitraryLoads = YES`, since 1.1.1). Every connection
+  is plain `http://` to a server the user runs on their own machine and points
+  the app at by hand — a LAN IP, or a Tailscale `100.x` / MagicDNS address that
+  `NSAllowsLocalNetworking` does **not** cover. There is no public host and no
+  https to fall back to. A public submission needs this spelled out in App
+  Review Information (`store/app-review-information.txt`); it's the same
+  rationale VLC / Transmission / other local-server clients use and is routinely
+  accepted, but it is a question Apple asks.
 - **Store listing.** Screenshots at 6.9" (1320×2868 or 1290×2796), a support URL
   and a privacy policy URL — none of the three can be blank.
 - **App Privacy questionnaire.** Answer **Data Not Collected**: everything the app

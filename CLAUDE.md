@@ -392,6 +392,11 @@ wire types are hand-mirrored in `ios/FamilyAgent/Networking/DTOs.swift` (the cou
   `.entitlements` live in `ios/Config/` **outside** the synchronized group (inside it, Xcode both
   copies *and* processes `Info.plist` → "multiple commands produce" build failure). Bundle id
   `app.familyagent.ios`. Fonts (Inter + Source Serif) copied from `android/.../res/font/`.
+  **ATS is fully off** — `NSAppTransportSecurity` = `NSAllowsArbitraryLoads` and *nothing else*
+  (adding `NSAllowsLocalNetworking` back makes iOS 10+ ignore it). Required: the app only ever
+  talks plain http to a server the user runs and points it at, and `NSAllowsLocalNetworking`
+  doesn't cover the `100.64/10` range Tailscale hands out. `NSBonjourServices` /
+  `NSLocalNetworkUsageDescription` are unrelated keys (mDNS discovery) and stay.
 - **State**: `ios/FamilyAgent/App/AppModel.swift` — one `@MainActor @Observable` object mirroring
   Android's `AppUiState` (same field names) + `AppViewModel`'s methods, split across
   `AppModel+{Chat,Messages,Data}.swift`. `perform<T>` wraps every call and turns a `401` into
@@ -403,7 +408,15 @@ wire types are hand-mirrored in `ios/FamilyAgent/Networking/DTOs.swift` (the cou
   `RoutineInput.deliverChannelId`) — `JSONEncoder` omits `nil` otherwise. `ToolStep.input` is a
   `JSONValue` enum. `ServerDiscovery.swift` = `NWBrowser` (`_familyagent._tcp`, needs
   `NSBonjourServices` + `NSLocalNetworkUsageDescription` in Info.plist) **plus** an active
-  `GET /health` probe of the device /24 (`getifaddrs`); the simulator also probes `localhost`.
+  `GET /health` probe of the device /24 (`getifaddrs`) that **loops** (the first pass trips
+  the Local Network permission prompt, so a one-shot probe finds nothing on a fresh install);
+  the simulator also probes `localhost`. `DiscoveryView` also has a **"Scan QR code"** button
+  (`Features/Auth/QRScannerView.swift`, an `AVCaptureSession` reader) — the desktop Settings
+  "Pair a phone" section shows a QR of one of the server's reachable addresses
+  (`agent-core` `/health.lanAddrs` = `{url, kind}[]`, `kind` ∈ `tailscale`/`lan`/`other`,
+  Tailscale first — MagicDNS name (`tailscale status --json`, best-effort) then `100.x` IP —
+  because it works off-Wi-Fi; `src/lan.ts`; desktop `src/qr.ts`, a clickable list picks which
+  address the QR encodes).
   Token in the Keychain (`Keychain.swift`), rest in `UserDefaults` (`SettingsStore.swift`).
 - **Design** (`ios/FamilyAgent/DesignSystem/`): `Theme.swift` ports the Kotlin `Pal`/`AppAccents`/
   shape/type tokens (warm `#F6F5F4`, one `#0075DE` accent, Inter, light only). `Glass.swift` is

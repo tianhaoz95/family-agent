@@ -1,12 +1,12 @@
 VERSION INFORMATION  —  the fields on the version page itself
-(App Store Connect → your app → "iOS App 1.0" in the left sidebar)
+(App Store Connect → your app → "iOS App 1.1.2" in the left sidebar)
 
 --------------------------------------------------------------------------------
 VERSION NUMBER
 --------------------------------------------------------------------------------
-  1.0.0
+  1.1.2
   Must match CFBundleShortVersionString / MARKETING_VERSION in the project
-  (currently 1.0.0). The build's CFBundleVersion (CURRENT_PROJECT_VERSION) is
+  (currently 1.1.2). The build's CFBundleVersion (CURRENT_PROJECT_VERSION) is
   stamped per upload by scripts/release-ios.sh and just has to be unique and
   increasing for this version string.
 

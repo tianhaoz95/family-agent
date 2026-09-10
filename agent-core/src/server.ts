@@ -70,6 +70,7 @@ import {
   type SearchMode,
 } from "./embeddings.js";
 import { warmModel } from "./warmup.js";
+import { lanAddrs } from "./lan.js";
 import { warmCompute } from "./compute/run.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { persistSettings } from "./settingsFile.js";
@@ -785,11 +786,19 @@ export function buildServer(
   }
 
   // ---- health / discovery (public) ----
-  app.get("/health", async () => ({
+  app.get("/health", async () => {
+    // This machine's reachable base URLs — the desktop "Pair a phone" panel
+    // shows a QR of the first so a phone can scan its way in without mDNS.
+    // `lanAddrs` carries the kind (tailscale / lan / other); `lanUrls` is the
+    // plain ordered list kept for older clients.
+    const addrs = lanAddrs(config.port);
+    return {
     ok: true,
     model: config.model,
     ollamaBaseUrl: config.ollamaBaseUrl,
     serverName: config.serverName,
+    lanUrls: addrs.map((a) => a.url),
+    lanAddrs: addrs,
     // The desktop shows a first-run setup wizard when this is true.
     needsSetup: store.countUsers() === 0,
     toolsPort: config.toolsPort,
@@ -821,7 +830,8 @@ export function buildServer(
     // AI-generated HTML cards (render_card). Admin-toggleable in Settings;
     // clients hide the card render path when "off".
     cards: config.cardsEnabled ? "on" : "off",
-  }));
+    };
+  });
 
   app.post("/_diag", async (req) => {
     console.log("[DIAG]", JSON.stringify(req.body));

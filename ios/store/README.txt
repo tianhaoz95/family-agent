@@ -61,7 +61,7 @@ Ready to archive and upload — see ../RELEASE.md.
 
   Bundle id            app.familyagent.ios
   Team                 68CTFST8W2 (HEJI TECHNOLOGY LLC)
-  Version / build      1.0.0, build stamped per upload by scripts/release-ios.sh
+  Version / build      1.1.2, build stamped per upload by scripts/release-ios.sh
   Devices              iPhone only, portrait only
   Privacy manifest     present, ships at the bundle root
   Export compliance    ITSAppUsesNonExemptEncryption = false, already in Info.plist

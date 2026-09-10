@@ -65,6 +65,7 @@ struct AppFieldStyle: TextFieldStyle {
     func _body(configuration: TextField<Self._Label>) -> some View {
         configuration
             .font(.inter(15))
+            .foregroundStyle(Theme.text)   // never inherit the system label colour (white in Dark Mode)
             .tint(Theme.accent)
             .padding(.horizontal, 12).padding(.vertical, 10)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.R.md, style: .continuous))

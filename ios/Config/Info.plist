@@ -54,10 +54,22 @@
 	<array>
 		<string>_familyagent._tcp</string>
 	</array>
-	<!-- The home server is reached over plain http on the LAN / localhost. -->
+	<!-- The home server is agent-core running on a machine the user owns, reached
+	     over plain http. There is no https endpoint and never will be — it's a
+	     LAN / localhost / private-VPN service, not a public host.
+	     NSAllowsLocalNetworking covers localhost, *.local and RFC1918 IPs, but
+	     NOT the 100.64.0.0/10 CGNAT range that Tailscale (and other mesh VPNs)
+	     hand out — http://100.x.y.z:4173 (or a MagicDNS *.ts.net FQDN) is refused
+	     with "the App Transport Security policy requires a secure connection".
+	     ATS exceptions can't express a CIDR, so the only thing that covers
+	     pairing over Tailscale is turning ATS off for the app.
+	     NOTE: NSAllowsArbitraryLoads must be the ONLY key here — on iOS 10+,
+	     adding NSAllowsLocalNetworking (or the *InWebContent / *ForMedia keys)
+	     makes the system IGNORE NSAllowsArbitraryLoads. Safe here: every request
+	     goes to a server address the user explicitly supplied (scanned or typed). -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsLocalNetworking</key>
+		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
 

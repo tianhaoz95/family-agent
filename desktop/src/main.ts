@@ -228,6 +228,7 @@ async function refreshStatus() {
     vaultAiEnabled = health.vaultAi === true;
     navVault.hidden = !vaultEnabled;
     cardsEnabled = health.cards === "on";
+    void renderPairing(health);
     const meaningOpt = documentSearchMode.querySelector<HTMLOptionElement>('option[value="semantic"]');
     if (meaningOpt) {
       meaningOpt.textContent = semanticSearchOff ? "By meaning (needs a model)" : "By meaning";
@@ -3681,11 +3682,82 @@ const settingsAutostartRow = document.getElementById("settings-autostart-row")!;
 const settingsAutostartCheckbox = document.getElementById("settings-autostart-checkbox") as HTMLInputElement;
 const settingsAutostartStatusEl = document.getElementById("settings-autostart-status")!;
 const settingsQuitBtn = document.getElementById("settings-quit-btn") as HTMLButtonElement;
+const pairingQrImg = document.getElementById("pairing-qr") as HTMLImageElement;
+const pairingHintEl = document.getElementById("pairing-hint")!;
+const pairingAddrList = document.getElementById("pairing-addr-list")!;
 const accountNameEl = document.getElementById("account-name")!;
 const accountRoleEl = document.getElementById("account-role")!;
 const passwordForm = document.getElementById("password-form") as HTMLFormElement;
 const accountPasswordInput = document.getElementById("account-password") as HTMLInputElement;
 const accountStatusEl = document.getElementById("account-status")!;
+
+// "Pair a phone": show a QR of one of the server's reachable addresses (from
+// /health) so the iOS app can scan its way in. There can be several — a plain
+// LAN IP, a Tailscale 100.x, ... — and only some reach a given phone, so the
+// addresses are a clickable list and picking one re-renders the QR. Tailscale
+// sorts first (it works on or off the home Wi-Fi and dodges iOS's Local Network
+// permission). Only re-render when the address set changes (refreshStatus runs
+// every 5s). `./qr` (the qrcode package) loads on demand as its own chunk.
+type PairAddr = NonNullable<Health["lanAddrs"]>[number];
+let pairingRenderedFor = "";
+let pairingSelected = "";
+async function renderPairing(health: Health) {
+  const addrs: PairAddr[] =
+    health.lanAddrs ?? (health.lanUrls ?? []).map((url) => ({ url, kind: "lan" as const }));
+  const key = addrs.map((a) => a.url).join(",");
+  if (key === pairingRenderedFor) return;
+  pairingRenderedFor = key;
+  pairingAddrList.replaceChildren();
+  if (addrs.length === 0) {
+    pairingQrImg.hidden = true;
+    pairingSelected = "";
+    pairingHintEl.textContent =
+      "This machine has no detected network address — connect it to Wi-Fi or Ethernet (or bring up Tailscale), then the phone can pair.";
+    return;
+  }
+  pairingHintEl.textContent =
+    addrs.length > 1
+      ? "Tap the address the phone can reach, then scan:"
+      : "Scannable address:";
+  pairingSelected = addrs[0].url;
+  const label = (k: PairAddr["kind"]) =>
+    k === "tailscale" ? " — Tailscale" : k === "other" ? " — other network" : "";
+  const paint = async () => {
+    for (const li of Array.from(pairingAddrList.children) as HTMLLIElement[]) {
+      li.classList.toggle("is-selected", li.dataset.url === pairingSelected);
+    }
+    try {
+      const { qrDataUrl } = await import("./qr");
+      pairingQrImg.src = await qrDataUrl(pairingSelected);
+      pairingQrImg.hidden = false;
+    } catch (err) {
+      pairingQrImg.hidden = true;
+      pairingHintEl.textContent = `Couldn't render the QR code: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  };
+  for (const a of addrs) {
+    const li = document.createElement("li");
+    li.dataset.url = a.url;
+    li.textContent = a.url + label(a.kind);
+    if (addrs.length > 1) {
+      li.tabIndex = 0;
+      li.setAttribute("role", "button");
+      const pick = () => {
+        pairingSelected = a.url;
+        void paint();
+      };
+      li.addEventListener("click", pick);
+      li.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          pick();
+        }
+      });
+    }
+    pairingAddrList.appendChild(li);
+  }
+  await paint();
+}
 
 // The signed-in user, set during boot() and after any account change.
 let currentUser: User | null = null;

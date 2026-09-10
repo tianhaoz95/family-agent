@@ -50,28 +50,52 @@ final class ServerDiscovery: Sendable {
             browser.start(queue: .global(qos: .userInitiated))
 
             // 2. Active /24 probe (+ localhost on sim).
+            //
+            // Runs on a repeating loop, not once: the first pass is what trips
+            // iOS's "Local Network" permission prompt, and every request already
+            // in flight when the user taps Allow has failed — so a one-shot probe
+            // finds nothing on a fresh install even when the server is right
+            // there. A later pass picks it up. It also recovers from the laptop
+            // being asleep / Wi-Fi roaming while this screen is open.
             let probeTask = Task {
-                var hosts: [String] = []
-                #if targetEnvironment(simulator)
-                hosts.append("localhost")
-                hosts.append("127.0.0.1")
-                #endif
-                hosts.append(contentsOf: Self.localSubnetHosts())
-                await withTaskGroup(of: DiscoveredServer?.self) { group in
-                    let sem = AsyncSemaphore(limit: 40)
-                    for host in hosts {
-                        group.addTask {
-                            await sem.wait()
-                            defer { Task { await sem.signal() } }
-                            return await Self.probe(host: host, port: Self.defaultPort)
+                var pass = 0
+                while !Task.isCancelled {
+                    pass += 1
+                    var hosts: [String] = []
+                    #if targetEnvironment(simulator)
+                    hosts.append("localhost")
+                    hosts.append("127.0.0.1")
+                    #endif
+                    hosts.append(contentsOf: Self.localSubnetHosts())
+
+                    let cfg = URLSessionConfiguration.ephemeral
+                    cfg.timeoutIntervalForRequest = 1.5
+                    cfg.timeoutIntervalForResource = 2
+                    cfg.waitsForConnectivity = false
+                    cfg.httpMaximumConnectionsPerHost = 6
+                    let session = URLSession(configuration: cfg)
+
+                    await withTaskGroup(of: DiscoveredServer?.self) { group in
+                        let sem = AsyncSemaphore(limit: 32)
+                        for host in hosts {
+                            group.addTask {
+                                await sem.wait()
+                                defer { Task { await sem.signal() } }
+                                if Task.isCancelled { return nil }
+                                return await Self.probe(host: host, port: Self.defaultPort, session: session)
+                            }
+                        }
+                        for await result in group {
+                            if let s = result {
+                                await box.insert(s)
+                                continuation.yield(await box.sorted())
+                            }
                         }
                     }
-                    for await result in group {
-                        if let s = result {
-                            await box.insert(s)
-                            continuation.yield(await box.sorted())
-                        }
-                    }
+                    session.invalidateAndCancel()
+                    if Task.isCancelled { break }
+                    // Back off after the first couple of full sweeps.
+                    try? await Task.sleep(for: .seconds(pass < 3 ? 3 : 10))
                 }
             }
 
@@ -92,14 +116,10 @@ final class ServerDiscovery: Sendable {
         }
     }
 
-    private static func probe(host: String, port: Int) async -> DiscoveredServer? {
+    private static func probe(host: String, port: Int, session: URLSession) async -> DiscoveredServer? {
         guard let url = URL(string: "http://\(host):\(port)/health") else { return nil }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 1.2
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 1.2
-        cfg.timeoutIntervalForResource = 1.5
-        let session = URLSession(configuration: cfg)
+        req.timeoutInterval = 1.5
         guard let (data, resp) = try? await session.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let health = try? JSONDecoder().decode(HealthResponse.self, from: data),
