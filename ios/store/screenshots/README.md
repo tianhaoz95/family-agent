@@ -2,11 +2,9 @@
 
 ## What App Store Connect needs
 
-- **iPhone 6.9" Display** is the only required size. Upload the six PNGs in
-  `6.9-inch/`; App Store Connect reuses them for the 6.5" and 5.5" slots.
+- **iPhone 6.9" Display**: Upload the six PNGs in `6.9-inch/` (`1320 × 2868`).
+- **iPhone 6.5" Display**: If App Store Connect requires the 6.5" slot or if you are uploading directly to the 6.5" tab, upload the six PNGs in `6.5-inch/` (`1284 × 2778`).
 - 1–10 per size. We have 6, each with real content (no empty states).
-- Exact pixels: **1320 × 2868** portrait. All six files are already this size
-  (verified with `sips`), captured on an **iPhone 17 Pro Max** simulator.
 - PNG, RGB, no alpha, no added device frame or rounded corners.
 - **No iPad** — the app is iPhone-only (`TARGETED_DEVICE_FAMILY = 1`).
 - Do **not** substitute the 1206×2622 captures used on the landing page — that's
