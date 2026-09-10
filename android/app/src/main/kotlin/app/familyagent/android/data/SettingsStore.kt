@@ -14,6 +14,7 @@ private val USER_NAME_KEY = stringPreferencesKey("user_display_name")
 private val SERVER_NAME_KEY = stringPreferencesKey("server_name")
 private val TASK_VIEW_KEY = stringPreferencesKey("task_view")
 private val AUTO_READ_KEY = booleanPreferencesKey("auto_read_replies")
+private val MIC_ON_LEFT_KEY = booleanPreferencesKey("mic_button_on_left")
 private val TASK_VIEWS = listOf("list", "day", "3day", "week", "month")
 
 // Prefill for the manual-address field only. The normal path is LAN discovery
@@ -62,6 +63,17 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setAutoRead(on: Boolean) {
         context.dataStore.edit { it[AUTO_READ_KEY] = on }
+    }
+
+    /**
+     * Which side of the composer the hold-to-talk mic sits on: true = left of
+     * the text field (left-handed reach), false = right, next to Send (default).
+     * Device-local, survives sign-out.
+     */
+    val micOnLeft = context.dataStore.data.map { it[MIC_ON_LEFT_KEY] ?: false }
+
+    suspend fun setMicOnLeft(on: Boolean) {
+        context.dataStore.edit { it[MIC_ON_LEFT_KEY] = on }
     }
 
     suspend fun saveSession(serverUrl: String, token: String, displayName: String, serverName: String) {

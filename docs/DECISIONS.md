@@ -1385,9 +1385,23 @@ weekly picker (Sunday · 18:00).
 
 The agent could only ever reach its own SQLite — no internet lookup, no CLI
 tools. Two capabilities close that, each a deliberate widening of the trust
-boundary, so each is **off by default**, an **env-var switch** (not a
-Settings-page toggle — same category as `FAMILY_AGENT_TOOLS`/`_ASR`/`_MDNS`),
-and reported in `/health` for the clients.
+boundary, so each is **off by default** and reported in `/health` for the
+clients.
+
+**Update (2026-09-10): web access became an in-app admin toggle.** Originally
+both were env-var-only, on the reasoning below. In practice a family admin who
+wants the assistant to answer "what's the weather / look this up" has no shell
+access to the laptop and no reason to — so web is now a Settings-page control
+(provider picker: Off / DuckDuckGo-keyless / SearXNG+URL / Tavily-or-Brave+key)
+persisted in `settings.json`, exactly like `cardsEnabled`. Any
+`FAMILY_AGENT_WEB_SEARCH_*` env var still pins it (`envLocked.webSearchProvider`,
+control read-only). The API key is write-only over the wire — `GET /settings`
+returns `webSearchApiKeySet: boolean`, never the key. An on/off transition calls
+`dropAllAgents()` so the planner prompt's research section and the `research-agent`
+wiring rebuild. **Shell stayed env-var-only** — it's arbitrary code execution on
+the family laptop, a materially bigger posture change than "the assistant can
+read a web page", and it needs `bubblewrap` installed anyway. Tests:
+`test/web.settings.test.ts`. The original reasoning, still true for shell:
 
 ### Web: one egress chokepoint, an SSRF guard, and no redirects
 
@@ -1469,9 +1483,9 @@ itself confined).
 
 ### What was NOT done
 
-- **Not a Settings-page toggle** — env-var only, so enabling either capability
-  is a deliberate act on the box, not a click in the app. Revisit if a
-  "capabilities" admin screen is wanted.
+- **Not a Settings-page toggle** — ~~env-var only~~ **superseded for web** (see
+  the 2026-09-10 update above): web is now an admin toggle in every client;
+  shell is still env-var-only.
 - **Small-model reliability.** `gemma4:e2b` (2B) drives multi-step
   search→read→answer and import→run→save unreliably — the machinery is
   verified (`runTool` with jq returns the right sum; `fetchPage` extracts real

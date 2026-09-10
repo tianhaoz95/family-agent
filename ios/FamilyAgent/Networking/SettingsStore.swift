@@ -13,6 +13,7 @@ struct SettingsStore {
         static let userName = "user_display_name"
         static let taskView = "task_view"
         static let autoRead = "auto_read_replies"
+        static let micOnLeft = "mic_button_on_left"
     }
 
     struct Session {
@@ -59,5 +60,13 @@ struct SettingsStore {
     var autoRead: Bool {
         get { defaults.bool(forKey: K.autoRead) }
         nonmutating set { defaults.set(newValue, forKey: K.autoRead) }
+    }
+
+    /// Which side of the composer the hold-to-talk mic sits on. Default `false`
+    /// = right (next to Send); `true` puts it left of the text field for
+    /// left-handed reach. Device-local, like `autoRead`.
+    var micOnLeft: Bool {
+        get { defaults.bool(forKey: K.micOnLeft) }
+        nonmutating set { defaults.set(newValue, forKey: K.micOnLeft) }
     }
 }

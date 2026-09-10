@@ -13,7 +13,6 @@ struct HoldToTalkMic: View {
 
     @State private var recorder = VoiceRecorder()
     @State private var mode: Mode = .idle
-    @State private var amplitude: Float = 0
     @State private var cancelArmed = false
     @State private var holdTask: Task<Void, Never>?
 
@@ -31,7 +30,7 @@ struct HoldToTalkMic: View {
             .gesture(pressGesture)
             .disabled(!enabled)
             .fullScreenCover(isPresented: Binding(get: { mode == .ptt }, set: { _ in })) {
-                VoiceOverlay(amplitude: amplitude, cancelArmed: cancelArmed)
+                VoiceOverlay(recorder: recorder, cancelArmed: cancelArmed)
                     .presentationBackground(.clear)
             }
     }
@@ -62,7 +61,6 @@ struct HoldToTalkMic: View {
         Task {
             guard await VoiceRecorder.requestPermission() else { return }
             do {
-                recorder.onAmplitude = { amplitude = $0 }
                 try recorder.start()
                 mode = .ptt
                 cancelArmed = false
@@ -87,7 +85,6 @@ struct HoldToTalkMic: View {
             Task {
                 guard await VoiceRecorder.requestPermission() else { return }
                 do {
-                    recorder.onAmplitude = { amplitude = $0 }
                     try recorder.start()
                     mode = .dictating
                 } catch {}
@@ -100,10 +97,15 @@ struct HoldToTalkMic: View {
 
 /// Full-screen "listening" overlay — 32 bars scrolling right-to-left.
 struct VoiceOverlay: View {
-    let amplitude: Float
+    let recorder: VoiceRecorder
     let cancelArmed: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var levels = [Float](repeating: 0, count: 32)
+    // A `Timer` publisher, not a captured `.task { while … }` loop: that loop's
+    // closure froze the amplitude at its first value, so the bars never moved
+    // while speaking. `recorder` is a stable reference whose `amplitude` the
+    // ticker samples live each tick — the mirror of Android's `rememberUpdatedState`.
+    private let ticker = Timer.publish(every: 0.055, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ZStack {
@@ -124,13 +126,13 @@ struct VoiceOverlay: View {
                     .appBodySmall().foregroundStyle(Theme.textMuted)
             }
         }
-        .task {
-            if reduceMotion { levels = [Float](repeating: 0.3, count: 32); return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(55))
-                levels.removeFirst()
-                levels.append(min(1, max(0, amplitude)))
-            }
+        .onAppear {
+            if reduceMotion { levels = [Float](repeating: 0.3, count: 32) }
+        }
+        .onReceive(ticker) { _ in
+            guard !reduceMotion else { return }
+            levels.removeFirst()
+            levels.append(min(1, max(0, recorder.amplitude)))
         }
     }
 }

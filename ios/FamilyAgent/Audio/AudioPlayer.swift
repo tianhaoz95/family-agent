@@ -27,15 +27,17 @@ final class AudioPlayer: NSObject, AVAudioPlayerDelegate {
                 data = try await fetch(key)
                 cache[key] = data
             }
-            onState?(nil, key)
             try configureSession(.playback)
             let p = try AVAudioPlayer(data: data)
             p.delegate = self
             p.prepareToPlay()
-            p.play()
+            guard p.play() else { throw AudioError.playbackFailed }
             player = p
+            onState?(nil, key)
         } catch {
+            player = nil
             onState?(nil, nil)
+            try? configureSession(.playAndRecord)
         }
     }
 
@@ -52,7 +54,14 @@ final class AudioPlayer: NSObject, AVAudioPlayerDelegate {
 
     private func configureSession(_ category: AVAudioSession.Category) throws {
         let s = AVAudioSession.sharedInstance()
-        try s.setCategory(category, mode: .spokenAudio, options: [.duckOthers, .defaultToSpeaker])
+        // `.defaultToSpeaker` is only legal with `.playAndRecord` — passing it with
+        // `.playback` makes `setCategory` throw, which used to be swallowed by the
+        // catch in `toggle`, so the reply fetched but never played a sound.
+        let options: AVAudioSession.CategoryOptions =
+            category == .playAndRecord ? [.duckOthers, .defaultToSpeaker, .allowBluetooth] : [.duckOthers]
+        try s.setCategory(category, mode: .spokenAudio, options: options)
         try s.setActive(true, options: [])
     }
 }
+
+private enum AudioError: Error { case playbackFailed }

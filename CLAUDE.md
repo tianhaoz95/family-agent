@@ -62,8 +62,10 @@ desktop style".
   want the agent to use (`ffmpeg`, `qpdf`, `imagemagick`, `poppler-utils`, `jq`, `csvkit`, `pandoc`, …).
   Only installed tools are advertised; missing bwrap = the capability stays off. See
   `docs/DECISIONS.md` → "Web access and shell/file-processing".
-- *Optional, for the web capability*: set `FAMILY_AGENT_WEB_SEARCH_PROVIDER` to `searxng`
-  (+ `_URL`), `tavily`/`brave` (+ `_API_KEY`), or `ddg` (no setup, best from a home connection).
+- *Optional, for the web capability*: an admin can turn it on in the app
+  (Settings → Internet access — pick DuckDuckGo for a keyless setup), or pin it with
+  `FAMILY_AGENT_WEB_SEARCH_PROVIDER` = `searxng` (+ `_URL`), `tavily`/`brave` (+ `_API_KEY`),
+  or `ddg`. An env var makes the in-app control read-only.
 - *Optional, for the password vault* (`FAMILY_AGENT_VAULT=1`): no extra deps — the crypto is
   Node's built-in `node:crypto`. `FAMILY_AGENT_VAULT_AI=0` keeps the vault but denies the
   assistant. See "Password vault" below.
@@ -108,6 +110,17 @@ npm run tauri:build       # release bundle -> src-tauri/target/release/bundle/
 npm run typecheck         # tsc --noEmit
 npm test                  # vitest run (api.ts client tests, mocked fetch)
 ```
+
+**Never test against the installed production desktop app or its data.** It
+holds the user's real accounts, documents, and vault, and shares the default
+data dir (`$XDG_DATA_HOME/family-agent`, i.e. `~/.local/share/family-agent`,
+on every platform) and port `4173`. For any manual/smoke testing, start a
+throwaway dev instance instead: a fresh
+`FAMILY_AGENT_DATA_DIR=$(mktemp -d)` (a new temp dir under `/tmp` per run — it
+bootstraps with zero accounts, so `POST /auth/bootstrap` a test admin) **and**
+a non-default `PORT` (e.g. `PORT=4273`, with the tools server following via
+`FAMILY_AGENT_TOOLS_PORT`). Point the client you're testing at that port. Throw
+the temp dir away when done; don't reuse it across unrelated test runs.
 
 **android** (`cd android`, needs `JAVA_HOME`/`ANDROID_HOME` pointed at `../.toolchains/`):
 ```bash
@@ -687,9 +700,21 @@ See `docs/DECISIONS.md` → "Scheduled routines" for the v2+ cuts (data-relative
 ## Web + shell capabilities (research-agent, workshop-agent)
 
 Two capabilities that extend the agent past the local box, each **off by
-default**, each an env-var switch (not a Settings-page toggle — they change the
-security posture, like `FAMILY_AGENT_TOOLS`), each reported in `/health`
-(`web`, `shell`) so clients show/hide the `/web` and `/run` slash commands.
+default**, each reported in `/health` (`web`, `shell`) so clients show/hide the
+`/web` and `/run` slash commands.
+
+**Web is admin-toggleable from the app now** (as of 2026-09-10 — it was
+previously env-var-only). All three clients have an "Internet access" section in
+Settings: a provider picker (Off / DuckDuckGo — keyless / SearXNG + URL / Tavily
+or Brave + API key) that writes `webSearchProvider` / `webSearchUrl` /
+`webSearchApiKey` through `PUT /settings` (admin-only, persisted in
+`settings.json` via `settingsFile.ts`, `dropAllAgents()` on an on/off change).
+Setting any `FAMILY_AGENT_WEB_SEARCH_*` env var pins the whole group
+(`envLocked.webSearchProvider`) and the controls go read-only — same
+env > persisted > default precedence as `model`/`cardsEnabled`. `GET /settings`
+never echoes the API key back, only `webSearchApiKeySet`. **Shell stays
+env-var-only** (`FAMILY_AGENT_SHELL=1` + bubblewrap) — it grants real code
+execution, a bigger posture change. See `docs/DECISIONS.md` → "Web access".
 
 **Web** (`agent-core/src/web/`, `agents/webTools.ts`). A `research-agent`
 subagent with `web_search` + `open_page`. This is the deliberate, bounded

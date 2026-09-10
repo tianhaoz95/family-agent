@@ -36,6 +36,12 @@ export const envLocked = {
   embedModel: process.env.FAMILY_AGENT_EMBED_MODEL !== undefined,
   serverName: process.env.FAMILY_AGENT_SERVER_NAME !== undefined,
   cardsEnabled: process.env.FAMILY_AGENT_CARDS !== undefined,
+  // One lock for the whole web-access group (provider + URL + key) — set any of
+  // the three env vars and the Settings-page controls go read-only.
+  webSearchProvider:
+    process.env.FAMILY_AGENT_WEB_SEARCH_PROVIDER !== undefined ||
+    process.env.FAMILY_AGENT_WEB_SEARCH_URL !== undefined ||
+    process.env.FAMILY_AGENT_WEB_SEARCH_API_KEY !== undefined,
 } as const;
 
 export const config = {
@@ -160,14 +166,13 @@ export const config = {
   //   tavily | brave — an API (set FAMILY_AGENT_WEB_SEARCH_API_KEY)
   //   ddg — DuckDuckGo lite HTML, no key, best-effort
   //   none (default) — the whole capability is off
-  webSearchProvider: (process.env.FAMILY_AGENT_WEB_SEARCH_PROVIDER ?? "none") as
-    | "searxng"
-    | "tavily"
-    | "brave"
-    | "ddg"
-    | "none",
-  webSearchUrl: process.env.FAMILY_AGENT_WEB_SEARCH_URL ?? "",
-  webSearchApiKey: process.env.FAMILY_AGENT_WEB_SEARCH_API_KEY ?? "",
+  // Precedence: env var > persisted (desktop Settings → "Internet access") >
+  // "none". Mutated at runtime by PUT /settings when not env-locked.
+  webSearchProvider: (process.env.FAMILY_AGENT_WEB_SEARCH_PROVIDER ??
+    persisted.webSearchProvider ??
+    "none") as "searxng" | "tavily" | "brave" | "ddg" | "none",
+  webSearchUrl: process.env.FAMILY_AGENT_WEB_SEARCH_URL ?? persisted.webSearchUrl ?? "",
+  webSearchApiKey: process.env.FAMILY_AGENT_WEB_SEARCH_API_KEY ?? persisted.webSearchApiKey ?? "",
   // Optional domain guard rails for open_page (comma-separated, e.g.
   // "wikipedia.org,*.gov"). An allow-list, when non-empty, is exclusive.
   webAllowDomains: (process.env.FAMILY_AGENT_WEB_ALLOW ?? "").split(",").map((s) => s.trim()).filter(Boolean),

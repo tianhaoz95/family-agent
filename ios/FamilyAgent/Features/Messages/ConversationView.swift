@@ -133,6 +133,8 @@ struct ConversationView: View {
             .disabled(attached.count >= 4)
             .opacity(attached.count >= 4 ? 0.35 : 1)
 
+            if model.voiceEnabled && model.micOnLeft { mic }
+
             if mentionPill {
                 Button { mentionPill = false } label: {
                     HStack(spacing: 3) {
@@ -174,16 +176,18 @@ struct ConversationView: View {
                     }
                 }
 
-            if model.voiceEnabled {
-                HoldToTalkMic(enabled: !model.channelSending, transcribing: model.channelTranscribing,
-                              onDictate: { model.transcribeChannelVoice($0) { t in
-                                  input = input.isEmpty ? t : "\(input.trimmingCharacters(in: .whitespaces)) \(t)"
-                              } },
-                              onVoiceSend: { model.sendChannelVoice($0) })
-            }
+            if model.voiceEnabled && !model.micOnLeft { mic }
 
             SendButton(sending: model.channelSending, enabled: canSend) { send() }
         }
+    }
+
+    @ViewBuilder private var mic: some View {
+        HoldToTalkMic(enabled: !model.channelSending, transcribing: model.channelTranscribing,
+                      onDictate: { model.transcribeChannelVoice($0) { t in
+                          input = input.isEmpty ? t : "\(input.trimmingCharacters(in: .whitespaces)) \(t)"
+                      } },
+                      onVoiceSend: { model.sendChannelVoice($0) })
     }
 
     private var canSend: Bool {

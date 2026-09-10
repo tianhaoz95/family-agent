@@ -189,6 +189,8 @@ struct ChatView: View {
             .disabled(attached.count >= 4)
             .opacity(attached.count >= 4 ? 0.35 : 1)
 
+            if model.voiceEnabled && model.micOnLeft { mic }
+
             TextField("Ask anything, or type /", text: $input, axis: .vertical)
                 .font(.inter(15))
                 .lineLimit(1...4)
@@ -207,16 +209,18 @@ struct ChatView: View {
                     }
                 }
 
-            if model.voiceEnabled {
-                HoldToTalkMic(enabled: !model.chatSending, transcribing: model.chatTranscribing,
-                              onDictate: { model.transcribeVoice($0) { t in
-                                  input = input.isEmpty ? t : "\(input.trimmingCharacters(in: .whitespaces)) \(t)"
-                              } },
-                              onVoiceSend: { model.sendChatVoice($0) })
-            }
+            if model.voiceEnabled && !model.micOnLeft { mic }
 
             SendButton(sending: model.chatSending, enabled: canSend) { send() }
         }
+    }
+
+    @ViewBuilder private var mic: some View {
+        HoldToTalkMic(enabled: !model.chatSending, transcribing: model.chatTranscribing,
+                      onDictate: { model.transcribeVoice($0) { t in
+                          input = input.isEmpty ? t : "\(input.trimmingCharacters(in: .whitespaces)) \(t)"
+                      } },
+                      onVoiceSend: { model.sendChatVoice($0) })
     }
 
     private func send() {

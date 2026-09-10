@@ -565,6 +565,14 @@ export interface Settings {
   serverName: string;
   /** Whether the assistant may answer with a generated HTML card — admin-toggleable. */
   cardsEnabled: boolean;
+  /** Whether the research agent can reach the internet (a provider is configured). */
+  webEnabled: boolean;
+  /** Web-search provider: "none" = off; "ddg" | "searxng" | "tavily" | "brave". */
+  webSearchProvider: "none" | "ddg" | "searxng" | "tavily" | "brave";
+  /** SearXNG base URL (only meaningful when webSearchProvider === "searxng"). */
+  webSearchUrl: string;
+  /** Whether an API key is stored (tavily/brave) — the key itself is never sent. */
+  webSearchApiKeySet: boolean;
   isAdmin: boolean;
   /** Fields pinned by an env var — read-only in the UI. */
   envLocked: {
@@ -576,6 +584,7 @@ export interface Settings {
     ttsVoice: boolean;
     serverName: boolean;
     cardsEnabled: boolean;
+    webSearchProvider: boolean;
   };
 }
 
@@ -588,6 +597,9 @@ export interface SettingsPatch {
   ttsVoice?: string;
   serverName?: string;
   cardsEnabled?: boolean;
+  webSearchProvider?: "none" | "ddg" | "searxng" | "tavily" | "brave";
+  webSearchUrl?: string;
+  webSearchApiKey?: string;
 }
 
 // Separate from request() because a file upload must NOT set

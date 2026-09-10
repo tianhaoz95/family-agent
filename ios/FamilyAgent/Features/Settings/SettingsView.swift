@@ -18,12 +18,29 @@ struct SettingsView: View {
                         }
                     }
 
-                    if model.ttsEnabled {
+                    if model.ttsEnabled || model.voiceEnabled {
                         section("Voice")
-                        Toggle(isOn: Binding(get: { model.autoRead }, set: { model.autoRead = $0 })) {
-                            Text("Read replies aloud automatically").appBody()
+                        if model.ttsEnabled {
+                            Toggle(isOn: Binding(get: { model.autoRead }, set: { model.autoRead = $0 })) {
+                                Text("Read replies aloud automatically").appBody()
+                            }
+                            .padding(.vertical, 4)
                         }
-                        .padding(.vertical, 4)
+                        if model.voiceEnabled {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Microphone button side").appBody()
+                                Picker("Microphone button side",
+                                       selection: Binding(get: { model.micOnLeft ? "left" : "right" },
+                                                          set: { model.micOnLeft = $0 == "left" })) {
+                                    Text("Left of the text field").tag("left")
+                                    Text("Right (next to Send)").tag("right")
+                                }
+                                .pickerStyle(.segmented)
+                                Text("Put it wherever your thumb lands — handy if you're left-handed.")
+                                    .appLabelSmall().foregroundStyle(Theme.textMuted)
+                            }
+                            .padding(.vertical, 4)
+                        }
                     }
 
                     if let s = model.serverSettings {
@@ -36,6 +53,9 @@ struct SettingsView: View {
                         }
                         .disabled(!s.isAdmin || s.envLocked.cardsEnabled)
                         .padding(.vertical, 4)
+
+                        section("Internet access")
+                        InternetAccessSection(settings: s)
                     }
 
                     section("Signed in as")
@@ -100,5 +120,82 @@ struct SettingsView: View {
         case .connected(let m): "Connected · local · \(m)"
         case .unreachable(let msg): "Unreachable: \(msg)"
         }
+    }
+}
+
+/// Provider picker + conditional URL / API-key field for the research agent's
+/// internet access. Mirrors the desktop Settings "Internet access" section.
+private struct InternetAccessSection: View {
+    @Environment(AppModel.self) private var model
+    let settings: ServerSettings
+
+    private static let providers: [(String, String)] = [
+        ("none", "Off"),
+        ("ddg", "On — DuckDuckGo (no key)"),
+        ("searxng", "On — SearXNG (self-hosted)"),
+        ("tavily", "On — Tavily (API key)"),
+        ("brave", "On — Brave Search (API key)"),
+    ]
+
+    @State private var provider = "none"
+    @State private var url = ""
+    @State private var apiKey = ""
+    @State private var status: String?
+
+    private var editable: Bool { settings.isAdmin && !settings.envLocked.webSearchProvider }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Lets the assistant search the web and read pages (the /web command and the "
+                 + "research helper). Every request is SSRF-guarded, logged in Activity, and never "
+                 + "followed through a redirect. Off = only what\u{2019}s on this machine.")
+                .appLabelSmall().foregroundStyle(Theme.textMuted)
+
+            Picker("Provider", selection: $provider) {
+                ForEach(Self.providers, id: \.0) { Text($0.1).tag($0.0) }
+            }
+            .pickerStyle(.menu)
+            .disabled(!editable)
+
+            if provider == "searxng" {
+                TextField("SearXNG URL — http://localhost:8888", text: $url)
+                    .textFieldStyle(.app)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .disabled(!editable)
+            }
+            if provider == "tavily" || provider == "brave" {
+                SecureField(settings.webSearchApiKeySet ? "A key is saved — type to replace" : "Paste the provider API key",
+                            text: $apiKey)
+                    .textFieldStyle(.app)
+                    .disabled(!editable)
+            }
+
+            Button("Save") {
+                status = "Saving…"
+                model.setWebAccess(
+                    provider: provider,
+                    url: provider == "searxng" ? url.trimmingCharacters(in: .whitespaces) : nil,
+                    apiKey: (provider == "tavily" || provider == "brave") && !apiKey.isEmpty
+                        ? apiKey.trimmingCharacters(in: .whitespaces) : nil)
+                status = provider == "none" ? "Off — no internet access." : "On — searching with \(provider)."
+            }
+            .buttonStyle(.primary)
+            .disabled(!editable)
+
+            Text(status ?? hint)
+                .appLabelSmall().foregroundStyle(Theme.textMuted)
+        }
+        .onAppear {
+            provider = settings.webSearchProvider
+            url = settings.webSearchUrl
+        }
+    }
+
+    private var hint: String {
+        if settings.envLocked.webSearchProvider { return "Pinned by a FAMILY_AGENT_WEB_SEARCH_* env var on the server." }
+        if !settings.isAdmin { return "Only an admin can change this." }
+        return settings.webEnabled
+            ? "On — searching with \(settings.webSearchProvider)."
+            : "Off — the assistant has no internet access."
     }
 }

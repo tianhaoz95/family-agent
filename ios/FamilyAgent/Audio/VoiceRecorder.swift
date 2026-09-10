@@ -13,9 +13,10 @@ import Foundation
 final class VoiceRecorder {
     private let engine = AVAudioEngine()
     private let sink = Sink()
+    /// Smoothed RMS level (0…1), refreshed ~20×/s while recording. The
+    /// push-to-talk overlay's waveform samples this live each frame.
     private(set) var amplitude: Float = 0
     private(set) var isRecording = false
-    var onAmplitude: ((Float) -> Void)?
     private var tickTask: Task<Void, Never>?
 
     static func requestPermission() async -> Bool {
@@ -44,7 +45,14 @@ final class VoiceRecorder {
         sink.outFormat = outFormat
 
         let sink = self.sink
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { buffer, _ in
+        // `@Sendable` forces the tap block to be non-isolated. Without it the
+        // closure is inferred `@MainActor` (it's formed in a `@MainActor`
+        // method and `@preconcurrency import AVFoundation` strips `@Sendable`
+        // off `AVAudioNodeTapBlock`), so when the audio render thread invokes
+        // it the Swift 6 runtime's executor check traps — EXC_BREAKPOINT in
+        // `swift_task_isCurrentExecutor`, seen on the iOS 26 runtime the moment
+        // push-to-talk starts recording.
+        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { @Sendable buffer, _ in
             sink.feed(buffer)
         }
         engine.prepare()
@@ -55,9 +63,7 @@ final class VoiceRecorder {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(50))
                 guard let self else { return }
-                let a = self.sink.currentAmplitude
-                self.amplitude = a
-                self.onAmplitude?(a)
+                self.amplitude = self.sink.currentAmplitude
             }
         }
     }

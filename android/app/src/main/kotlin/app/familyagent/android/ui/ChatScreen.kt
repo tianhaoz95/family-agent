@@ -90,6 +90,7 @@ fun ChatScreen(
     onStepsClick: (List<app.familyagent.android.data.ToolStep>) -> Unit = {},
     onViewCardSource: (app.familyagent.android.data.Card) -> Unit = {},
     voiceEnabled: Boolean,
+    micOnLeft: Boolean = false,
     transcribing: Boolean,
     ttsEnabled: Boolean = false,
     speakingText: String? = null,
@@ -292,6 +293,19 @@ fun ChatScreen(
                 attached = emptyList()
             }
         }
+        val mic: @Composable () -> Unit = {
+            HoldToTalkMic(
+                enabled = !sending,
+                transcribing = transcribing,
+                recorder = recorder,
+                onDictate = { wav ->
+                    onTranscribe(wav) { text ->
+                        input = endOf(if (input.text.isBlank()) text else "${input.text.trimEnd()} $text")
+                    }
+                },
+                onVoiceSend = onVoiceSend,
+            )
+        }
         Row(
             Modifier
                 .fillMaxWidth()
@@ -332,19 +346,7 @@ fun ChatScreen(
                     )
                 }
             }
-            if (voiceEnabled) {
-                HoldToTalkMic(
-                    enabled = !sending,
-                    transcribing = transcribing,
-                    recorder = recorder,
-                    onDictate = { wav ->
-                        onTranscribe(wav) { text ->
-                            input = endOf(if (input.text.isBlank()) text else "${input.text.trimEnd()} $text")
-                        }
-                    },
-                    onVoiceSend = onVoiceSend,
-                )
-            }
+            if (voiceEnabled && micOnLeft) mic()
             TextField(
                 value = input,
                 onValueChange = { input = it },
@@ -367,6 +369,7 @@ fun ChatScreen(
                     disabledIndicatorColor = Color.Transparent,
                 ),
             )
+            if (voiceEnabled && !micOnLeft) mic()
             FilledIconButton(
                 onClick = submit,
                 enabled = !sending && (input.text.isNotBlank() || attached.isNotEmpty()),

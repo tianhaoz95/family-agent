@@ -182,11 +182,24 @@ struct ChatResponse: Codable, Sendable {
 struct ServerSettings: Codable, Sendable {
     var serverName: String = ""
     var cardsEnabled: Bool = true
+    // Internet access (research agent). webSearchApiKey is never sent back.
+    var webEnabled: Bool = false
+    var webSearchProvider: String = "none"
+    var webSearchUrl: String = ""
+    var webSearchApiKeySet: Bool = false
     var isAdmin: Bool = false
     var envLocked: EnvLocked = EnvLocked()
 }
-struct EnvLocked: Codable, Sendable { var cardsEnabled: Bool = false }
-struct UpdateSettingsRequest: Codable, Sendable { var cardsEnabled: Bool? = nil }
+struct EnvLocked: Codable, Sendable {
+    var cardsEnabled: Bool = false
+    var webSearchProvider: Bool = false
+}
+struct UpdateSettingsRequest: Codable, Sendable {
+    var cardsEnabled: Bool? = nil
+    var webSearchProvider: String? = nil
+    var webSearchUrl: String? = nil
+    var webSearchApiKey: String? = nil
+}
 
 struct TurnStepsResponse: Codable, Sendable {
     var steps: [ToolStep] = []

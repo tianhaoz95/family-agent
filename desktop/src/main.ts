@@ -2282,16 +2282,34 @@ function renderActivity(entries: ActivityEntry[]) {
     const actor = document.createElement("span");
     actor.className = "activity-actor";
     actor.textContent = humanActor(entry.actor);
+    const detailWrap = document.createElement("div");
+    detailWrap.className = "activity-detail-wrap";
     const detail = document.createElement("span");
     detail.className = "activity-detail";
     detail.textContent = entry.detail;
+    detailWrap.appendChild(detail);
     const ts = document.createElement("time");
     ts.className = "activity-ts";
     ts.dateTime = entry.ts;
     ts.textContent = relativeTime(entry.ts);
     ts.title = new Date(entry.ts).toLocaleString();
-    li.append(actor, detail, ts);
+    li.append(actor, detailWrap, ts);
     activityList.appendChild(li);
+    // Clamp long detail lines to 2 rows; add a Show more/less toggle only when the
+    // text actually overflows.
+    requestAnimationFrame(() => {
+      if (detail.scrollHeight - detail.clientHeight > 1) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "activity-more";
+        toggle.textContent = "Show more";
+        toggle.addEventListener("click", () => {
+          const open = detail.classList.toggle("expanded");
+          toggle.textContent = open ? "Show less" : "Show more";
+        });
+        detailWrap.appendChild(toggle);
+      }
+    });
   }
 }
 
@@ -3673,6 +3691,13 @@ const settingsTtsStatusEl = document.getElementById("settings-tts-status")!;
 const settingsAutoReadCheckbox = document.getElementById("settings-auto-read") as HTMLInputElement;
 const settingsCardsCheckbox = document.getElementById("settings-cards-checkbox") as HTMLInputElement;
 const settingsCardsStatusEl = document.getElementById("settings-cards-status")!;
+const settingsWebForm = document.getElementById("settings-web-form") as HTMLFormElement;
+const settingsWebProviderSelect = document.getElementById("settings-web-provider") as HTMLSelectElement;
+const settingsWebUrlRow = document.getElementById("settings-web-url-row") as HTMLElement;
+const settingsWebUrlInput = document.getElementById("settings-web-url") as HTMLInputElement;
+const settingsWebKeyRow = document.getElementById("settings-web-key-row") as HTMLElement;
+const settingsWebKeyInput = document.getElementById("settings-web-key") as HTMLInputElement;
+const settingsWebStatusEl = document.getElementById("settings-web-status")!;
 const settingsServerNameInput = document.getElementById("settings-servername-input") as HTMLInputElement;
 const settingsServerNameForm = document.getElementById("settings-servername-form") as HTMLFormElement;
 const settingsServerNameStatusEl = document.getElementById("settings-servername-status")!;
@@ -3867,6 +3892,31 @@ async function refreshSettings() {
       : !settings.isAdmin
         ? "Only an admin can change this."
         : "";
+
+    // Internet access — provider picker + conditional URL / API-key fields.
+    if (document.activeElement !== settingsWebProviderSelect) {
+      settingsWebProviderSelect.value = settings.webSearchProvider;
+    }
+    if (document.activeElement !== settingsWebUrlInput) {
+      settingsWebUrlInput.value = settings.webSearchUrl;
+    }
+    if (document.activeElement !== settingsWebKeyInput) {
+      settingsWebKeyInput.value = "";
+      settingsWebKeyInput.placeholder = settings.webSearchApiKeySet
+        ? "A key is saved — type a new one to replace it"
+        : "Paste the provider API key";
+    }
+    syncWebProviderRows();
+    const webLock = settings.envLocked.webSearchProvider || !settings.isAdmin;
+    for (const el of [settingsWebProviderSelect, settingsWebUrlInput, settingsWebKeyInput]) el.disabled = webLock;
+    for (const btn of settingsWebForm.querySelectorAll("button")) btn.disabled = webLock;
+    settingsWebStatusEl.textContent = settings.envLocked.webSearchProvider
+      ? "Pinned by a FAMILY_AGENT_WEB_SEARCH_* environment variable — change it there and restart."
+      : !settings.isAdmin
+        ? "Only an admin can change this."
+        : settings.webEnabled
+          ? `On — searching with ${settings.webSearchProvider}.`
+          : "Off — the assistant has no internet access.";
     if (document.activeElement !== settingsOllamaUrlInput) {
       settingsOllamaUrlInput.value = settings.ollamaBaseUrl;
     }
@@ -3998,6 +4048,30 @@ settingsCardsCheckbox.addEventListener("change", () => {
     { cardsEnabled: settingsCardsCheckbox.checked },
     settingsCardsStatusEl,
     (s) => `Saved — visual cards are ${s.cardsEnabled ? "on" : "off"}`
+  );
+});
+
+// Show the SearXNG URL / API-key field only for the provider that needs it.
+function syncWebProviderRows() {
+  const p = settingsWebProviderSelect.value;
+  settingsWebUrlRow.hidden = p !== "searxng";
+  settingsWebKeyRow.hidden = p !== "tavily" && p !== "brave";
+}
+settingsWebProviderSelect.addEventListener("change", syncWebProviderRows);
+
+settingsWebForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const provider = settingsWebProviderSelect.value as SettingsPatch["webSearchProvider"];
+  const patch: SettingsPatch = { webSearchProvider: provider };
+  if (provider === "searxng") patch.webSearchUrl = settingsWebUrlInput.value.trim();
+  // Only send a key when the admin actually typed one (blank = keep the stored key).
+  if ((provider === "tavily" || provider === "brave") && settingsWebKeyInput.value.trim()) {
+    patch.webSearchApiKey = settingsWebKeyInput.value.trim();
+  }
+  // saveSetting → refreshStatus() re-reads /health and updates the module
+  // `webEnabled` flag that gates the /web slash command.
+  void saveSetting(patch, settingsWebStatusEl, (s) =>
+    s.webEnabled ? `Saved — internet access on (${s.webSearchProvider}).` : "Saved — internet access off."
   );
 });
 

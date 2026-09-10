@@ -1,5 +1,4 @@
 import SwiftUI
-import PhotosUI
 import UniformTypeIdentifiers
 
 private let SEARCH_MODES: [(String, String)] = [
@@ -18,7 +17,7 @@ private struct DocRow: Identifiable {
 struct DocumentsView: View {
     @Environment(AppModel.self) private var model
     @State private var showImporter = false
-    @State private var photoItem: PhotosPickerItem?
+    @State private var showCamera = false
     @State private var pasteExpanded = false
     @State private var pasteFilename = ""
     @State private var pasteText = ""
@@ -46,13 +45,14 @@ struct DocumentsView: View {
                             Label("Upload", systemImage: "arrow.up.doc").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.ghost)
-                        PhotosPicker(selection: $photoItem, matching: .images) {
+                        Button { showCamera = true } label: {
                             Label("Scan", systemImage: "camera")
                                 .font(.inter(14, .semibold)).foregroundStyle(Theme.accentInk)
                                 .frame(maxWidth: .infinity).padding(.vertical, 9)
                                 .background(Theme.accentSoft, in: Capsule())
                                 .overlay(Capsule().strokeBorder(Theme.accentInk.opacity(0.12), lineWidth: 1))
                         }
+                        .buttonStyle(.plain)
                     }
                     if let s = model.documentUploadStatus {
                         Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
@@ -100,15 +100,12 @@ struct DocumentsView: View {
             model.uploadDocument(filename: url.lastPathComponent, bytes: data,
                                  mime: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType)
         }
-        .onChange(of: photoItem) { _, item in
-            guard let item else { return }
-            Task {
-                if let data = try? await item.loadTransferable(type: Data.self) {
-                    model.uploadDocument(filename: "scan-\(Int(Date().timeIntervalSince1970)).jpg",
-                                         bytes: data, mime: "image/jpeg")
-                }
-                photoItem = nil
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { data in
+                model.uploadDocument(filename: "scan-\(Int(Date().timeIntervalSince1970)).jpg",
+                                     bytes: data, mime: "image/jpeg")
             }
+            .ignoresSafeArea()
         }
         .sheet(item: $renaming) { RenameDocumentSheet(doc: $0) }
     }

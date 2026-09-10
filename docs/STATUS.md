@@ -643,11 +643,15 @@ Later changes (not part of the original autonomous session):
     direct tool-operation actions; OS notifications (chat-channel delivery is
     the v1 stand-in). See `docs/DECISIONS.md` → "Scheduled routines".
 - **Web access + shell/file-processing** — two capabilities that take the agent
-  past its own database, each **off by default**, each an env-var switch, each
-  in `/health` (`web`, `shell`). Full rationale in `docs/DECISIONS.md` → "Web
-  access and shell/file-processing".
+  past its own database, each **off by default**, each in `/health` (`web`,
+  `shell`). Full rationale in `docs/DECISIONS.md` → "Web access and
+  shell/file-processing".
   - **Web** (`agent-core/src/web/`): a `research-agent` subagent with
-    `web_search` + `open_page`. `FAMILY_AGENT_WEB_SEARCH_PROVIDER` picks the
+    `web_search` + `open_page`. **Admin-toggleable in every client's Settings**
+    (as of 2026-09-10) — "Internet access" section with a provider picker
+    (Off / DuckDuckGo-keyless / SearXNG+URL / Tavily-or-Brave+key), persisted in
+    `settings.json` like `cardsEnabled`; `FAMILY_AGENT_WEB_SEARCH_PROVIDER` (or
+    `_URL` / `_API_KEY`) still pins it and makes the control read-only. Picks the
     backend (`searxng` self-hosted / `tavily` / `brave` / `ddg` / `none`).
     **`src/web/fetch.ts` is the one and only egress point** — enforced by
     `test/web.egress.test.ts` — with an SSRF guard (private/loopback/link-local/
@@ -674,8 +678,9 @@ Later changes (not part of the original autonomous session):
     and blocks `169.254.169.254`; `runTool` with `jq` computes a CSV column sum
     correctly. Small-model (`gemma4:e2b`) multi-step orchestration of these is
     unreliable — the tooling is ready for a bigger model, same as builder tools.
-  - **Not yet**: an admin "capabilities" screen (env-var only for now); web in
-    a "sources" side panel; OS notifications.
+  - **Not yet**: a full admin "capabilities" screen (web now has its own Settings
+    section; shell is still env-var only); web in a "sources" side panel; OS
+    notifications.
 - **Code sandbox (`run_code`)** — a stateless "run this snippet, give me the
   answer" tool so the assistant can do exact arithmetic / date math / small
   data analysis instead of guessing (a 2B model gets "split $84 three ways"

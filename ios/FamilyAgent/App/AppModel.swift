@@ -80,9 +80,15 @@ final class AppModel {
     // ---- speech ----
     var speakingText: String?
     var speakLoadingText: String?
-    var autoRead: Bool {
-        get { settings.autoRead }
-        set { settings.autoRead = newValue }
+    // Stored (not a computed pass-through to `settings`) so `@Observable` sees the
+    // change and re-renders — `SettingsStore` is a `let` struct writing straight to
+    // UserDefaults, invisible to observation. `didSet` keeps UserDefaults in sync.
+    var autoRead: Bool = SettingsStore().autoRead {
+        didSet { settings.autoRead = autoRead }
+    }
+    /// Composer mic side — `true` = left of the text field. Device-local.
+    var micOnLeft: Bool = SettingsStore().micOnLeft {
+        didSet { settings.micOnLeft = micOnLeft }
     }
 
     // ---- tasks / documents / activity ----
@@ -101,9 +107,8 @@ final class AppModel {
     var toolsBaseURL: String?
 
     // ---- tasks screen prefs ----
-    var taskView: String {
-        get { settings.taskView }
-        set { settings.taskView = newValue }
+    var taskView: String = SettingsStore().taskView {
+        didSet { settings.taskView = taskView }
     }
     var calAnchor: Date = Calendar.gregorianMonday.startOfDay(for: .now)
 

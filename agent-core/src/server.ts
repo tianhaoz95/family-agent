@@ -2371,6 +2371,12 @@ export function buildServer(
     embedEnabled: config.embedEnabled,
     serverName: config.serverName,
     cardsEnabled: config.cardsEnabled,
+    // Internet access (research agent). The key itself is never sent back —
+    // only whether one is stored.
+    webEnabled: webEnabled(),
+    webSearchProvider: config.webSearchProvider,
+    webSearchUrl: config.webSearchUrl,
+    webSearchApiKeySet: config.webSearchApiKey.length > 0,
     isAdmin: user.role === "admin",
     envLocked,
   });
@@ -2391,6 +2397,9 @@ export function buildServer(
     embedModel: z.string().trim().max(120).optional(),
     serverName: z.string().trim().min(1).max(60).optional(),
     cardsEnabled: z.boolean().optional(),
+    webSearchProvider: z.enum(["searxng", "tavily", "brave", "ddg", "none"]).optional(),
+    webSearchUrl: z.string().trim().max(300).optional(),
+    webSearchApiKey: z.string().trim().max(400).optional(),
   });
   app.put("/settings", async (req, reply) => {
     const parsed = UpdateSettingsBody.safeParse(req.body);
@@ -2400,7 +2409,7 @@ export function buildServer(
       return reply.code(400).send({ error: "Nothing to update." });
     }
 
-    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled"] as const;
+    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "webSearchProvider", "webSearchUrl", "webSearchApiKey"] as const;
     if (req.authUser.role !== "admin" && adminFields.some((f) => patch[f] !== undefined)) {
       return reply.code(403).send({ error: "Only an admin can change machine settings." });
     }
@@ -2411,6 +2420,24 @@ export function buildServer(
           error: `"${key}" is pinned by an environment variable and can't be changed here.`,
         });
       }
+    }
+    if ((patch.webSearchProvider !== undefined || patch.webSearchUrl !== undefined || patch.webSearchApiKey !== undefined) && envLocked.webSearchProvider) {
+      return reply.code(400).send({
+        error: "Internet access is pinned by a FAMILY_AGENT_WEB_SEARCH_* environment variable and can't be changed here.",
+      });
+    }
+
+    // A provider needs its companion setting to actually work — validate against
+    // the state *after* this patch so "set key, then switch provider" in either
+    // order is fine.
+    const nextProvider = patch.webSearchProvider ?? config.webSearchProvider;
+    const nextUrl = patch.webSearchUrl ?? config.webSearchUrl;
+    const nextKey = patch.webSearchApiKey ?? config.webSearchApiKey;
+    if (nextProvider === "searxng" && !nextUrl) {
+      return reply.code(400).send({ error: "The SearXNG provider needs a server URL." });
+    }
+    if ((nextProvider === "tavily" || nextProvider === "brave") && !nextKey) {
+      return reply.code(400).send({ error: `The ${nextProvider} provider needs an API key.` });
     }
 
     // Validate model / ocrModel / embedModel against the Ollama we'd be using
@@ -2441,6 +2468,9 @@ export function buildServer(
       embedModel: patch.embedModel,
       serverName: patch.serverName,
       cardsEnabled: patch.cardsEnabled,
+      webSearchProvider: patch.webSearchProvider,
+      webSearchUrl: patch.webSearchUrl,
+      webSearchApiKey: patch.webSearchApiKey,
     };
     if (Object.values(machinePatch).some((v) => v !== undefined)) {
       persistSettings(config.dataDir, machinePatch);
@@ -2463,6 +2493,13 @@ export function buildServer(
     if (patch.cardsEnabled !== undefined && patch.cardsEnabled !== config.cardsEnabled) {
       config.cardsEnabled = patch.cardsEnabled;
       dropAllAgents(); // re-wire render_card into (or out of) every agent
+    }
+    const webWas = webEnabled();
+    if (patch.webSearchProvider !== undefined) config.webSearchProvider = patch.webSearchProvider;
+    if (patch.webSearchUrl !== undefined) config.webSearchUrl = patch.webSearchUrl;
+    if (patch.webSearchApiKey !== undefined) config.webSearchApiKey = patch.webSearchApiKey;
+    if (webEnabled() !== webWas) {
+      dropAllAgents(); // wire research-agent + the planner's web section in/out
     }
 
     if (patch.inboxDir !== undefined) {
@@ -2503,6 +2540,12 @@ export function buildServer(
       [
         `AI-generated cards turned ${patch.cardsEnabled ? "on" : "off"}`,
         patch.cardsEnabled !== undefined,
+      ],
+      [
+        config.webSearchProvider === "none"
+          ? "Internet access turned off"
+          : `Internet access turned on (${config.webSearchProvider})`,
+        patch.webSearchProvider !== undefined,
       ],
     ] as const) {
       if (changed) req.userStore.logActivity("system", "settings.updated", msg);

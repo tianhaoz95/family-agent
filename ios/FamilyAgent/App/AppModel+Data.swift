@@ -300,6 +300,15 @@ extension AppModel {
             await refreshStatus()
         }
     }
+    /// Internet access: provider "none" = off; searxng needs `url`; tavily/brave need `apiKey`.
+    func setWebAccess(provider: String, url: String?, apiKey: String?) {
+        Task {
+            if let s = await perform({ try await api.setWebAccess(provider: provider, url: url, apiKey: apiKey) }) {
+                serverSettings = s
+                await refreshStatus()
+            }
+        }
+    }
     func setServerURL(_ url: String) {
         pickServer(url)
     }

@@ -208,15 +208,28 @@ data class ChatResponse(
 data class ServerSettings(
     val serverName: String = "",
     val cardsEnabled: Boolean = true,
+    // Internet access (research agent). webSearchApiKey is never sent back.
+    val webEnabled: Boolean = false,
+    val webSearchProvider: String = "none",
+    val webSearchUrl: String = "",
+    val webSearchApiKeySet: Boolean = false,
     val isAdmin: Boolean = false,
     val envLocked: EnvLocked = EnvLocked(),
 )
 
 @Serializable
-data class EnvLocked(val cardsEnabled: Boolean = false)
+data class EnvLocked(
+    val cardsEnabled: Boolean = false,
+    val webSearchProvider: Boolean = false,
+)
 
 @Serializable
-data class UpdateSettingsRequest(val cardsEnabled: Boolean? = null)
+data class UpdateSettingsRequest(
+    val cardsEnabled: Boolean? = null,
+    val webSearchProvider: String? = null,
+    val webSearchUrl: String? = null,
+    val webSearchApiKey: String? = null,
+)
 
 @Serializable
 data class TurnStepsResponse(val steps: List<ToolStep> = emptyList(), val done: Boolean = false)

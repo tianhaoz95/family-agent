@@ -102,6 +102,8 @@ data class AppUiState(
     val ttsEnabled: Boolean = false,
     /** Read new assistant replies aloud automatically (persisted in DataStore). */
     val autoRead: Boolean = false,
+    /** Composer mic button side — true = left of the input field (persisted in DataStore). */
+    val micOnLeft: Boolean = false,
     /** The reply text currently being synthesized (null = none). */
     val speakLoadingText: String? = null,
     /** The reply text currently playing aloud (null = none). */
@@ -204,6 +206,11 @@ class AppViewModel(
         viewModelScope.launch {
             settings.autoRead.collect { on ->
                 _state.value = _state.value.copy(autoRead = on)
+            }
+        }
+        viewModelScope.launch {
+            settings.micOnLeft.collect { on ->
+                _state.value = _state.value.copy(micOnLeft = on)
             }
         }
         viewModelScope.launch {
@@ -513,6 +520,10 @@ class AppViewModel(
 
     fun setAutoRead(on: Boolean) {
         viewModelScope.launch { settings.setAutoRead(on) }
+    }
+
+    fun setMicOnLeft(on: Boolean) {
+        viewModelScope.launch { settings.setMicOnLeft(on) }
     }
 
     override fun onCleared() {
@@ -1320,6 +1331,18 @@ class AppViewModel(
             apiCall { api.setCardsEnabled(enabled) }.onSuccess {
                 _state.value = _state.value.copy(serverSettings = it, cardsMode = if (it.cardsEnabled) "on" else "off")
             }
+        }
+    }
+
+    /** Set internet access: provider "none" = off; searxng needs [url]; tavily/brave need [apiKey]. */
+    fun setWebAccess(provider: String, url: String?, apiKey: String?, onDone: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.setWebAccess(provider, url, apiKey) }
+                .onSuccess {
+                    _state.value = _state.value.copy(serverSettings = it)
+                    onDone()
+                }
+                .onFailure { onError(it.message ?: "Couldn't change internet access") }
         }
     }
 

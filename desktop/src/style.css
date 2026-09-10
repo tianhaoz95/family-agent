@@ -1366,7 +1366,7 @@ summary:focus-visible {
 .activity-row {
   display: grid;
   grid-template-columns: max-content 1fr max-content;
-  align-items: baseline;
+  align-items: start;
   column-gap: 12px;
   padding: 7px 8px;
   border-radius: var(--r-md);
@@ -1385,13 +1385,36 @@ summary:focus-visible {
   padding: 2px 8px;
   border-radius: var(--r-pill);
   white-space: nowrap;
-  align-self: center;
 }
 
+.activity-detail-wrap {
+  min-width: 0;
+}
 .activity-detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   color: var(--text-strong);
   overflow-wrap: anywhere;
   line-height: 1.45;
+}
+.activity-detail.expanded {
+  -webkit-line-clamp: 999;
+}
+.activity-more {
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.activity-more:hover {
+  text-decoration: underline;
 }
 
 .activity-ts {

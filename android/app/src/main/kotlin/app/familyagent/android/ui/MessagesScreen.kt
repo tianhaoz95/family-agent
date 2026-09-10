@@ -229,6 +229,7 @@ fun ConversationScreen(
     onViewCardSource: (app.familyagent.android.data.Card) -> Unit = {},
     ttsEnabled: Boolean = false,
     voiceEnabled: Boolean = false,
+    micOnLeft: Boolean = false,
     transcribing: Boolean = false,
     speakingText: String? = null,
     speakLoadingText: String? = null,
@@ -395,6 +396,19 @@ fun ConversationScreen(
         }
 
         Spacer(Modifier.height(8.dp))
+        val mic: @Composable () -> Unit = {
+            HoldToTalkMic(
+                enabled = !sending,
+                transcribing = transcribing,
+                recorder = recorder,
+                onDictate = { wav ->
+                    onTranscribe(wav) { text ->
+                        input = if (input.isBlank()) text else "${input.trimEnd()} $text"
+                    }
+                },
+                onVoiceSend = onVoiceSend,
+            )
+        }
         Row(
             Modifier
                 .fillMaxWidth()
@@ -418,19 +432,7 @@ fun ConversationScreen(
                     tint = MaterialTheme.colorScheme.primary,
                 )
             }
-            if (voiceEnabled) {
-                HoldToTalkMic(
-                    enabled = !sending,
-                    transcribing = transcribing,
-                    recorder = recorder,
-                    onDictate = { wav ->
-                        onTranscribe(wav) { text ->
-                            input = if (input.isBlank()) text else "${input.trimEnd()} $text"
-                        }
-                    },
-                    onVoiceSend = onVoiceSend,
-                )
-            }
+            if (voiceEnabled && micOnLeft) mic()
             if (mentionChip) MentionChip(onRemove = { mentionChip = false })
             TextField(
                 value = input,
@@ -468,6 +470,7 @@ fun ConversationScreen(
                     disabledIndicatorColor = Color.Transparent,
                 ),
             )
+            if (voiceEnabled && !micOnLeft) mic()
             FilledIconButton(
                 onClick = submit,
                 enabled = (input.isNotBlank() || attached.isNotEmpty() || mentionChip) && !sending,

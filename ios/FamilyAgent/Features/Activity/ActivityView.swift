@@ -22,7 +22,7 @@ struct ActivityView: View {
                                     .foregroundStyle(Theme.accentInk)
                                     .padding(.horizontal, 8).padding(.vertical, 2)
                                     .background(Theme.accentSoft, in: Capsule())
-                                Text(e.detail).appBody()
+                                ExpandableText(text: e.detail, font: .inter(15))
                                 Spacer(minLength: 0)
                             }
                             .padding(.vertical, 8)

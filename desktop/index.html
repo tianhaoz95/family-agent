@@ -678,6 +678,31 @@
             </label>
             <p id="settings-cards-status" class="settings-hint" role="status"></p>
 
+            <h3>Internet access</h3>
+            <p class="settings-hint">
+              Lets the assistant search the web and read pages to answer a question
+              (the <code>/web</code> command and the research helper). Every request
+              is SSRF-guarded, logged in Activity, and never followed through a
+              redirect. Off means the assistant only ever uses what's on this machine.
+            </p>
+            <form id="settings-web-form" class="inline-form">
+              <select id="settings-web-provider">
+                <option value="none">Off</option>
+                <option value="ddg">On — DuckDuckGo (no key needed)</option>
+                <option value="searxng">On — SearXNG (self-hosted)</option>
+                <option value="tavily">On — Tavily (API key)</option>
+                <option value="brave">On — Brave Search (API key)</option>
+              </select>
+              <button type="submit">Save</button>
+            </form>
+            <label class="field" id="settings-web-url-row" hidden>SearXNG URL
+              <input id="settings-web-url" type="url" placeholder="http://localhost:8888" />
+            </label>
+            <label class="field" id="settings-web-key-row" hidden>API key
+              <input id="settings-web-key" type="password" placeholder="Paste the provider API key" autocomplete="off" />
+            </label>
+            <p id="settings-web-status" class="settings-hint" role="status"></p>
+
             <h3>Home name</h3>
             <p class="settings-hint">
               Shown on the sign-in screen and to phones discovering this server on the network.

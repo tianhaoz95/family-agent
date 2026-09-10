@@ -25,9 +25,21 @@ export interface PersistedSettings {
   serverName?: string;
   /** Whether the assistant may answer with a generated HTML card (render_card). */
   cardsEnabled?: boolean;
+  /**
+   * Web-search provider for the research agent (internet access). `"none"` (or
+   * unset) means the whole web capability is off. See config.ts / web/search.ts.
+   */
+  webSearchProvider?: string;
+  /** SearXNG base URL (only used when webSearchProvider === "searxng"). */
+  webSearchUrl?: string;
+  /** API key for the tavily / brave providers. Stored as-is; redacted on API responses. */
+  webSearchApiKey?: string;
 }
 
-const STRING_KEYS: (keyof PersistedSettings)[] = ["ocrModel", "asrModel", "ttsVoice", "embedModel", "model", "ollamaBaseUrl", "serverName"];
+const STRING_KEYS: (keyof PersistedSettings)[] = [
+  "ocrModel", "asrModel", "ttsVoice", "embedModel", "model", "ollamaBaseUrl", "serverName",
+  "webSearchProvider", "webSearchUrl", "webSearchApiKey",
+];
 const BOOL_KEYS: (keyof PersistedSettings)[] = ["cardsEnabled"];
 
 function settingsPath(dataDir: string): string {
