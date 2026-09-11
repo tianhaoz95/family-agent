@@ -314,6 +314,7 @@ data class ChatResponse(
 data class ServerSettings(
     val serverName: String = "",
     val cardsEnabled: Boolean = true,
+    val vaultEnabled: Boolean = false,
     // Internet access (research agent). webSearchApiKey is never sent back.
     val webEnabled: Boolean = false,
     val webSearchProvider: String = "none",
@@ -326,12 +327,14 @@ data class ServerSettings(
 @Serializable
 data class EnvLocked(
     val cardsEnabled: Boolean = false,
+    val vaultEnabled: Boolean = false,
     val webSearchProvider: Boolean = false,
 )
 
 @Serializable
 data class UpdateSettingsRequest(
     val cardsEnabled: Boolean? = null,
+    val vaultEnabled: Boolean? = null,
     val webSearchProvider: String? = null,
     val webSearchUrl: String? = null,
     val webSearchApiKey: String? = null,

@@ -136,6 +136,9 @@ class FamilyAgentApi(
     suspend fun setCardsEnabled(enabled: Boolean): ServerSettings =
         json.decodeFromString(send("PUT", "/settings", json.encodeToString(UpdateSettingsRequest(cardsEnabled = enabled))))
 
+    suspend fun setVaultEnabled(enabled: Boolean): ServerSettings =
+        json.decodeFromString(send("PUT", "/settings", json.encodeToString(UpdateSettingsRequest(vaultEnabled = enabled))))
+
     /** Set the internet-access provider (`"none"` = off) and its companion URL / API key. */
     suspend fun setWebAccess(provider: String, url: String? = null, apiKey: String? = null): ServerSettings =
         json.decodeFromString(

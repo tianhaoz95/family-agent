@@ -275,7 +275,11 @@ class AppViewModel(
         _state.value = _state.value.copy(auth = AuthState.PickServer)
     }
 
-    fun login(username: String, password: String) {
+    /** A saved username/password for this server, if "Remember me" was
+     * checked on a previous sign-in — the login screen pre-fills from it. */
+    suspend fun rememberedLogin(serverUrl: String): Pair<String, String>? = settings.rememberedLogin(serverUrl)
+
+    fun login(username: String, password: String, remember: Boolean = false) {
         val current = _state.value.auth as? AuthState.NeedLogin ?: return
         viewModelScope.launch {
             _state.value = _state.value.copy(auth = current.copy(error = null))
@@ -284,6 +288,11 @@ class AppViewModel(
             result.onSuccess { resp ->
                 api.authToken = resp.token
                 settings.saveSession(current.serverUrl, resp.token, resp.user.displayName, current.serverName)
+                if (remember) {
+                    settings.saveRememberedLogin(current.serverUrl, username.trim(), password)
+                } else {
+                    settings.clearRememberedLogin()
+                }
                 _state.value = _state.value.copy(
                     serverUrl = current.serverUrl,
                     auth = AuthState.Authenticated(resp.user),
@@ -1392,6 +1401,14 @@ class AppViewModel(
         viewModelScope.launch {
             apiCall { api.setCardsEnabled(enabled) }.onSuccess {
                 _state.value = _state.value.copy(serverSettings = it, cardsMode = if (it.cardsEnabled) "on" else "off")
+            }
+        }
+    }
+
+    fun setVaultEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            apiCall { api.setVaultEnabled(enabled) }.onSuccess {
+                _state.value = _state.value.copy(serverSettings = it, vaultMode = if (it.vaultEnabled) "on" else "off")
             }
         }
     }

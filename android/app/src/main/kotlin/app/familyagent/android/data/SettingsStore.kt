@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "family_agent_settings")
@@ -15,6 +16,15 @@ private val SERVER_NAME_KEY = stringPreferencesKey("server_name")
 private val TASK_VIEW_KEY = stringPreferencesKey("task_view")
 private val AUTO_READ_KEY = booleanPreferencesKey("auto_read_replies")
 private val MIC_ON_LEFT_KEY = booleanPreferencesKey("mic_button_on_left")
+// "Remember me" on the login screen — keyed by server URL (below the plain
+// "current session" keys above) so switching servers doesn't leak one home's
+// saved login into another's fields. Plaintext at rest, same as AUTH_TOKEN_KEY
+// above: this DataStore is already the app's private sandboxed storage and
+// isn't field-level encrypted for the token either, so this isn't a new
+// exposure — just app-sandbox protected, like everything else here.
+private val REMEMBERED_LOGIN_URL_KEY = stringPreferencesKey("remembered_login_url")
+private val REMEMBERED_USERNAME_KEY = stringPreferencesKey("remembered_username")
+private val REMEMBERED_PASSWORD_KEY = stringPreferencesKey("remembered_password")
 private val TASK_VIEWS = listOf("list", "day", "3day", "week", "month")
 
 // Prefill for the manual-address field only. The normal path is LAN discovery
@@ -89,6 +99,32 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit {
             it.remove(AUTH_TOKEN_KEY)
             it.remove(USER_NAME_KEY)
+        }
+    }
+
+    /** A saved username/password for [serverUrl], if "Remember me" was checked
+     * on a previous sign-in there — the login screen prefills from it. */
+    suspend fun rememberedLogin(serverUrl: String): Pair<String, String>? {
+        val prefs = context.dataStore.data.first()
+        if (prefs[REMEMBERED_LOGIN_URL_KEY] != serverUrl.trimEnd('/')) return null
+        val u = prefs[REMEMBERED_USERNAME_KEY] ?: return null
+        val p = prefs[REMEMBERED_PASSWORD_KEY] ?: return null
+        return u to p
+    }
+
+    suspend fun saveRememberedLogin(serverUrl: String, username: String, password: String) {
+        context.dataStore.edit {
+            it[REMEMBERED_LOGIN_URL_KEY] = serverUrl.trimEnd('/')
+            it[REMEMBERED_USERNAME_KEY] = username
+            it[REMEMBERED_PASSWORD_KEY] = password
+        }
+    }
+
+    suspend fun clearRememberedLogin() {
+        context.dataStore.edit {
+            it.remove(REMEMBERED_LOGIN_URL_KEY)
+            it.remove(REMEMBERED_USERNAME_KEY)
+            it.remove(REMEMBERED_PASSWORD_KEY)
         }
     }
 }

@@ -26,6 +26,7 @@ fun SettingsScreen(
     onSetMicOnLeft: (Boolean) -> Unit = {},
     serverSettings: ServerSettings? = null,
     onSetCardsEnabled: (Boolean) -> Unit = {},
+    onSetVaultEnabled: (Boolean) -> Unit = {},
     onSetWebAccess: (provider: String, url: String?, apiKey: String?, onDone: () -> Unit, onError: (String) -> Unit) -> Unit = { _, _, _, _, _ -> },
     onSave: (String) -> Unit,
     onSignOut: () -> Unit,
@@ -99,6 +100,32 @@ fun SettingsScreen(
                             serverSettings.envLocked.cardsEnabled -> "Pinned by the server (FAMILY_AGENT_CARDS)."
                             !serverSettings.isAdmin -> "Only an admin can change this."
                             else -> "Charts, checklists, diagrams the assistant writes and runs in a sealed sandbox. Off = text only."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppAccents.textSecondary,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = serverSettings.vaultEnabled,
+                    onCheckedChange = onSetVaultEnabled,
+                    enabled = serverSettings.isAdmin && !serverSettings.envLocked.vaultEnabled,
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Password vault",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        when {
+                            serverSettings.envLocked.vaultEnabled -> "Pinned by the server (FAMILY_AGENT_VAULT)."
+                            !serverSettings.isAdmin -> "Only an admin can change this."
+                            else -> "An encrypted store for the family's passwords and 2FA codes. Off by default."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = AppAccents.textSecondary,

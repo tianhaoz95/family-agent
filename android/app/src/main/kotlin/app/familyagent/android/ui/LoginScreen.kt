@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -15,11 +16,13 @@ import androidx.compose.ui.unit.dp
 fun LoginScreen(
     serverName: String,
     error: String?,
-    onSignIn: (username: String, password: String) -> Unit,
+    remembered: Pair<String, String>?,
+    onSignIn: (username: String, password: String, remember: Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var username by remember(remembered) { mutableStateOf(remembered?.first ?: "") }
+    var password by remember(remembered) { mutableStateOf(remembered?.second ?: "") }
+    var rememberMe by remember(remembered) { mutableStateOf(true) }
     val canSubmit = username.isNotBlank() && password.isNotBlank()
 
     ScreenScaffold(
@@ -46,13 +49,19 @@ fun LoginScreen(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
             shape = MaterialTheme.shapes.medium,
         )
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = rememberMe, onCheckedChange = { rememberMe = it })
+            Spacer(Modifier.width(10.dp))
+            Text("Remember me", style = MaterialTheme.typography.bodyMedium)
+        }
         if (error != null) {
             Spacer(Modifier.height(10.dp))
             Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         }
         Spacer(Modifier.height(16.dp))
         Button(
-            onClick = { onSignIn(username, password) },
+            onClick = { onSignIn(username, password, rememberMe) },
             enabled = canSubmit,
             modifier = Modifier.fillMaxWidth(),
             shape = MaterialTheme.shapes.medium,

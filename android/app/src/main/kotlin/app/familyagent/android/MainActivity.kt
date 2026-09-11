@@ -132,13 +132,19 @@ class MainActivity : ComponentActivity() {
                                 discovery = discovery,
                                 onPick = viewModel::pickServer,
                             )
-                        is AuthState.NeedLogin ->
+                        is AuthState.NeedLogin -> {
+                            var remembered by remember(auth.serverUrl) { mutableStateOf<Pair<String, String>?>(null) }
+                            LaunchedEffect(auth.serverUrl) {
+                                remembered = viewModel.rememberedLogin(auth.serverUrl)
+                            }
                             LoginScreen(
                                 serverName = auth.serverName,
                                 error = auth.error,
+                                remembered = remembered,
                                 onSignIn = viewModel::login,
                                 onBack = viewModel::backToServerPick,
                             )
+                        }
                         is AuthState.Authenticated -> FamilyAgentApp(viewModel)
                     }
                 }
@@ -223,8 +229,13 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
     ) {
         // No app bar — a floating menu button (bottom of this block) opens the
         // drawer, reclaiming the space the bar used to take. Hidden on the tool
-        // WebView and inside a conversation (both have their own top-left nav).
-        val showMenuButton = !onToolView && currentDestination?.route != CONVERSATION_ROUTE
+        // WebView, inside a conversation, and on the artifact viewer — each has
+        // its own top-left back control, which would otherwise sit right under
+        // this button (the iOS mirror of this screen had the identical bug —
+        // see ArtifactViewerView.swift / AppModel.artifactViewerPushed).
+        val showMenuButton = !onToolView &&
+            currentDestination?.route != CONVERSATION_ROUTE &&
+            currentDestination?.route != ARTIFACT_VIEW_ROUTE
         Scaffold(
             containerColor = Color.Transparent,
         ) { padding ->
@@ -490,6 +501,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onSetMicOnLeft = viewModel::setMicOnLeft,
                         serverSettings = state.serverSettings,
                         onSetCardsEnabled = viewModel::setCardsEnabled,
+                        onSetVaultEnabled = viewModel::setVaultEnabled,
                         onSetWebAccess = viewModel::setWebAccess,
                         onSave = viewModel::setServerUrl,
                         onSignOut = viewModel::signOut,
