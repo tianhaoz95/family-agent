@@ -262,6 +262,10 @@ struct ServerSettings: Codable, Sendable {
     var serverName: String = ""
     var cardsEnabled: Bool = true
     var vaultEnabled: Bool = false
+    /// Whether the desktop app installs a found update on its own instead of
+    /// waiting to be asked. Only meaningful to the desktop's own frontend —
+    /// shown here purely so an admin can see/change it from any client.
+    var autoUpdateEnabled: Bool = false
     // Internet access (research agent). webSearchApiKey is never sent back.
     var webEnabled: Bool = false
     var webSearchProvider: String = "none"
@@ -273,6 +277,7 @@ struct ServerSettings: Codable, Sendable {
 struct EnvLocked: Codable, Sendable {
     var cardsEnabled: Bool = false
     var vaultEnabled: Bool = false
+    var autoUpdateEnabled: Bool = false
     var webSearchProvider: Bool = false
 }
 // MARK: - Remote update-and-restart of the host desktop app
@@ -293,6 +298,7 @@ struct UpdateReportRequest: Codable, Sendable {
 struct UpdateSettingsRequest: Codable, Sendable {
     var cardsEnabled: Bool? = nil
     var vaultEnabled: Bool? = nil
+    var autoUpdateEnabled: Bool? = nil
     var webSearchProvider: String? = nil
     var webSearchUrl: String? = nil
     var webSearchApiKey: String? = nil

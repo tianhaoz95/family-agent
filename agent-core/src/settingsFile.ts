@@ -27,6 +27,8 @@ export interface PersistedSettings {
   cardsEnabled?: boolean;
   /** Whether the password vault feature is turned on for this server. */
   vaultEnabled?: boolean;
+  /** Whether the desktop app installs a found update on its own instead of waiting to be asked. */
+  autoUpdateEnabled?: boolean;
   /**
    * Web-search provider for the research agent (internet access). `"none"` (or
    * unset) means the whole web capability is off. See config.ts / web/search.ts.
@@ -42,7 +44,7 @@ const STRING_KEYS: (keyof PersistedSettings)[] = [
   "ocrModel", "asrModel", "ttsVoice", "embedModel", "model", "ollamaBaseUrl", "serverName",
   "webSearchProvider", "webSearchUrl", "webSearchApiKey",
 ];
-const BOOL_KEYS: (keyof PersistedSettings)[] = ["cardsEnabled", "vaultEnabled"];
+const BOOL_KEYS: (keyof PersistedSettings)[] = ["cardsEnabled", "vaultEnabled", "autoUpdateEnabled"];
 
 function settingsPath(dataDir: string): string {
   return `${dataDir}/settings.json`;

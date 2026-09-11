@@ -181,6 +181,9 @@ struct FamilyAgentAPI: Sendable {
     func setVaultEnabled(_ enabled: Bool) async throws -> ServerSettings {
         try await send("PUT", "/settings", body: UpdateSettingsRequest(vaultEnabled: enabled))
     }
+    func setAutoUpdateEnabled(_ enabled: Bool) async throws -> ServerSettings {
+        try await send("PUT", "/settings", body: UpdateSettingsRequest(autoUpdateEnabled: enabled))
+    }
 
     // MARK: - Remote update-and-restart of the host desktop app
 

@@ -771,6 +771,16 @@
               <button type="button" id="settings-update-install" hidden>Install and restart</button>
             </div>
             <p id="settings-update-status" class="settings-hint" role="status"></p>
+            <label class="settings-checkbox" id="settings-auto-update-row" hidden>
+              <input type="checkbox" id="settings-auto-update-checkbox" />
+              Install updates automatically
+            </label>
+            <p class="settings-hint" id="settings-auto-update-hint" hidden>
+              Checks periodically in the background; when a new version is found it downloads,
+              installs, and restarts on its own — no confirmation prompt. Restarting restarts the
+              shared server too, so anyone using Family Agent on a phone reconnects in a few seconds.
+            </p>
+            <p id="settings-auto-update-status" class="settings-hint" role="status"></p>
           </div>
 
           <div class="settings-section" id="settings-connections-section" hidden>

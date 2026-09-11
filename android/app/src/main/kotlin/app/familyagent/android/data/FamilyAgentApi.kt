@@ -139,6 +139,9 @@ class FamilyAgentApi(
     suspend fun setVaultEnabled(enabled: Boolean): ServerSettings =
         json.decodeFromString(send("PUT", "/settings", json.encodeToString(UpdateSettingsRequest(vaultEnabled = enabled))))
 
+    suspend fun setAutoUpdateEnabled(enabled: Boolean): ServerSettings =
+        json.decodeFromString(send("PUT", "/settings", json.encodeToString(UpdateSettingsRequest(autoUpdateEnabled = enabled))))
+
     // ---- remote update-and-restart of the host desktop app ----
     suspend fun getDesktopUpdateStatus(): DesktopUpdateStatus = json.decodeFromString(get("/system/update-status"))
     suspend fun requestDesktopUpdate(): DesktopUpdateStatus =

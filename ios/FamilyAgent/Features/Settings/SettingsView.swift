@@ -84,6 +84,15 @@ struct SettingsView: View {
                                     .foregroundStyle(status.state == "error" ? Theme.danger : Theme.textMuted)
                             }
                         }
+
+                        Spacer().frame(height: 10)
+                        Toggle(isOn: Binding(get: { s.autoUpdateEnabled }, set: { model.setAutoUpdateEnabled($0) })) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Install updates automatically").appBody()
+                                Text(autoUpdateHint(s)).appLabelSmall().foregroundStyle(Theme.textMuted)
+                            }
+                        }
+                        .disabled(!s.isAdmin || s.envLocked.autoUpdateEnabled)
                     }
                 }
 
@@ -158,6 +167,12 @@ struct SettingsView: View {
         if s.envLocked.vaultEnabled { return "Pinned by the server (FAMILY_AGENT_VAULT)." }
         if !s.isAdmin { return "Only an admin can change this." }
         return "An encrypted store for the family's passwords and 2FA codes. Off by default."
+    }
+
+    private func autoUpdateHint(_ s: ServerSettings) -> String {
+        if s.envLocked.autoUpdateEnabled { return "Pinned by the server (FAMILY_AGENT_AUTO_UPDATE)." }
+        if !s.isAdmin { return "Only an admin can change this." }
+        return "When on, the host laptop checks periodically and installs a new version on its own \u{2014} no confirmation prompt."
     }
 
     private var connectionColor: Color {

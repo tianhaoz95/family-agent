@@ -2616,6 +2616,7 @@ export function buildServer(
     serverName: config.serverName,
     cardsEnabled: config.cardsEnabled,
     vaultEnabled: config.vaultEnabled,
+    autoUpdateEnabled: config.autoUpdateEnabled,
     // Internet access (research agent). The key itself is never sent back —
     // only whether one is stored.
     webEnabled: webEnabled(),
@@ -2643,6 +2644,7 @@ export function buildServer(
     serverName: z.string().trim().min(1).max(60).optional(),
     cardsEnabled: z.boolean().optional(),
     vaultEnabled: z.boolean().optional(),
+    autoUpdateEnabled: z.boolean().optional(),
     webSearchProvider: z.enum(["searxng", "tavily", "brave", "ddg", "none"]).optional(),
     webSearchUrl: z.string().trim().max(300).optional(),
     webSearchApiKey: z.string().trim().max(400).optional(),
@@ -2655,12 +2657,12 @@ export function buildServer(
       return reply.code(400).send({ error: "Nothing to update." });
     }
 
-    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "vaultEnabled", "webSearchProvider", "webSearchUrl", "webSearchApiKey"] as const;
+    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "vaultEnabled", "autoUpdateEnabled", "webSearchProvider", "webSearchUrl", "webSearchApiKey"] as const;
     if (req.authUser.role !== "admin" && adminFields.some((f) => patch[f] !== undefined)) {
       return reply.code(403).send({ error: "Only an admin can change machine settings." });
     }
 
-    for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "vaultEnabled"] as const) {
+    for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "vaultEnabled", "autoUpdateEnabled"] as const) {
       if (patch[key] !== undefined && envLocked[key]) {
         return reply.code(400).send({
           error: `"${key}" is pinned by an environment variable and can't be changed here.`,
@@ -2715,6 +2717,7 @@ export function buildServer(
       serverName: patch.serverName,
       cardsEnabled: patch.cardsEnabled,
       vaultEnabled: patch.vaultEnabled,
+      autoUpdateEnabled: patch.autoUpdateEnabled,
       webSearchProvider: patch.webSearchProvider,
       webSearchUrl: patch.webSearchUrl,
       webSearchApiKey: patch.webSearchApiKey,
@@ -2745,6 +2748,10 @@ export function buildServer(
     // never wired into the planner's cached subagents array or any other
     // cached agent's tool list, so there's no stale cache to invalidate.
     if (patch.vaultEnabled !== undefined) config.vaultEnabled = patch.vaultEnabled;
+    // No dropAllAgents() here either — this flag is only ever read by the
+    // desktop frontend's own periodic poll (GET /settings), not by anything
+    // agent-core wires into a cached agent.
+    if (patch.autoUpdateEnabled !== undefined) config.autoUpdateEnabled = patch.autoUpdateEnabled;
     const webWas = webEnabled();
     if (patch.webSearchProvider !== undefined) config.webSearchProvider = patch.webSearchProvider;
     if (patch.webSearchUrl !== undefined) config.webSearchUrl = patch.webSearchUrl;
@@ -2795,6 +2802,10 @@ export function buildServer(
       [
         `Password vault turned ${patch.vaultEnabled ? "on" : "off"}`,
         patch.vaultEnabled !== undefined,
+      ],
+      [
+        `Automatic desktop updates turned ${patch.autoUpdateEnabled ? "on" : "off"}`,
+        patch.autoUpdateEnabled !== undefined,
       ],
       [
         config.webSearchProvider === "none"

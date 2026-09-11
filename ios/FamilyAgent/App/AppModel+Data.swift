@@ -355,6 +355,12 @@ extension AppModel {
         }
     }
 
+    func setAutoUpdateEnabled(_ enabled: Bool) {
+        Task {
+            serverSettings = await perform { try await api.setAutoUpdateEnabled(enabled) }
+        }
+    }
+
     // MARK: Remote update-and-restart of the host desktop app
     //
     // The desktop app itself does the actual check/download/install/relaunch

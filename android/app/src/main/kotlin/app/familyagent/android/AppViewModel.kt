@@ -1428,6 +1428,14 @@ class AppViewModel(
         }
     }
 
+    fun setAutoUpdateEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            apiCall { api.setAutoUpdateEnabled(enabled) }.onSuccess {
+                _state.value = _state.value.copy(serverSettings = it)
+            }
+        }
+    }
+
     // ---- remote update-and-restart of the host desktop app ----
     //
     // The desktop app itself does the actual check/download/install/relaunch

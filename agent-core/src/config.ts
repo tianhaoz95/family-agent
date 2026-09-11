@@ -37,6 +37,7 @@ export const envLocked = {
   serverName: process.env.FAMILY_AGENT_SERVER_NAME !== undefined,
   cardsEnabled: process.env.FAMILY_AGENT_CARDS !== undefined,
   vaultEnabled: process.env.FAMILY_AGENT_VAULT !== undefined,
+  autoUpdateEnabled: process.env.FAMILY_AGENT_AUTO_UPDATE !== undefined,
   // One lock for the whole web-access group (provider + URL + key) — set any of
   // the three env vars and the Settings-page controls go read-only.
   webSearchProvider:
@@ -272,6 +273,21 @@ export const config = {
     process.env.FAMILY_AGENT_CARDS !== undefined
       ? process.env.FAMILY_AGENT_CARDS !== "0"
       : persisted.cardsEnabled ?? true,
+
+  // ---- desktop auto-update ----
+  // Off by default (see desktop/src/main.ts's own comment: an update
+  // restarts the shared server everyone on the LAN is talking to, so it's
+  // never applied silently unless an admin opts in here). When on, the
+  // desktop app's periodic background check installs and restarts on its
+  // own instead of just showing a "Version X available" prompt. This flag
+  // only means anything to the desktop frontend — agent-core itself has no
+  // updater — same admin-toggle shape as cardsEnabled/vaultEnabled.
+  // FAMILY_AGENT_AUTO_UPDATE=1/0 pins it; otherwise the persisted setting
+  // from PUT /settings applies.
+  autoUpdateEnabled:
+    process.env.FAMILY_AGENT_AUTO_UPDATE !== undefined
+      ? process.env.FAMILY_AGENT_AUTO_UPDATE === "1"
+      : persisted.autoUpdateEnabled ?? false,
 };
 
 /** The watched folder for one user — their own override, or the derived default. */

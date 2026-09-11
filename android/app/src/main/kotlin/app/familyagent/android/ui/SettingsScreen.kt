@@ -31,6 +31,7 @@ fun SettingsScreen(
     desktopUpdateStatus: app.familyagent.android.data.DesktopUpdateStatus? = null,
     desktopUpdatePolling: Boolean = false,
     onTriggerDesktopUpdate: () -> Unit = {},
+    onSetAutoUpdateEnabled: (Boolean) -> Unit = {},
     onSave: (String) -> Unit,
     onSignOut: () -> Unit,
 ) {
@@ -170,6 +171,31 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = if (desktopUpdateStatus.state == "error") MaterialTheme.colorScheme.error else AppAccents.textSecondary,
                         )
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(
+                            checked = serverSettings.autoUpdateEnabled,
+                            onCheckedChange = onSetAutoUpdateEnabled,
+                            enabled = serverSettings.isAdmin && !serverSettings.envLocked.autoUpdateEnabled,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Install updates automatically",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                when {
+                                    serverSettings.envLocked.autoUpdateEnabled -> "Pinned by the server (FAMILY_AGENT_AUTO_UPDATE)."
+                                    !serverSettings.isAdmin -> "Only an admin can change this."
+                                    else -> "When on, the host laptop checks periodically and installs a new version on its own — no confirmation prompt."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AppAccents.textSecondary,
+                            )
+                        }
                     }
                 }
             }

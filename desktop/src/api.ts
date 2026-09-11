@@ -617,6 +617,8 @@ export interface Settings {
   cardsEnabled: boolean;
   /** Whether the password vault is turned on for this server — admin-toggleable. */
   vaultEnabled: boolean;
+  /** Whether the desktop app installs a found update on its own instead of waiting to be asked. */
+  autoUpdateEnabled: boolean;
   /** Whether the research agent can reach the internet (a provider is configured). */
   webEnabled: boolean;
   /** Web-search provider: "none" = off; "ddg" | "searxng" | "tavily" | "brave". */
@@ -637,6 +639,7 @@ export interface Settings {
     serverName: boolean;
     cardsEnabled: boolean;
     vaultEnabled: boolean;
+    autoUpdateEnabled: boolean;
     webSearchProvider: boolean;
   };
 }
@@ -651,6 +654,7 @@ export interface SettingsPatch {
   serverName?: string;
   cardsEnabled?: boolean;
   vaultEnabled?: boolean;
+  autoUpdateEnabled?: boolean;
   webSearchProvider?: "none" | "ddg" | "searxng" | "tavily" | "brave";
   webSearchUrl?: string;
   webSearchApiKey?: string;

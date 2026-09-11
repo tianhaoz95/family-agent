@@ -507,6 +507,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         desktopUpdateStatus = state.desktopUpdateStatus,
                         desktopUpdatePolling = state.desktopUpdatePolling,
                         onTriggerDesktopUpdate = viewModel::triggerDesktopUpdate,
+                        onSetAutoUpdateEnabled = viewModel::setAutoUpdateEnabled,
                         onSave = viewModel::setServerUrl,
                         onSignOut = viewModel::signOut,
                     )

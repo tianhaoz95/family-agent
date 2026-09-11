@@ -315,6 +315,10 @@ data class ServerSettings(
     val serverName: String = "",
     val cardsEnabled: Boolean = true,
     val vaultEnabled: Boolean = false,
+    // Whether the desktop app installs a found update on its own instead of
+    // waiting to be asked. Only meaningful to the desktop's own frontend —
+    // shown here purely so an admin can see/change it from any client.
+    val autoUpdateEnabled: Boolean = false,
     // Internet access (research agent). webSearchApiKey is never sent back.
     val webEnabled: Boolean = false,
     val webSearchProvider: String = "none",
@@ -328,6 +332,7 @@ data class ServerSettings(
 data class EnvLocked(
     val cardsEnabled: Boolean = false,
     val vaultEnabled: Boolean = false,
+    val autoUpdateEnabled: Boolean = false,
     val webSearchProvider: Boolean = false,
 )
 
@@ -347,6 +352,7 @@ data class DesktopUpdateStatus(
 data class UpdateSettingsRequest(
     val cardsEnabled: Boolean? = null,
     val vaultEnabled: Boolean? = null,
+    val autoUpdateEnabled: Boolean? = null,
     val webSearchProvider: String? = null,
     val webSearchUrl: String? = null,
     val webSearchApiKey: String? = null,

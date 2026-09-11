@@ -1036,16 +1036,32 @@ tool list, so there's nothing stale to invalidate.
   Android `Destination.Vault` / `VaultScreen.kt`. Tests: `test/vault.test.ts`,
   `test/vault.routes.test.ts`. See `docs/DECISIONS.md` → "Password vault".
 
-## Remote update-and-restart of the host desktop app
+## Desktop update: manual, fully-automatic, or remote-triggered
 
 The desktop app auto-updates itself (`tauri-plugin-updater`, minisign-signed,
 checks `GET .../releases/latest/download/latest.json`): on launch it checks
 quietly, and Settings → Updates has a manual "Check" / "Install & restart"
 pair (`initUpdates`/`checkForUpdate`/`performUpdateInstall` in
-`desktop/src/main.ts`) — never auto-installs, since restarting also restarts
-the shared server everyone on the LAN is talking to. iOS and Android added a
-way to trigger that same install-and-restart **from a phone**, for when
-nobody's at the laptop.
+`desktop/src/main.ts`). Restarting also restarts the shared server everyone
+on the LAN is talking to, so nothing here ever installs without either an
+explicit click or the admin opting in below — never silently by default.
+
+**Fully automatic** (`config.autoUpdateEnabled`, off by default — same
+admin-toggle shape as `cardsEnabled`/`vaultEnabled`: env `FAMILY_AGENT_AUTO_UPDATE`
+`1`/`0` pins it, otherwise the persisted `PUT /settings` value applies).
+`checkForUpdate()` is the single choke point for every kind of check — the
+launch-time quiet one, the periodic background one (`setInterval`,
+`AUTO_UPDATE_INTERVAL_MS` = 6h, started in `enterApp()`), and the manual
+button's own — so turning this on doesn't add a second code path: whichever
+of those finds an update just installs it immediately (via the same
+`performUpdateInstall()` everything else uses) once it confirms the setting
+is on, no confirmation dialog, no waiting for a click. A module-level
+`updateInFlight` flag is shared by all three trigger paths (manual button,
+auto-install-on-check, and the remote phone trigger below) so two can never
+race each other into installing at once.
+
+**Remote-triggered from a phone**, for when nobody's at the laptop and
+auto-update is off (or you just don't want to wait for the next scan).
 
 Only the desktop's own webview has the Tauri updater plugin — agent-core is a
 plain Node sidecar with no handle on it — so this can't be a normal "do the

@@ -3771,6 +3771,10 @@ const settingsCardsCheckbox = document.getElementById("settings-cards-checkbox")
 const settingsCardsStatusEl = document.getElementById("settings-cards-status")!;
 const settingsVaultCheckbox = document.getElementById("settings-vault-checkbox") as HTMLInputElement;
 const settingsVaultStatusEl = document.getElementById("settings-vault-status")!;
+const settingsAutoUpdateRow = document.getElementById("settings-auto-update-row") as HTMLLabelElement;
+const settingsAutoUpdateHintEl = document.getElementById("settings-auto-update-hint")!;
+const settingsAutoUpdateCheckbox = document.getElementById("settings-auto-update-checkbox") as HTMLInputElement;
+const settingsAutoUpdateStatusEl = document.getElementById("settings-auto-update-status")!;
 const settingsWebForm = document.getElementById("settings-web-form") as HTMLFormElement;
 const settingsWebProviderSelect = document.getElementById("settings-web-provider") as HTMLSelectElement;
 const settingsWebUrlRow = document.getElementById("settings-web-url-row") as HTMLElement;
@@ -4037,6 +4041,23 @@ async function refreshSettings() {
         ? "Only an admin can change this."
         : "";
 
+    // Auto-update — only meaningful (and only shown) inside a packaged Tauri
+    // build; initUpdates() unhides the rest of this section the same way.
+    if (isTauri()) {
+      settingsAutoUpdateRow.hidden = false;
+      settingsAutoUpdateHintEl.hidden = false;
+      if (document.activeElement !== settingsAutoUpdateCheckbox) {
+        settingsAutoUpdateCheckbox.checked = settings.autoUpdateEnabled;
+      }
+      const autoUpdateLock = settings.envLocked.autoUpdateEnabled || !settings.isAdmin;
+      settingsAutoUpdateCheckbox.disabled = autoUpdateLock;
+      settingsAutoUpdateStatusEl.textContent = settings.envLocked.autoUpdateEnabled
+        ? "Pinned by FAMILY_AGENT_AUTO_UPDATE on the server."
+        : !settings.isAdmin
+          ? "Only an admin can change this."
+          : "";
+    }
+
     // Internet access — provider picker + conditional URL / API-key fields.
     if (document.activeElement !== settingsWebProviderSelect) {
       settingsWebProviderSelect.value = settings.webSearchProvider;
@@ -4202,6 +4223,14 @@ settingsVaultCheckbox.addEventListener("change", () => {
     { vaultEnabled: settingsVaultCheckbox.checked },
     settingsVaultStatusEl,
     (s) => `Saved — the password vault is ${s.vaultEnabled ? "on" : "off"}`
+  );
+});
+
+settingsAutoUpdateCheckbox.addEventListener("change", () => {
+  void saveSetting(
+    { autoUpdateEnabled: settingsAutoUpdateCheckbox.checked },
+    settingsAutoUpdateStatusEl,
+    (s) => `Saved — updates install ${s.autoUpdateEnabled ? "automatically" : "only when you ask"}`
   );
 });
 
@@ -4470,6 +4499,17 @@ const settingsUpdateStatusEl = document.getElementById("settings-update-status")
 
 type PendingUpdate = { version: string; body?: string; downloadAndInstall: (cb?: (p: unknown) => void) => Promise<void> };
 let pendingUpdate: PendingUpdate | null = null;
+// Shared by every path that can start an install — the manual button, the
+// remote phone trigger, and checkForUpdate's own auto-install branch — so
+// two of them can never collide (e.g. a phone triggers an update the instant
+// the periodic background scan also found one).
+let updateInFlight = false;
+// How often the background scan re-checks once the app is running. Every
+// launch also gets one quiet check regardless of this interval (see
+// initUpdates). Not configurable — six hours is frequent enough that a
+// signed release doesn't sit undelivered for long, rare enough that it's
+// not meaningfully more network chatter than a browser's own update checks.
+const AUTO_UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 async function initUpdates(): Promise<void> {
   if (!isTauri()) return;
@@ -4481,11 +4521,14 @@ async function initUpdates(): Promise<void> {
   } catch {
     /* version is cosmetic — a failure here shouldn't hide the check button */
   }
-  // One quiet check on launch. Never auto-installs.
+  // One quiet check on launch, then the same check again every
+  // AUTO_UPDATE_INTERVAL_MS (wired in enterApp). Auto-installs only when
+  // Settings → "Install updates automatically" is on (see checkForUpdate).
   void checkForUpdate({ quiet: true });
 }
 
 async function checkForUpdate({ quiet = false } = {}): Promise<void> {
+  if (updateInFlight) return; // an install (manual, remote, or auto) is already running
   settingsUpdateCheckBtn.disabled = true;
   if (!quiet) settingsUpdateStatusEl.textContent = "Checking…";
   try {
@@ -4501,6 +4544,34 @@ async function checkForUpdate({ quiet = false } = {}): Promise<void> {
     settingsUpdateInstallBtn.hidden = false;
     const notes = update.body ? ` — ${update.body.split("\n")[0]}` : "";
     settingsUpdateStatusEl.textContent = `Version ${update.version} is available${notes}`;
+
+    // Settings → "Install updates automatically": don't wait for a click —
+    // download, install, and restart right now. Covers the manual button's
+    // own check too (clicking "Check" with auto-update on just installs), the
+    // launch-time quiet check, and the periodic background scan, since they
+    // all funnel through here.
+    let autoUpdateEnabled = false;
+    try {
+      autoUpdateEnabled = (await api.getSettings()).autoUpdateEnabled;
+    } catch {
+      /* can't reach the server to ask — stay manual for this check */
+    }
+    if (autoUpdateEnabled) {
+      updateInFlight = true;
+      settingsUpdateInstallBtn.disabled = true;
+      settingsUpdateStatusEl.textContent = `Automatically installing version ${update.version}…`;
+      try {
+        await performUpdateInstall(pendingUpdate, (text) => {
+          settingsUpdateStatusEl.textContent = text;
+        });
+        // relaunch() ends this process — nothing below ever runs on success.
+      } catch (err) {
+        settingsUpdateStatusEl.textContent =
+          `Automatic update failed: ${err instanceof Error ? err.message : String(err)}`;
+        settingsUpdateInstallBtn.disabled = false;
+        updateInFlight = false;
+      }
+    }
   } catch (err) {
     // Offline, or no release published yet. Stay quiet on the launch check —
     // an update server being unreachable is not the user's problem to see.
@@ -4526,10 +4597,11 @@ async function checkForUpdate({ quiet = false } = {}): Promise<void> {
 
 settingsUpdateCheckBtn.addEventListener("click", () => void checkForUpdate());
 
-// Shared by the manual "Install" button below and the remote-triggered flow
-// (pollRemoteUpdateRequest) — downloads, installs, and relaunches, reporting
-// progress through onProgress as it goes. Never asks for confirmation itself;
-// callers that need one (the manual button) ask before calling this.
+// Shared by the manual "Install" button below, checkForUpdate's own
+// auto-install branch, and the remote-triggered flow (pollRemoteUpdateRequest)
+// — downloads, installs, and relaunches, reporting progress through
+// onProgress as it goes. Never asks for confirmation itself; callers that
+// need one (the manual button) ask before calling this.
 async function performUpdateInstall(update: PendingUpdate, onProgress: (text: string) => void): Promise<void> {
   let downloaded = 0;
   let total = 0;
@@ -4554,12 +4626,13 @@ async function performUpdateInstall(update: PendingUpdate, onProgress: (text: st
 }
 
 settingsUpdateInstallBtn.addEventListener("click", async () => {
-  if (!pendingUpdate) return;
+  if (!pendingUpdate || updateInFlight) return;
   if (!confirm(
     `Install Family Agent ${pendingUpdate.version} and restart?\n\n` +
     "The local server restarts too, so anyone using Family Agent on a phone " +
     "will reconnect in a few seconds."
   )) return;
+  updateInFlight = true;
   settingsUpdateInstallBtn.disabled = true;
   settingsUpdateCheckBtn.disabled = true;
   try {
@@ -4571,6 +4644,7 @@ settingsUpdateInstallBtn.addEventListener("click", async () => {
       `Update failed: ${err instanceof Error ? err.message : String(err)}`;
     settingsUpdateInstallBtn.disabled = false;
     settingsUpdateCheckBtn.disabled = false;
+    updateInFlight = false;
   }
 });
 
@@ -4583,11 +4657,10 @@ settingsUpdateInstallBtn.addEventListener("click", async () => {
 // click a local dialog anyway). Progress is reported back so every client
 // polling GET /system/update-status (including the one that triggered it)
 // can show it. See agent-core/src/desktopUpdate.ts for the full shape.
-let handlingRemoteUpdateRequest = false;
 let lastHandledRemoteRequestAt: string | null = null;
 
 async function pollRemoteUpdateRequest(): Promise<void> {
-  if (!isTauri() || handlingRemoteUpdateRequest) return;
+  if (!isTauri() || updateInFlight) return;
   let status: Awaited<ReturnType<typeof api.getDesktopUpdateStatus>>;
   try {
     status = await api.getDesktopUpdateStatus();
@@ -4596,7 +4669,7 @@ async function pollRemoteUpdateRequest(): Promise<void> {
   }
   if (status.state !== "requested" || status.requestedAt === lastHandledRemoteRequestAt) return;
   lastHandledRemoteRequestAt = status.requestedAt ?? null;
-  handlingRemoteUpdateRequest = true;
+  updateInFlight = true;
 
   const report = (patch: Parameters<typeof api.reportDesktopUpdateStatus>[0]) => {
     void api.reportDesktopUpdateStatus(patch).catch(() => {
@@ -4614,7 +4687,7 @@ async function pollRemoteUpdateRequest(): Promise<void> {
       report({ state: "no-update" });
       settingsUpdateStatusEl.textContent = "You're up to date.";
       settingsUpdateCheckBtn.disabled = false;
-      handlingRemoteUpdateRequest = false;
+      updateInFlight = false;
       return;
     }
     pendingUpdate = update as unknown as PendingUpdate;
@@ -4635,7 +4708,7 @@ async function pollRemoteUpdateRequest(): Promise<void> {
     settingsUpdateStatusEl.textContent = `Remote-triggered update failed: ${message}`;
     settingsUpdateCheckBtn.disabled = false;
     settingsUpdateInstallBtn.disabled = false;
-    handlingRemoteUpdateRequest = false;
+    updateInFlight = false;
   }
 }
 
@@ -4698,6 +4771,7 @@ function enterApp(user: User) {
   showView("chat");
   void initUpdates();
   setInterval(() => void pollRemoteUpdateRequest(), 5000);
+  setInterval(() => void checkForUpdate({ quiet: true }), AUTO_UPDATE_INTERVAL_MS);
   // A slow welcome drift until the first interaction (atmosphere.ts).
   atmosphereWelcome();
 }
