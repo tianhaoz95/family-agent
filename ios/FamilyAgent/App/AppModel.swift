@@ -16,6 +16,16 @@ enum AuthState: Equatable {
     case authed(User)
 }
 
+/// A request to open the full-screen artifact viewer. Carries its own UUID
+/// (not just the artifact id) specifically so re-opening the *same* artifact
+/// — e.g. retrying after a failed load — is always a distinct `Identifiable`
+/// value to `fullScreenCover(item:)`, which otherwise treats an unchanged
+/// item as nothing to do. See `AppModel.viewingArtifact`.
+struct ArtifactPresentation: Identifiable, Equatable {
+    let id = UUID()
+    let artifactId: String
+}
+
 struct ChatMessage: Identifiable, Hashable {
     let id = UUID()
     var role: String                 // "user" | "assistant" | "error"
@@ -73,8 +83,13 @@ final class AppModel {
     // ---- artifacts (render_artifact → the Artifacts tab) ----
     var artifacts: [ArtifactSummary] = []
     var artifactsLoading = false
-    /// Set to open the full-screen artifact viewer (from a reply's chip).
-    var viewingArtifactId: String?
+    /// Set to open the full-screen artifact viewer (from a reply's chip). A
+    /// fresh identity per open — not just the artifact id — so tapping the
+    /// same chip twice in a row (e.g. after the first attempt failed) always
+    /// re-presents and reloads: `fullScreenCover(item:)` only reacts to the
+    /// bound item's `id` *changing*, and re-assigning the same artifact id
+    /// string would otherwise be a silent no-op.
+    var viewingArtifact: ArtifactPresentation?
 
     // ---- chat ----
     var chatMessages: [ChatMessage] = []

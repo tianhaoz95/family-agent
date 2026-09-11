@@ -143,8 +143,29 @@ extension AppModel {
         if let a = await perform({ try await api.listArtifacts() }) { artifacts = a }
         artifactsLoading = false
     }
-    func loadArtifact(_ id: String) async -> ArtifactResponse? {
-        await perform { try await api.getArtifact(id) }
+    /// Distinguishes a genuine 404 from any other failure (a network blip, a
+    /// timeout, a decode error) — `perform`'s blanket `nil` on any `catch`
+    /// doesn't, which previously made the viewer report "deleted" for every
+    /// kind of failure, transient ones included.
+    enum ArtifactLoadResult {
+        case success(ArtifactResponse)
+        case notFound
+        case failed(String)
+    }
+    func loadArtifact(_ id: String) async -> ArtifactLoadResult {
+        do {
+            return .success(try await api.getArtifact(id))
+        } catch APIError.unauthorized {
+            settings.clearSession()
+            if case .authed = auth {
+                auth = .needLogin(serverURL: serverURL, serverName: settings.session?.serverName ?? "", error: "Your session expired — sign in again.")
+            }
+            return .failed("Your session expired — sign in again.")
+        } catch APIError.http(404, _) {
+            return .notFound
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
     func renameArtifact(_ id: String, title: String) {
         Task {
@@ -155,12 +176,13 @@ extension AppModel {
     func deleteArtifact(_ id: String) {
         Task {
             _ = await perform { try await api.deleteArtifact(id) }
-            if viewingArtifactId == id { viewingArtifactId = nil }
+            if viewingArtifact?.artifactId == id { viewingArtifact = nil }
             await refreshArtifacts()
         }
     }
     /// Open the full-screen viewer for one artifact (from a reply's chip).
-    func openArtifact(_ id: String) { viewingArtifactId = id }
+    /// Always a fresh `ArtifactPresentation` — see its doc comment for why.
+    func openArtifact(_ id: String) { viewingArtifact = ArtifactPresentation(artifactId: id) }
 
     // MARK: Routines
 

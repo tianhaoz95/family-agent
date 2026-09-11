@@ -35,7 +35,13 @@ struct ArtifactViewerView: View {
                     SealedFullWebView(html: artifact.document, bridge: bridge)
                         .ignoresSafeArea(edges: .bottom)
                 } else if let error {
-                    ContentUnavailableView("Couldn't load this artifact", systemImage: "exclamationmark.triangle", description: Text(error))
+                    ContentUnavailableView {
+                        Label("Couldn't load this artifact", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(error)
+                    } actions: {
+                        Button("Try Again") { Task { await load() } }
+                    }
                 } else {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -98,15 +104,7 @@ struct ArtifactViewerView: View {
                 .presentationDetents([.medium, .large])
             }
         }
-        .task(id: artifactId) {
-            error = nil; artifact = nil
-            if let r = await model.loadArtifact(artifactId) {
-                artifact = r.artifact
-                comments = r.comments
-            } else {
-                error = "This artifact may have been deleted."
-            }
-        }
+        .task(id: artifactId) { await load() }
         .onChange(of: comments) { pushComments() }
         .onAppear {
             bridge.onSelection = { req in
@@ -119,6 +117,19 @@ struct ArtifactViewerView: View {
 
     private func pushComments() {
         bridge.setComments(comments)
+    }
+
+    private func load() async {
+        error = nil; artifact = nil
+        switch await model.loadArtifact(artifactId) {
+        case .success(let r):
+            artifact = r.artifact
+            comments = r.comments
+        case .notFound:
+            error = "This artifact has been deleted."
+        case .failed(let message):
+            error = message
+        }
     }
 
     private func addComment(_ req: NewArtifactCommentRequest) async {

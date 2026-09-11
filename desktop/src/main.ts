@@ -75,6 +75,7 @@ const views = Array.from(document.querySelectorAll<HTMLElement>(".view"));
 function showView(name: string) {
   closeToolViewer();
   closeDbInspector();
+  closeArtifactViewer();
   closeSidePanel();
   stopSpeech();
   cancelActiveRecordings();
@@ -6035,7 +6036,7 @@ function appendReferences(afterEl: HTMLElement, references: ChatReference[]) {
       else if (ref.type === "tool") void openToolPanel(ref.id);
       else if (ref.type === "artifact") {
         showView("artifacts");
-        void refreshArtifacts(ref.id);
+        void openArtifactViewer(ref.id);
       } else void openTaskPanel(ref.id);
     });
     wrap.appendChild(chip);
@@ -6329,45 +6330,44 @@ function attachMessageCards(msgEl: HTMLElement, cards: Card[] | undefined): void
 }
 
 // ---------- Artifacts tab (full-page render_artifact output) ----------
-// A browsable list of the pages the assistant generated. Each renders in the
-// same sealed opaque-origin iframe as a card (allow-scripts only, no network),
-// just full-size. A reply's "artifact" reference chip jumps straight here.
+// A browsable list of the pages the assistant generated. Opening one fills
+// the content area — the same two-level pattern as Tools (see #tool-viewer)
+// — in the same sealed opaque-origin iframe as a card (allow-scripts only,
+// no network), just full-size. Comments live in their own side panel,
+// hidden until the floating button opens it, so the page itself gets the
+// full width instead of permanently sharing it with a comments rail. A
+// reply's "artifact" reference chip jumps straight to the viewer.
 
 const artifactListEl = document.getElementById("artifact-list") as HTMLUListElement;
-const artifactDetailEl = document.getElementById("artifact-detail") as HTMLElement;
 let artifactsCache: ArtifactSummary[] = [];
-let selectedArtifactId: string | null = null;
 
-async function refreshArtifacts(selectId?: string): Promise<void> {
+async function refreshArtifacts(): Promise<void> {
   try {
     artifactsCache = (await api.listArtifacts()).artifacts;
   } catch {
     artifactsCache = [];
   }
   renderArtifactList();
-  const want = selectId ?? selectedArtifactId ?? artifactsCache[0]?.id ?? null;
-  if (want && artifactsCache.some((a) => a.id === want)) void selectArtifact(want);
-  else if (!artifactsCache.length) {
-    selectedArtifactId = null;
-    artifactDetailEl.replaceChildren();
-    const p = document.createElement("p");
-    p.className = "settings-hint";
-    p.textContent = "No artifacts yet. Ask the assistant to explain something with a page.";
-    artifactDetailEl.appendChild(p);
-  }
 }
 
 function renderArtifactList(): void {
   artifactListEl.replaceChildren();
+  if (!artifactsCache.length) {
+    const li = document.createElement("li");
+    li.className = "empty-state";
+    li.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 9v11"/></svg><span>No artifacts yet. Ask the assistant to explain something with a page.</span>`;
+    artifactListEl.appendChild(li);
+    return;
+  }
   for (const a of artifactsCache) {
     const li = document.createElement("li");
-    li.className = "artifact-row" + (a.id === selectedArtifactId ? " is-selected" : "");
+    li.className = "artifact-row";
     li.tabIndex = 0;
     li.setAttribute("role", "button");
     const badge = a.openComments > 0 ? `<span class="artifact-row-badge">${a.openComments}</span>` : "";
     li.innerHTML = `<span class="artifact-row-title">${escapeHtml(a.title)}${badge}</span>
       <span class="artifact-row-date">${new Date(a.createdAt).toLocaleDateString()}</span>`;
-    const open = () => void selectArtifact(a.id);
+    const open = () => void openArtifactViewer(a.id);
     li.addEventListener("click", open);
     li.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -6379,14 +6379,65 @@ function renderArtifactList(): void {
   }
 }
 
+// ---- full-screen viewer ----
+
+const artifactViewer = document.getElementById("artifact-viewer") as HTMLElement;
+const artifactViewerClose = document.getElementById("artifact-viewer-close") as HTMLButtonElement;
+const artifactViewerTitle = document.getElementById("artifact-viewer-title")!;
+const artifactFrame = document.getElementById("artifact-frame") as HTMLIFrameElement;
+const artifactRenameBtn = document.getElementById("artifact-rename-btn") as HTMLButtonElement;
+const artifactDeleteBtn = document.getElementById("artifact-delete-btn") as HTMLButtonElement;
+const artifactCommentsFab = document.getElementById("artifact-comments-fab") as HTMLButtonElement;
+const artifactCommentsFabBadge = document.getElementById("artifact-comments-fab-badge") as HTMLElement;
+const artifactCommentsPanel = document.getElementById("artifact-comments-panel") as HTMLElement;
+const artifactCommentsClose = document.getElementById("artifact-comments-close") as HTMLButtonElement;
+const artifactCommentsBody = document.getElementById("artifact-comments-body") as HTMLElement;
+
 // State for the artifact currently open in the viewer.
 let artView: {
   id: string;
-  frame: HTMLIFrameElement;
   comments: ArtifactComment[];
-  railEl: HTMLElement;
   onMsg: (e: MessageEvent) => void;
 } | null = null;
+
+// Matches the generic #side-panel's own open/close dance (main.ts's
+// openSidePanel/closeSidePanel): `hidden` has to come off *before* the
+// slide-in transition starts, and go back on only *after* the slide-out
+// transition finishes — toggling the `is-open` class alone does nothing
+// while the `hidden` attribute is set, since [hidden] forces display:none
+// regardless of transform.
+let artifactCommentsCloseTimer = 0;
+function openArtifactCommentsPanel(): void {
+  window.clearTimeout(artifactCommentsCloseTimer);
+  artifactCommentsPanel.hidden = false;
+  requestAnimationFrame(() => artifactCommentsPanel.classList.add("is-open"));
+}
+function closeArtifactCommentsPanel(): void {
+  artifactCommentsPanel.classList.remove("is-open");
+  window.clearTimeout(artifactCommentsCloseTimer);
+  artifactCommentsCloseTimer = window.setTimeout(() => {
+    artifactCommentsPanel.hidden = true;
+  }, 420);
+}
+artifactCommentsFab.addEventListener("click", () => {
+  if (artifactCommentsPanel.classList.contains("is-open")) closeArtifactCommentsPanel();
+  else openArtifactCommentsPanel();
+});
+artifactCommentsClose.addEventListener("click", closeArtifactCommentsPanel);
+
+function closeArtifactViewer(): void {
+  if (artifactViewer.hidden) return;
+  if (artView) window.removeEventListener("message", artView.onMsg);
+  artView = null;
+  artifactViewer.hidden = true;
+  artifactFrame.removeAttribute("srcdoc");
+  artifactViewerTitle.textContent = "";
+  closeArtifactCommentsPanel();
+}
+artifactViewerClose.addEventListener("click", () => showView("artifacts"));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !artifactViewer.hidden) closeArtifactViewer();
+});
 
 function pushCommentsToFrame(): void {
   if (!artView) return;
@@ -6397,7 +6448,7 @@ function pushCommentsToFrame(): void {
     suffix: c.suffix,
     status: c.status,
   }));
-  artView.frame.contentWindow?.postMessage({ type: "artifact:comments", comments: anchors }, "*");
+  artifactFrame.contentWindow?.postMessage({ type: "artifact:comments", comments: anchors }, "*");
 }
 
 async function reloadArtViewComments(): Promise<void> {
@@ -6419,14 +6470,17 @@ function snippet(s: string | null, n = 90): string {
 
 function renderCommentRail(): void {
   if (!artView) return;
-  const rail = artView.railEl;
+  const rail = artifactCommentsBody;
   rail.replaceChildren();
   const open = artView.comments.filter((c) => c.status === "open");
+  artifactCommentsFabBadge.textContent = String(open.length);
+  artifactCommentsFabBadge.hidden = open.length === 0;
   const summary = artifactsCache.find((a) => a.id === artView!.id);
 
+  // No repeated "Comments" title here — the panel's own header (Comments +
+  // close button) already says that; this row is just the actions.
   const top = document.createElement("div");
   top.className = "artifact-rail-top";
-  top.innerHTML = `<span class="artifact-rail-title">Comments</span>`;
   if (open.length) {
     const askAll = document.createElement("button");
     askAll.type = "button";
@@ -6489,30 +6543,21 @@ function renderCommentRail(): void {
       del.addEventListener("click", async () => {
         await api.deleteArtifactComment(artView!.id, c.id);
         await reloadArtViewComments();
-        void refreshArtifactsBadges();
+        void refreshArtifacts();
       });
       row.append(ask, del);
       card.appendChild(row);
     }
     card.querySelector(".artifact-comment-quote")?.addEventListener("click", () => {
-      artView!.frame.contentWindow?.postMessage({ type: "artifact:scrollTo", id: c.id }, "*");
+      artifactFrame.contentWindow?.postMessage({ type: "artifact:scrollTo", id: c.id }, "*");
     });
     rail.appendChild(card);
   }
 }
 
-async function refreshArtifactsBadges(): Promise<void> {
-  try {
-    artifactsCache = (await api.listArtifacts()).artifacts;
-    renderArtifactList();
-  } catch {
-    /* ignore */
-  }
-}
-
 async function resolveComments(ids?: string[]): Promise<void> {
   if (!artView) return;
-  const rail = artView.railEl;
+  const rail = artifactCommentsBody;
   rail.querySelectorAll("button").forEach((b) => (b.disabled = true));
   const busy = document.createElement("p");
   busy.className = "artifact-rail-busy";
@@ -6521,9 +6566,9 @@ async function resolveComments(ids?: string[]): Promise<void> {
   try {
     const res = await api.resolveArtifactComments(artView.id, ids);
     artView.comments = res.comments;
-    artView.frame.srcdoc = res.artifact.document; // reloads → the runtime re-seeds from the fresh comment list
+    artifactFrame.srcdoc = res.artifact.document; // reloads → the runtime re-seeds from the fresh comment list
     renderCommentRail();
-    void refreshArtifactsBadges();
+    void refreshArtifacts();
   } catch (err) {
     busy.className = "artifact-rail-busy is-error";
     busy.textContent = `The assistant couldn't finish: ${err instanceof Error ? err.message : String(err)}`;
@@ -6536,9 +6581,9 @@ async function revertArtifactEdit(): Promise<void> {
   try {
     const res = await api.revertArtifact(artView.id);
     artView.comments = res.comments;
-    artView.frame.srcdoc = res.artifact.document;
+    artifactFrame.srcdoc = res.artifact.document;
     renderCommentRail();
-    void refreshArtifactsBadges();
+    void refreshArtifacts();
   } catch (err) {
     alert(`Couldn't revert: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -6546,7 +6591,8 @@ async function revertArtifactEdit(): Promise<void> {
 
 function openCommentComposer(anchor: { quote: string; prefix: string; suffix: string }): void {
   if (!artView) return;
-  const rail = artView.railEl;
+  openArtifactCommentsPanel();
+  const rail = artifactCommentsBody;
   rail.querySelector(".artifact-composer")?.remove();
   const box = document.createElement("div");
   box.className = "artifact-composer";
@@ -6573,7 +6619,7 @@ function openCommentComposer(anchor: { quote: string; prefix: string; suffix: st
       await api.addArtifactComment(artView!.id, body, anchor);
       box.remove();
       await reloadArtViewComments();
-      void refreshArtifactsBadges();
+      void refreshArtifacts();
     } catch (err) {
       save.disabled = false;
       alert(`Couldn't save the comment: ${err instanceof Error ? err.message : String(err)}`);
@@ -6585,16 +6631,41 @@ function openCommentComposer(anchor: { quote: string; prefix: string; suffix: st
   ta.focus();
 }
 
-async function selectArtifact(id: string): Promise<void> {
-  selectedArtifactId = id;
-  renderArtifactList();
+artifactRenameBtn.addEventListener("click", async () => {
+  if (!artView) return;
+  const id = artView.id;
+  const current = artifactsCache.find((a) => a.id === id)?.title ?? "";
+  const next = prompt("Rename artifact", current);
+  if (!next || next.trim() === current) return;
+  try {
+    await api.renameArtifact(id, next.trim());
+    if (artView?.id === id) artifactViewerTitle.textContent = next.trim();
+    await refreshArtifacts();
+  } catch (err) {
+    alert(`Rename failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+});
+artifactDeleteBtn.addEventListener("click", async () => {
+  if (!artView) return;
+  const id = artView.id;
+  const title = artifactsCache.find((a) => a.id === id)?.title ?? "this artifact";
+  if (!confirm(`Delete "${title}"? This can't be undone.`)) return;
+  try {
+    await api.deleteArtifact(id);
+    if (artView?.id === id) closeArtifactViewer();
+    await refreshArtifacts();
+  } catch (err) {
+    alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+});
+
+async function openArtifactViewer(id: string): Promise<void> {
   if (artView) window.removeEventListener("message", artView.onMsg);
   artView = null;
-  artifactDetailEl.replaceChildren();
-  const loading = document.createElement("p");
-  loading.className = "settings-hint";
-  loading.textContent = "Loading…";
-  artifactDetailEl.appendChild(loading);
+  closeArtifactCommentsPanel();
+  artifactViewerTitle.textContent = "";
+  artifactFrame.removeAttribute("srcdoc");
+  artifactViewer.hidden = false;
 
   let artifact: Artifact;
   let comments: ArtifactComment[];
@@ -6603,69 +6674,24 @@ async function selectArtifact(id: string): Promise<void> {
     artifact = r.artifact;
     comments = r.comments;
   } catch (err) {
-    artifactDetailEl.replaceChildren();
-    const p = document.createElement("p");
-    p.className = "settings-hint";
-    p.textContent = `Couldn't load this artifact: ${err instanceof Error ? err.message : String(err)}`;
-    artifactDetailEl.appendChild(p);
+    artifactViewerTitle.textContent = "Artifact";
+    const message = err instanceof Error ? err.message : String(err);
+    artifactFrame.srcdoc = `<p style="font:14px -apple-system,system-ui,sans-serif;padding:20px;color:#666">Couldn't load this artifact: ${escapeHtml(message)}</p>`;
     return;
   }
 
-  const head = document.createElement("div");
-  head.className = "artifact-detail-head";
-  head.innerHTML = `<span class="artifact-detail-title">${escapeHtml(artifact.title)}</span>`;
-  const actions = document.createElement("div");
-  actions.className = "artifact-detail-actions";
-  const renameBtn = document.createElement("button");
-  renameBtn.type = "button";
-  renameBtn.className = "ghost-btn";
-  renameBtn.textContent = "Rename";
-  renameBtn.addEventListener("click", async () => {
-    const next = prompt("Rename artifact", artifact.title);
-    if (!next || next.trim() === artifact.title) return;
-    try {
-      await api.renameArtifact(id, next.trim());
-      await refreshArtifacts(id);
-    } catch (err) {
-      alert(`Rename failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  });
-  const deleteBtn = document.createElement("button");
-  deleteBtn.type = "button";
-  deleteBtn.className = "ghost-btn danger";
-  deleteBtn.textContent = "Delete";
-  deleteBtn.addEventListener("click", async () => {
-    if (!confirm(`Delete "${artifact.title}"? This can't be undone.`)) return;
-    try {
-      await api.deleteArtifact(id);
-      selectedArtifactId = null;
-      await refreshArtifacts();
-    } catch (err) {
-      alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  });
-  actions.append(renameBtn, deleteBtn);
-  head.appendChild(actions);
-
-  const split = document.createElement("div");
-  split.className = "artifact-split";
-  const frame = document.createElement("iframe");
-  frame.className = "artifact-frame";
-  frame.setAttribute("sandbox", "allow-scripts");
-  frame.setAttribute("referrerpolicy", "no-referrer");
-  frame.srcdoc = artifact.document;
-  const rail = document.createElement("div");
-  rail.className = "artifact-rail";
-  split.append(frame, rail);
+  artifactViewerTitle.textContent = artifact.title;
+  artifactFrame.srcdoc = artifact.document;
 
   const onMsg = (e: MessageEvent) => {
-    if (!artView || e.source !== artView.frame.contentWindow) return;
+    if (!artView || e.source !== artifactFrame.contentWindow) return;
     const d = e.data;
     if (!d || typeof d !== "object") return;
     if (d.type === "artifact:selection" && typeof d.quote === "string") {
       openCommentComposer({ quote: d.quote, prefix: d.prefix ?? "", suffix: d.suffix ?? "" });
     } else if (d.type === "artifact:commentClick" && d.id) {
-      const card = rail.querySelector<HTMLElement>(`.artifact-comment[data-id="${d.id}"]`);
+      openArtifactCommentsPanel();
+      const card = artifactCommentsBody.querySelector<HTMLElement>(`.artifact-comment[data-id="${d.id}"]`);
       card?.scrollIntoView({ block: "center", behavior: "smooth" });
       card?.classList.add("is-flash");
       setTimeout(() => card?.classList.remove("is-flash"), 1200);
@@ -6673,11 +6699,10 @@ async function selectArtifact(id: string): Promise<void> {
   };
   window.addEventListener("message", onMsg);
 
-  artView = { id, frame, comments, railEl: rail, onMsg };
-  artifactDetailEl.replaceChildren(head, split);
+  artView = { id, comments, onMsg };
   renderCommentRail();
   // Re-push once the iframe has parsed its runtime (it also self-seeds).
-  frame.addEventListener("load", () => pushCommentsToFrame(), { once: true });
+  artifactFrame.addEventListener("load", () => pushCommentsToFrame(), { once: true });
 }
 
 // ---- steps in the Messages (family channel) view ----

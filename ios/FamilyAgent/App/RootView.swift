@@ -25,9 +25,8 @@ struct RootView: View {
                              set: { model.externalURL = $0?.url })) { wrapped in
             SafariView(url: wrapped.url)
         }
-        .fullScreenCover(item: Binding(get: { model.viewingArtifactId.map(IdentifiedString.init) },
-                                       set: { model.viewingArtifactId = $0?.value })) { wrapped in
-            ArtifactViewerView(artifactId: wrapped.value)
+        .fullScreenCover(item: $model.viewingArtifact) { presentation in
+            ArtifactViewerView(artifactId: presentation.artifactId)
         }
     }
 }
@@ -36,10 +35,4 @@ private struct IdentifiedURL: Identifiable {
     let url: URL
     var id: String { url.absoluteString }
     init(_ url: URL) { self.url = url }
-}
-
-private struct IdentifiedString: Identifiable {
-    let value: String
-    var id: String { value }
-    init(_ value: String) { self.value = value }
 }

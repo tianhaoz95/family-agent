@@ -415,12 +415,7 @@
               interactive explainer, a dashboard. Ask it for one in chat.
             </p>
           </div>
-          <div class="artifacts-layout">
-            <ul id="artifact-list" class="artifact-list" aria-label="Artifacts"></ul>
-            <div id="artifact-detail" class="artifact-detail">
-              <p class="settings-hint">Select an artifact to view it.</p>
-            </div>
-          </div>
+          <ul id="artifact-list" class="artifact-list" aria-label="Artifacts"></ul>
         </section>
 
         <section id="view-family" class="view" aria-label="Family">
@@ -864,6 +859,48 @@
             </div>
           </div>
         </div>
+
+        <!-- An artifact opens here, filling the content area — same pattern
+             as the tool viewer above. Comments live in their own side panel
+             (below), hidden until the floating button is clicked, so the
+             page itself gets the full width instead of permanently sharing
+             it with a comments rail. -->
+        <div id="artifact-viewer" class="artifact-viewer" hidden>
+          <header class="tool-viewer-bar">
+            <button id="artifact-viewer-close" type="button" class="tool-viewer-back">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+              <span>Artifacts</span>
+            </button>
+            <span id="artifact-viewer-title" class="tool-viewer-title"></span>
+            <div class="artifact-viewer-actions">
+              <button id="artifact-rename-btn" type="button" class="ghost-btn">Rename</button>
+              <button id="artifact-delete-btn" type="button" class="ghost-btn danger">Delete</button>
+            </div>
+          </header>
+          <iframe
+            id="artifact-frame"
+            class="artifact-frame"
+            title="Artifact"
+            sandbox="allow-scripts"
+            referrerpolicy="no-referrer"
+          ></iframe>
+          <button id="artifact-comments-fab" type="button" class="artifact-comments-fab" aria-label="Show comments">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/></svg>
+            <span id="artifact-comments-fab-badge" class="artifact-comments-fab-badge" hidden></span>
+          </button>
+        </div>
+
+        <!-- Slides in from the right, hidden until the artifact viewer's
+             floating button opens it. -->
+        <aside id="artifact-comments-panel" class="side-panel" hidden aria-label="Comments">
+          <header class="side-panel-bar">
+            <span class="side-panel-title">Comments</span>
+            <button id="artifact-comments-close" type="button" class="side-panel-close" aria-label="Close comments">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </header>
+          <div id="artifact-comments-body" class="side-panel-body artifact-rail"></div>
+        </aside>
 
         <!-- Slides in from the right: a document preview, or a task/document
              the assistant referenced in a reply. -->
