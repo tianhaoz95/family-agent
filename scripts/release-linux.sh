@@ -130,7 +130,19 @@ fi
 
 DEB_NAME="Family-Agent-$VERSION-amd64.deb"
 APPIMAGE_NAME="Family-Agent-$VERSION-amd64.AppImage"
-printf '    %s\n' "$DEB -> $DEB_NAME" "$APPIMAGE -> $APPIMAGE_NAME"
+
+# `gh release upload path#label` only sets a display label — the asset's real
+# name (and its download URL) is the local file's own basename, with GitHub
+# rewriting any space to a dot. Tauri's built filenames have spaces
+# ("Family Agent_1.3.0_amd64.deb"), so copy them to the name we actually want
+# first rather than fighting that rewrite later, in latest.json and everywhere
+# else that has to know the final URL.
+STAGE_DIR="$(mktemp -d)"
+cp "$DEB" "$STAGE_DIR/$DEB_NAME"
+cp "$APPIMAGE" "$STAGE_DIR/$APPIMAGE_NAME"
+DEB="$STAGE_DIR/$DEB_NAME"
+APPIMAGE="$STAGE_DIR/$APPIMAGE_NAME"
+printf '    %s\n' "-> $DEB_NAME" "-> $APPIMAGE_NAME"
 [ -n "$UPDATER" ] && printf '    %s\n' "$UPDATER (+ .sig) -> $APPIMAGE_NAME (updater)"
 
 if [ "$NO_UPLOAD" -eq 1 ]; then
@@ -146,9 +158,13 @@ say "attaching to $TAG"
 gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
   || die "release $TAG does not exist yet — the macOS release creates it; run that first"
 
-gh release upload "$TAG" --repo "$REPO" --clobber \
-  "$DEB#$DEB_NAME" \
-  "$APPIMAGE#$APPIMAGE_NAME"
+# Clean up any asset from a previous run that landed under Tauri's raw
+# (space-in-name) filename before this script started renaming first.
+for stale in "Family.Agent_${VERSION}_amd64.deb" "Family.Agent_${VERSION}_amd64.AppImage"; do
+  gh release delete-asset "$TAG" --repo "$REPO" "$stale" -y >/dev/null 2>&1 || true
+done
+
+gh release upload "$TAG" --repo "$REPO" --clobber "$DEB" "$APPIMAGE"
 
 # Patch latest.json to add the linux platform, if we have a signed updater
 # artifact. The macOS release wrote it with just darwin-*; we merge, not
@@ -179,10 +195,23 @@ fi
 # ------------------------------------------------------------------- verify
 
 say "verifying what a Linux client will fetch"
+# A freshly-uploaded asset can 404 for a few seconds before GitHub's CDN picks
+# it up (the macOS script hits the same thing, hence its own sleep) — retry
+# briefly instead of failing on what is almost always just propagation lag.
+fetchable() {
+  local url="$1" tries=8 code
+  while [ "$tries" -gt 0 ]; do
+    code="$(curl -s -o /dev/null -w '%{http_code}' -L "$url")"
+    [ "$code" = "200" ] && { echo "$code"; return 0; }
+    tries=$((tries - 1))
+    sleep 3
+  done
+  echo "$code"
+  return 1
+}
 for asset in "$APPIMAGE_NAME" "$DEB_NAME"; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' -L "https://github.com/$REPO/releases/download/$TAG/$asset")"
+  code="$(fetchable "https://github.com/$REPO/releases/download/$TAG/$asset")" || die "$asset is not fetchable (got $code)"
   printf '    %s  %s\n' "$code" "$asset"
-  [ "$code" = "200" ] || die "$asset is not fetchable (got $code)"
 done
 if [ "$HAVE_KEY" -eq 1 ]; then
   curl -s -L "https://github.com/$REPO/releases/latest/download/latest.json" \
