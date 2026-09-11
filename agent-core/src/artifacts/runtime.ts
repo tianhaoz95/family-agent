@@ -143,7 +143,36 @@ const ANNOTATION_RUNTIME = String.raw`
     });
     document.body.appendChild(btn);
   }
-  document.addEventListener("selectionchange", function () { setTimeout(onSelect, 0); });
+  // Selecting text on a touch device is a long-press-and-drag — the same
+  // gesture that pops up the OS's own text-selection menu (Copy/Look Up/…),
+  // which visually clashes with our floating button if it shows the instant
+  // the selection changes. Gate it behind an explicit double-tap instead, so
+  // it only appears once the user actually asks for it — the native menu
+  // has usually dismissed itself by then. Double-tapping a word is also
+  // WebKit/Chrome's own gesture for selecting just that word, so a bare
+  // double-tap with no prior long-press still works for a one-word quote.
+  // Desktop/mouse input has no such conflict — a selection is only ever
+  // made deliberately by dragging, so it keeps showing the button right away.
+  var IS_TOUCH = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+  if (IS_TOUCH) {
+    var lastTapAt = 0, lastTapX = 0, lastTapY = 0;
+    document.addEventListener("touchend", function (e) {
+      var t = e.changedTouches && e.changedTouches[0];
+      if (!t) return;
+      var now = Date.now();
+      var isDoubleTap = now - lastTapAt < 350 && Math.hypot(t.clientX - lastTapX, t.clientY - lastTapY) < 30;
+      lastTapAt = now; lastTapX = t.clientX; lastTapY = t.clientY;
+      if (isDoubleTap) setTimeout(onSelect, 0);
+    }, { passive: true });
+    // A selection abandoned without a double-tap shouldn't leave a stale
+    // button behind once it collapses (e.g. tapping elsewhere to dismiss it).
+    document.addEventListener("selectionchange", function () {
+      var sel = window.getSelection();
+      if (!sel || sel.isCollapsed) hideBtn();
+    });
+  } else {
+    document.addEventListener("selectionchange", function () { setTimeout(onSelect, 0); });
+  }
   document.addEventListener("scroll", hideBtn, true);
   window.addEventListener("resize", hideBtn);
 
