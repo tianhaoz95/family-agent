@@ -247,6 +247,7 @@ class AppViewModel(
                 _state.value = _state.value.copy(auth = AuthState.Authenticated(user))
                 refreshStatus()
                 refreshChannels()
+                openMostRecentChatSession()
             } else {
                 // token gone stale, or server unreachable — go back to login.
                 api.authToken = null
@@ -324,6 +325,7 @@ class AppViewModel(
                 )
                 refreshStatus()
                 refreshChannels()
+                openMostRecentChatSession()
             }.onFailure {
                 _state.value = _state.value.copy(auth = current.copy(error = it.message ?: "Sign-in failed."))
             }
@@ -625,6 +627,18 @@ class AppViewModel(
     fun refreshChatSessions() {
         viewModelScope.launch {
             apiCall { api.listChatSessions() }.onSuccess { _state.value = _state.value.copy(chatSessions = it) }
+        }
+    }
+
+    /** Chat opens on the most recently used conversation instead of a blank
+     *  new one — called once right after sign-in (fresh login or a restored
+     *  session). `listChatSessions` is newest-first, so index 0 is it. */
+    private fun openMostRecentChatSession() {
+        viewModelScope.launch {
+            apiCall { api.listChatSessions() }.onSuccess { sessions ->
+                _state.value = _state.value.copy(chatSessions = sessions)
+                sessions.firstOrNull()?.let { openChatSession(it.id) }
+            }
         }
     }
 

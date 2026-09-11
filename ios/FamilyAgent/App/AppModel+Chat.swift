@@ -22,6 +22,14 @@ extension AppModel {
         }
     }
 
+    /// Chat opens on the most recently used conversation instead of a blank
+    /// new one — called once right after sign-in (fresh login or a restored
+    /// session). `listChatSessions` is newest-first, so the first one is it.
+    func openMostRecentChatSession() async {
+        await refreshChatSessions()
+        if let id = chatSessions.first?.id { openChatSession(id) }
+    }
+
     func sendChat(_ text: String, images: [String] = [], speakReply: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !chatSending else { return }

@@ -218,6 +218,7 @@ final class AppModel {
                 auth = .authed(resp.user)
                 await refreshStatus()
                 await refreshChannels()
+                await openMostRecentChatSession()
                 return
             } catch {
                 auth = .needLogin(serverURL: url, serverName: "", error: error.localizedDescription)
@@ -233,6 +234,7 @@ final class AppModel {
                 auth = .authed(user)
                 await refreshStatus()
                 await refreshChannels()
+                await openMostRecentChatSession()
                 return
             } catch {
                 settings.clearSession()
@@ -347,7 +349,7 @@ final class AppModel {
         // back (an address reachable only over Tailscale can't be rescanned).
         settings.addRecentServer(name: name.isEmpty ? url : name, url: url)
         auth = .authed(resp.user)
-        Task { await refreshStatus(); await refreshChannels() }
+        Task { await refreshStatus(); await refreshChannels(); await openMostRecentChatSession() }
     }
 
     func signOut() {

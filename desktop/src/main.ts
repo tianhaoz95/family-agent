@@ -1321,6 +1321,12 @@ function renderChatSessionList() {
   }
 }
 
+// Chat opens on the most recently used conversation rather than a blank new
+// one — but only the first time this app load lands on the Chat view; once
+// that's decided (or the user explicitly starts a new chat), later visits to
+// the tab leave whatever's already open alone.
+let chatAutoOpenAttempted = false;
+
 async function refreshChatSessions() {
   try {
     chatSessions = (await api.listChatSessions()).sessions;
@@ -1328,6 +1334,12 @@ async function refreshChatSessions() {
     return;
   }
   if (document.getElementById("view-chat")!.classList.contains("is-active")) renderChatSessionList();
+  if (!chatAutoOpenAttempted) {
+    chatAutoOpenAttempted = true;
+    if (!activeChatSessionId && chatSessions.length && !chatLog.querySelector(".bubble")) {
+      void openChatSession(chatSessions[0].id);
+    }
+  }
 }
 
 async function openChatSession(id: string) {
