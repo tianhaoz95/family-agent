@@ -72,6 +72,45 @@ in `ios/build/release/`.
 
 ---
 
+## Cutting a build from CI
+
+`.github/workflows/release-ios.yml` runs the same script on a GitHub-hosted
+`macos-26` runner (`workflow_dispatch` — trigger it from the Actions tab, or
+`gh workflow run release-ios.yml -f no_upload=false`). It signs with a real
+**Apple Distribution** certificate imported from a repo secret, not Xcode's
+automatic/cloud signing — a fresh runner's empty keychain has no certificate
+to reuse, so cloud signing would request a new one from Apple on every run,
+and Apple caps how many of those an account may have. Worse, once that cap is
+hit, Apple's API refuses to let even an Admin-role key create or revoke an
+Apple Distribution certificate — that needs the Account Holder acting through
+an authenticated session (Xcode or the web portal), not any API key. See the
+workflow file's own header comment for the full story.
+
+One-time setup, only needed again if the certificate is ever lost or
+expires: create an Apple Distribution certificate via **Xcode → Settings →
+Accounts → (select the team) → Manage Certificates → + → Apple
+Distribution** — this drops it straight into your login keychain, private
+key included. Then export it and store it as repo secrets:
+
+```bash
+security export -k login.keychain-db -t identities -f pkcs12 \
+  -P "<a new password>" -o dist.p12
+gh secret set IOS_DISTRIBUTION_CERTIFICATE --repo tianhaoz95/family-agent -- \
+  "$(base64 -i dist.p12)"
+gh secret set IOS_DISTRIBUTION_CERTIFICATE_PASSWORD --repo tianhaoz95/family-agent \
+  -- "<the same password>"
+rm dist.p12   # don't leave the private key on disk
+```
+
+`security export -t identities` exports every identity in the keychain, not
+just the new one — that's fine, `xcodebuild`'s automatic signing picks
+whichever one a given task actually needs. Back the `.p12` up somewhere
+before deleting it if you want a recovery path that doesn't mean regenerating
+the certificate (which is itself easy — unlike the Tauri updater key, an
+Apple certificate can just be revoked and replaced any time).
+
+---
+
 ## Turning the build on for testers
 
 App Store Connect → your app → **TestFlight**:

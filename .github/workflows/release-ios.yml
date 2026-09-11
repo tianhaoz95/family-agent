@@ -7,19 +7,41 @@ name: Release (iOS)
 # not tied to a GitHub release tag (see ios/RELEASE.md). Bump the version,
 # push it, then run this.
 #
-# Signing needs no local certificate at all: with an Admin-role App Store
-# Connect API key, Apple signs the build in the cloud — the private key
-# never touches the runner (confirmed: the exported .ipa's embedded
-# provisioning profile references a certificate `security find-identity`
-# never shows locally either). A Developer-role key fails export with
-# "Cloud signing permission error" — if this ever does, the key was
-# downgraded or replaced; see ios/RELEASE.md.
+# Signing imports a real "Apple Distribution" certificate (below) rather
+# than relying on Xcode's automatic/cloud signing to mint one on its own.
+# That used to be the setup — an Admin-role App Store Connect API key with
+# no local certificate at all, Apple signing in the cloud — but every fresh
+# GitHub-hosted runner starts with an empty keychain, so automatic signing
+# had no certificate+private key to reuse and requested a new one from Apple
+# on every run. Apple caps how many "Apple Distribution" certificates an
+# account can have, and this pipeline ran often enough to hit that cap
+# (`error: Choose a certificate to revoke. Your account has reached the
+# maximum number of certificates.`) — and worse, the certs it *had* created
+# were themselves orphaned, since each one's private key only ever existed on
+# the now-destroyed runner that generated it, and Apple's API refuses to let
+# even an Admin-role key revoke or create "Apple Distribution" certificates
+# (403 "This request is forbidden for security reasons" /
+# "You are not allowed to perform this operation" — that operation appears
+# to need the Account Holder acting through an authenticated session, not an
+# API key at any role). So instead: one real certificate, generated once via
+# Xcode's own account UI (an actual human, not CI), exported with its private
+# key, and imported into a fresh temporary keychain on every run — the same
+# shape release-mac.yml already uses for its own certificate — so nothing
+# ever needs a fresh one minted again. The API key is still used, now only
+# for what it's actually good for: resolving/creating the matching
+# provisioning profile (-allowProvisioningUpdates in release-ios.sh).
 #
-# Needs these repo secrets (the same ones release-mac.yml's notarization
-# step uses — literally the same Apple Developer account):
-#   APPLE_API_KEY       base64 of the App Store Connect API key .p8 (Admin role)
-#   APPLE_API_KEY_ID    its key id
-#   APPLE_API_ISSUER    the issuer id
+# Needs these repo secrets (APPLE_API_* are the same ones release-mac.yml's
+# notarization step uses — literally the same Apple Developer account):
+#   APPLE_API_KEY                    base64 of the App Store Connect API key .p8
+#   APPLE_API_KEY_ID                 its key id
+#   APPLE_API_ISSUER                 the issuer id
+#   IOS_DISTRIBUTION_CERTIFICATE     base64 of a .p12 (Apple Distribution cert +
+#                                     private key, exported from Keychain Access
+#                                     after creating it via Xcode > Settings >
+#                                     Accounts > Manage Certificates > + >
+#                                     Apple Distribution)
+#   IOS_DISTRIBUTION_CERTIFICATE_PASSWORD   the password that .p12 was exported with
 
 on:
   workflow_dispatch:
@@ -56,6 +78,44 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      # A fresh, temporary keychain rather than the runner's default login
+      # keychain: it's created empty, holds only this one certificate (well,
+      # whatever identities the .p12 carries — it was exported from a real
+      # dev machine's keychain, so it's a few, and xcodebuild's automatic
+      # signing picks the right one for the job), and is deleted in the
+      # cleanup step below regardless of how the job ends — nothing about it
+      # persists past this job on GitHub's ephemeral runner. Same shape as
+      # release-mac.yml's "Import the signing certificate" step.
+      - name: Import the iOS Distribution certificate
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/release-signing.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo -n "$IOS_DISTRIBUTION_CERTIFICATE" | base64 --decode -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          # Without this, codesign prompts for keychain access interactively
+          # the first time it touches the imported key — fine on a Mac in
+          # front of you, fatal in a non-interactive CI job.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          # Prepend so `security find-identity` (what xcodebuild's automatic
+          # signing uses to pick an identity) sees it; keep the existing list
+          # rather than replacing it.
+          EXISTING=()
+          while IFS= read -r line; do EXISTING+=("$line"); done \
+            < <(security list-keychains -d user | sed 's/^ *"//;s/" *$//')
+          security list-keychains -d user -s "$KEYCHAIN" "${EXISTING[@]}"
+          rm -f "$CERT_PATH"
+
       - name: Import the App Store Connect API key
         env:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -84,6 +144,8 @@ jobs:
           path: ios/build/release/export/*.ipa
           if-no-files-found: error
 
-      - name: Clean up the API key
+      - name: Clean up the API key and temporary keychain
         if: always()
-        run: rm -rf "$HOME/.appstoreconnect"
+        run: |
+          rm -rf "$HOME/.appstoreconnect"
+          security delete-keychain "$RUNNER_TEMP/release-signing.keychain-db" 2>/dev/null || true
