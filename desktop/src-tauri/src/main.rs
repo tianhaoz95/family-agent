@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::Manager;
 
@@ -17,10 +18,16 @@ use tauri::Manager;
 ///   `resource_dir()`, so a distributed `.app`/`.dmg` is self-contained.
 struct AgentCoreProcess(Mutex<Option<Child>>);
 
+/// Set right before we deliberately kill the child (window destroyed / app
+/// exit) so `watch_agent_core`'s background poll doesn't race that shutdown
+/// and "helpfully" respawn a replacement a moment later.
+struct ShuttingDown(AtomicBool);
+
 /// Ports agent-core binds: the HTTP API and the tools server.
 const AGENT_CORE_PORTS: [u16; 2] = [4173, 4174];
 
 /// How to launch the agent-core sidecar for this build.
+#[derive(Clone)]
 struct AgentCoreLaunch {
     /// The `node` executable (system `node` in dev, the bundled binary in a packaged app).
     node: PathBuf,
@@ -214,6 +221,70 @@ fn spawn_agent_core(launch: &AgentCoreLaunch) -> std::io::Result<Child> {
     cmd.spawn()
 }
 
+/// Restart agent-core if it ever exits unexpectedly while the app is still
+/// open. Without this, the app has no way to notice its backend died — the
+/// window stays up showing whatever it last rendered, every request just
+/// fails, and the only fix is quitting and reopening the whole app.
+///
+/// This isn't hypothetical: agent-core is spawned as a plain `node
+/// .../server.js` process, and a throwaway dev/test instance (started
+/// separately for local development, pointed at its own port) is *the exact
+/// same command line* minus arguments — an operator or script cleaning up a
+/// dev instance with a broad `pkill -f node.*server.js`-style match, rather
+/// than killing by exact PID or port, can just as easily hit the installed
+/// app's production sidecar if it happens to be running at the same time.
+/// The desktop app itself can't prevent that kill from happening, but it can
+/// stop being silently useless afterward.
+///
+/// Runs on its own thread, polling once a second. Caps at 5 restarts within
+/// a rolling 60s window: a genuinely broken agent-core (fails on every
+/// launch) would otherwise burn CPU in an infinite respawn loop — past that,
+/// it gives up and leaves the app visibly disconnected instead.
+fn watch_agent_core(app: tauri::AppHandle, launch: AgentCoreLaunch) {
+    std::thread::spawn(move || {
+        let mut restarts: Vec<std::time::Instant> = Vec::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if app.state::<ShuttingDown>().0.load(Ordering::SeqCst) {
+                return;
+            }
+            let state = app.state::<AgentCoreProcess>();
+            let mut guard = state.0.lock().unwrap();
+            let Some(child) = guard.as_mut() else {
+                return; // shutdown already took it — nothing left to watch
+            };
+            match child.try_wait() {
+                Ok(None) => continue, // still running
+                Ok(Some(status)) => {
+                    eprintln!(
+                        "family-agent-desktop: agent-core exited unexpectedly ({status}) — restarting"
+                    );
+                    *guard = None;
+                    let now = std::time::Instant::now();
+                    restarts.retain(|&t| now.duration_since(t) < std::time::Duration::from_secs(60));
+                    if restarts.len() >= 5 {
+                        eprintln!(
+                            "family-agent-desktop: agent-core has died {} times in the last \
+                             minute — giving up on automatic restarts. Quit and reopen the app \
+                             once it's fixed.",
+                            restarts.len()
+                        );
+                        return;
+                    }
+                    restarts.push(now);
+                    match spawn_agent_core(&launch) {
+                        Ok(new_child) => *guard = Some(new_child),
+                        Err(err) => eprintln!("family-agent-desktop: restart failed: {err}"),
+                    }
+                }
+                Err(err) => {
+                    eprintln!("family-agent-desktop: couldn't poll agent-core's status: {err}");
+                }
+            }
+        }
+    });
+}
+
 /// SIGTERM first so agent-core's own handler can stop the Deno tool supervisor
 /// and close the inbox watcher, then SIGKILL as a fallback. `Child::kill()`
 /// alone is a bare SIGKILL, which can leave the supervisor's subprocesses
@@ -338,6 +409,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![quit_app])
         .manage(AgentCoreProcess(Mutex::new(None)))
+        .manage(ShuttingDown(AtomicBool::new(false)))
         .setup(|app| {
             kill_stale_agent_core();
             let launch = resolve_agent_core(app);
@@ -350,6 +422,7 @@ fn main() {
                 Ok(child) => {
                     let state = app.state::<AgentCoreProcess>();
                     *state.0.lock().unwrap() = Some(child);
+                    watch_agent_core(app.handle().clone(), launch.clone());
                 }
                 Err(err) => {
                     eprintln!(
@@ -380,6 +453,10 @@ fn main() {
                     let _ = window.hide();
                 }
                 tauri::WindowEvent::Destroyed => {
+                    // Set first — watch_agent_core checks this before every
+                    // touch of the child, so it can't race in and "helpfully"
+                    // respawn a replacement right after this deliberate kill.
+                    window.state::<ShuttingDown>().0.store(true, Ordering::SeqCst);
                     let state = window.state::<AgentCoreProcess>();
                     let mut guard = state.0.lock().unwrap();
                     if let Some(mut child) = guard.take() {
@@ -393,6 +470,7 @@ fn main() {
         .expect("error while running family-agent-desktop")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                app.state::<ShuttingDown>().0.store(true, Ordering::SeqCst);
                 let state = app.state::<AgentCoreProcess>();
                 let mut guard = state.0.lock().unwrap();
                 if let Some(mut child) = guard.take() {

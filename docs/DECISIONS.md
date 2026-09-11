@@ -2608,3 +2608,46 @@ Routes: `GET/POST /artifacts/:id/comments`, `PATCH/DELETE
 `artifacts/resolve.ts`, `db.ts` (`artifact_comments` table, `prev_html` /
 `revision` columns, CRUD + `updateArtifactHtml` / `revertArtifact`). Tests:
 `agent-core/test/artifactComments.test.ts`.
+
+### Desktop: agent-core watchdog (auto-restart if the sidecar dies mid-session)
+
+`main.rs` spawned agent-core once at launch and reaped it on shutdown, but had
+no way to notice if it died in between. That gap turned out to matter in
+practice, not just in theory: agent-core is launched as a plain `node
+.../server.js` process, and a throwaway dev/test instance started separately
+for local development is *the exact same command line*, differing only in
+arguments and the port it binds. A cleanup step that kills a dev instance by
+matching the command line (`pkill -f 'node.*server.js'`) rather than an exact
+PID or port can just as easily hit the installed app's production sidecar if
+both happen to be running on the same machine at once — and once that
+happens, the desktop window stays open showing whatever it last rendered,
+every request fails, and the only fix was quitting and reopening the whole
+app. The app itself can't prevent an external kill like that, but it can stop
+being silently useless afterward.
+
+**`watch_agent_core`** runs on its own thread once agent-core first starts,
+polling `try_wait()` on the child once a second. On an unexpected exit it
+respawns immediately via the same `spawn_agent_core()` the initial launch
+uses. Restarts are capped at 5 within a rolling 60s window — a genuinely
+broken agent-core (fails on every launch, e.g. a corrupted install) would
+otherwise spin forever burning CPU; past the cap the watchdog gives up and
+leaves the app visibly disconnected instead, which is at least diagnosable.
+
+**Racing the app's own deliberate shutdown** is the one thing this has to get
+right: without a shutdown flag, the watchdog would see the app's *own* kill
+(window destroyed, or app exit) as "unexpected" and respawn a replacement
+right as everything is tearing down. A `ShuttingDown(AtomicBool)`, set before
+either shutdown path (`WindowEvent::Destroyed`, `RunEvent::Exit`) kills the
+child, is checked by the watchdog before every touch of the process state, so
+a real shutdown always wins the race.
+
+Verified with an isolated standalone harness reproducing the exact
+poll/respawn/backoff logic against a harmless dummy process (not agent-core,
+not ports 4173/4174) — a `kill -9` on the dummy is detected and replaced
+within about a second, and setting the shutdown flag first correctly
+suppresses the respawn. Not verified end-to-end against a live Tauri window
+on the machine this was written on, deliberately: that machine already had
+the real installed app running on the same ports, and a live test would have
+risked doing to it exactly what this fix exists to recover from.
+
+Files: `desktop/src-tauri/src/main.rs` (`watch_agent_core`, `ShuttingDown`).

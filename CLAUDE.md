@@ -391,7 +391,17 @@ re-mints the token when Settings opens and every ~3.5 min it stays open. Tests:
 `src-tauri/` is the Rust shell. `main.rs` spawns `agent-core`'s built `dist/server.js` as a child
 process via `node`, with `PR_SET_PDEATHSIG` set on the child (Linux, via `libc::prctl` in a
 `pre_exec` hook) so a hard-killed parent can't orphan it — this was a real bug, found by testing
-`kill -9` against the running app, not defensive-by-default. `src/api.ts` keeps the bearer token
+`kill -9` against the running app, not defensive-by-default. `watch_agent_core` covers the
+opposite direction: a background thread polls `try_wait()` on the child once a second and
+respawns it if it ever exits while the app is still open, capped at 5 restarts per rolling 60s
+so a genuinely broken agent-core doesn't spin forever. Not hypothetical — agent-core is a plain
+`node .../server.js` process, indistinguishable on the command line from a throwaway dev/test
+instance run alongside the installed app, so a cleanup command that kills a dev instance by a
+broad pattern match (`pkill -f 'node.*server.js'`) rather than by exact PID or port can just as
+easily kill the production sidecar if both happen to be running at once — previously the app had
+no way to notice and just sat there disconnected until manually restarted. A `ShuttingDown` flag
+(set before the app's own deliberate kill, on window-destroy or app-exit) stops the watchdog from
+racing that shutdown and respawning a replacement right after. `src/api.ts` keeps the bearer token
 in `localStorage` and attaches it to every request; a `401` clears it and fires
 `family-agent:signed-out`, which `main.ts` handles by reloading to the login screen. `main.ts`
 gates the whole app behind `boot()` (setup → login → app) and shows a "Family" nav item + admin
