@@ -56,6 +56,17 @@ echo "==> prepare-sidecar: installing production deps (downloads, ~40s first tim
   && { npm install --omit=dev --no-audit --no-fund --loglevel=error --dangerously-allow-all-scripts 2>/dev/null \
        || npm install --omit=dev --no-audit --no-fund --loglevel=error; } )
 
+# onnxruntime-node's Linux x64 prebuild ships an optional CUDA execution
+# provider (.so) that links against libcublasLt.so.12 — a CUDA runtime lib
+# nothing here has (ASR/TTS run CPU-only; we never request the CUDA provider).
+# Harmless on macOS (the darwin prebuild has no such file, so these are no-ops
+# there) but fatal for the Linux release: linuxdeploy hard-fails the whole
+# AppImage bundle if it can't resolve an ELF dependency of anything it's
+# deploying, CUDA or not. Drop it — the app is identical without it.
+find "$STAGE/agent-core/node_modules/onnxruntime-node" \
+  \( -name 'libonnxruntime_providers_cuda.so' -o -name 'libonnxruntime_providers_tensorrt.so' \) \
+  -delete 2>/dev/null || true
+
 printf '%s' "$STAMP" > "$STAMP_FILE"
 echo "==> prepare-sidecar: done"
 du -sh "$STAGE" 2>/dev/null || true
