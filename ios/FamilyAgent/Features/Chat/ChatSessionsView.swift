@@ -10,7 +10,8 @@ struct ChatSessionsView: View {
     var body: some View {
         NavigationStack {
             ScreenScaffold(title: "Chat history",
-                           subtitle: "Past conversations with the assistant \u{2014} pick one to pick up where it left off.") {
+                           subtitle: "Past conversations with the assistant \u{2014} pick one to pick up where it left off.",
+                           hasMenuButton: false) {
                 if model.chatSessions.isEmpty {
                     EmptyState(text: "No conversations yet.", systemImage: "bubble.left.and.bubble.right")
                 } else {

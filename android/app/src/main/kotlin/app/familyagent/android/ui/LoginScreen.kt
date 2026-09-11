@@ -28,6 +28,7 @@ fun LoginScreen(
     ScreenScaffold(
         title = if (serverName.isBlank()) "Sign in" else serverName,
         subtitle = "Sign in to your account. Everyone's things stay separate.",
+        hasMenuButton = false,
     ) {
         OutlinedTextField(
             value = username,

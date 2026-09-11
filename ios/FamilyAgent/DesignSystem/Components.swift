@@ -13,21 +13,37 @@ import SwiftUI
 /// same ScrollView as the content (each screen wrapped the whole thing in its
 /// own `ScrollView { ScreenScaffold(...) { ... } }`) — as soon as the screen
 /// scrolled even slightly, the title (now above the reserved top inset) moved
-/// up underneath the button and was covered by it, exactly the effect Chat/
-/// Messages' own screens never had because *their* title row lives in a plain
-/// HStack outside their ScrollView. This makes every ScreenScaffold user do
-/// the same thing by construction — the caller no longer wraps it in its own
-/// ScrollView; only `subtitle` + `content` scroll under the fixed title.
+/// up underneath the button and was covered by it. This makes every
+/// ScreenScaffold user do the same thing by construction — the caller no
+/// longer wraps it in its own ScrollView; only `subtitle` + `content` scroll
+/// under the fixed title.
+///
+/// The title sits on the **same row** as that floating button — a leading
+/// inset clears it (46pt, plus the base 20pt horizontal padding = 66pt from
+/// the screen edge) instead of a full-height row below it, exactly the
+/// layout ChatView's own hand-rolled header already used (`padding(.leading,
+/// 46)`, `padding(.top, 12)`) before this existed; every other screen now
+/// gets that same vertical-space saving for free. Numbers are tuned to the
+/// button's actual geometry (42pt square, 12pt leading + 6pt top inset from
+/// MainShell) so the title visually centers against it.
 ///
 /// Set `scrollable: false` for a screen whose content needs a real bounded
 /// viewport instead of scrolling — Board's `GeometryReader` corkboard is the
 /// case that surfaces this: inside a ScrollView, GeometryReader has no
 /// incoming height constraint to report and collapses to a sliver, so the
 /// board rendered as a short card with notes spilling out past its edge.
+///
+/// Set `hasMenuButton: false` for a screen shown before MainShell ever mounts
+/// (LoginView, DiscoveryView — there's no drawer or floating button yet
+/// pre-auth) so the title goes back to a plain, unindented row: reserving 66pt
+/// of leading space for a button that isn't there left the title visibly
+/// offset from everything below it (the QR button, address list, all flush
+/// left at the base 20pt).
 struct ScreenScaffold<Content: View>: View {
     let title: String
     let subtitle: String
     var scrollable: Bool = true
+    var hasMenuButton: Bool = true
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -35,9 +51,8 @@ struct ScreenScaffold<Content: View>: View {
             Text(title).appHeadline().foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 20)
-                // Room for the floating menu button (MainShell) — the Android
-                // ScreenScaffold reserves the same 58dp.
-                .padding(.top, 58)
+                .padding(.leading, hasMenuButton ? 46 : 0) // clears MainShell's floating menu button
+                .padding(.top, hasMenuButton ? 12 : 58)
                 .padding(.bottom, 6)
 
             if scrollable {

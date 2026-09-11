@@ -489,9 +489,14 @@ wire types are hand-mirrored in `ios/FamilyAgent/Networking/DTOs.swift` (the cou
   `@MainActor` view modifiers under strict concurrency).
 - **Navigation**: `MainShell.swift` mirrors Android's `ModalNavigationDrawer` — Chat is the home
   surface, a **drawer slides in over the content** (scrim + edge-swipe + a floating hamburger
-  button, top-left) to switch views, then dismisses. No app bar (Android parity); each screen
-  carries its own header (`ScreenScaffold` title, or an inline row for Chat's new/history and
-  Events' `+`). `AppDrawer` = logo + wordmark + nav items with an `accent-soft` pill behind the
+  button, top-left) to switch views, then dismisses. No app bar (Android parity); every screen's
+  title sits on the **same row** as that floating button (`ScreenScaffold`'s title — a 66pt
+  leading inset clears the button instead of a full-height row below it — or Chat's own
+  hand-rolled header, which the pattern was copied from) rather than a separate row underneath,
+  saving real vertical space on every screen. `ScreenScaffold(hasMenuButton: false)` drops back to
+  a plain, unindented title for the handful of screens shown before the button exists at all
+  (`LoginView`, `DiscoveryView` — pre-auth — and `ChatSessionsView`, a `.sheet` with no button
+  behind it). `AppDrawer` = logo + wordmark + nav items with an `accent-soft` pill behind the
   active one + a connection pill pinned to the footer. 12 `Destination`s, health-gated the same
   way (`routinesEnabled`, `skillsMode`, `mcpMode && admin`, `vaultMode`). Each destination is
   its own `NavigationStack` (nav bar hidden) so per-screen `.sheet` / `navigationDestination`

@@ -54,35 +54,50 @@ import kotlinx.coroutines.delay
  * Standard screen frame: safe-area padding, a title and an editorial serif
  * subtitle, then section content with generous spacing. Transparent — the
  * animated gradient canvas (AtmosphereBackground) shows through.
+ *
+ * The title sits on the **same row** as MainActivity's floating menu button
+ * (a 66dp leading inset — 20dp base + 46dp clearance — instead of a full
+ * 58dp-tall gap below it) to save vertical space on every screen that uses
+ * this. Numbers mirror the iOS counterpart (`ios/.../Components.swift`),
+ * tuned to the button's actual geometry (42dp square, 12dp start + 6dp top
+ * inset from MainActivity) so the title visually centers against it.
+ *
+ * Set `hasMenuButton = false` for a screen shown before the drawer/button
+ * ever appear (DiscoveryScreen, LoginScreen — pre-auth) so the title goes
+ * back to a plain, unindented row clearing just the status bar: reserving
+ * leading space for a button that isn't there left the title visibly offset
+ * from everything below it.
  */
 @Composable
 fun ScreenScaffold(
     title: String,
     subtitle: String,
     modifier: Modifier = Modifier,
+    hasMenuButton: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(
-        modifier
-            .fillMaxSize()
-            .padding(horizontal = 20.dp)
-            // Room for the floating menu button (MainActivity) that replaced the
-            // app bar; also clears the status bar on the pre-auth screens.
-            .padding(top = 58.dp, bottom = 8.dp),
-    ) {
+    Column(modifier.fillMaxSize()) {
         Text(
             title,
             style = MaterialTheme.typography.headlineMedium,
             color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier
+                .padding(start = if (hasMenuButton) 66.dp else 20.dp, end = 20.dp)
+                .padding(top = if (hasMenuButton) 12.dp else 58.dp, bottom = 6.dp),
         )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            subtitle,
-            style = MaterialTheme.typography.bodyLarge.copy(fontFamily = SourceSerif),
-            color = AppAccents.textBody,
-        )
-        Spacer(Modifier.height(22.dp))
-        content()
+        Column(
+            Modifier
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 8.dp),
+        ) {
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = SourceSerif),
+                color = AppAccents.textBody,
+            )
+            Spacer(Modifier.height(22.dp))
+            content()
+        }
     }
 }
 

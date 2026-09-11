@@ -47,6 +47,7 @@ fun DiscoveryScreen(
         title = "Find your home",
         subtitle = "Choose the Family Agent server running on your home laptop.",
         modifier = Modifier.verticalScroll(rememberScrollState()),
+        hasMenuButton = false,
     ) {
         // A server this device connected to before — the actual fix for
         // Tailscale/off-LAN addresses, which the scan below can never

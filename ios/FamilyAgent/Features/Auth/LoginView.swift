@@ -22,7 +22,8 @@ struct LoginView: View {
             title: serverName.isEmpty ? (isSetup ? "Set up your home" : "Sign in") : serverName,
             subtitle: isSetup
                 ? "Create the first account. You'll be the admin."
-                : "Sign in to your account. Everyone's things stay separate."
+                : "Sign in to your account. Everyone's things stay separate.",
+            hasMenuButton: false
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 TextField("Username", text: $username)

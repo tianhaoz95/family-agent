@@ -14,7 +14,8 @@ struct DiscoveryView: View {
 
     var body: some View {
         ScreenScaffold(title: "Find your home",
-                       subtitle: "Choose the Family Agent server running on your home laptop.") {
+                       subtitle: "Choose the Family Agent server running on your home laptop.",
+                       hasMenuButton: false) {
             VStack(alignment: .leading, spacing: 12) {
                 Button {
                     showScanner = true
