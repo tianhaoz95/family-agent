@@ -27,6 +27,10 @@ data class DiscoveredServer(val name: String, val host: String, val port: Int) {
     val url: String get() = "http://$host:$port"
 }
 
+/** A server this device connected to before — see SettingsStore.recentServers. */
+@kotlinx.serialization.Serializable
+data class RecentServer(val name: String, val url: String)
+
 // agent-core advertises `_familyagent._tcp` (see agent-core/src/server.ts,
 // bonjour-service). NsdManager is the framework's mDNS/DNS-SD client.
 //
@@ -143,6 +147,28 @@ class ServerDiscovery(context: Context) {
     }.getOrNull()
 
     companion object {
+        /**
+         * True when this device has a Tailscale-shaped address (100.64.0.0/10
+         * — Tailscale's whole tailnet lives in this CGNAT/RFC 6598 block, which
+         * `Inet4Address.isSiteLocalAddress` does NOT cover, unlike 10./172.16./
+         * 192.168.) on any interface. mDNS relies on link-local multicast,
+         * which a tailnet's point-to-point mesh doesn't relay, and the /24
+         * probe above only ever covers a real local subnet — so when this is
+         * true, automatic discovery can only find a server on the SAME Wi-Fi
+         * as this device, never one reachable purely over Tailscale. Used to
+         * show an accurate hint instead of a scan that silently can't work.
+         */
+        fun tailscaleLikelyActive(): Boolean = runCatching {
+            NetworkInterface.getNetworkInterfaces().asSequence()
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { it.inetAddresses.asSequence() }
+                .filterIsInstance<Inet4Address>()
+                .any { addr ->
+                    val parts = addr.hostAddress?.split(".")?.mapNotNull { it.toIntOrNull() }
+                    parts != null && parts.size == 4 && parts[0] == 100 && parts[1] in 64..127
+                }
+        }.getOrDefault(false)
+
         /** True on a stock Android emulator — used to pick a sensible manual-entry default. */
         val isEmulator: Boolean by lazy {
             Build.FINGERPRINT.contains("generic", true) ||

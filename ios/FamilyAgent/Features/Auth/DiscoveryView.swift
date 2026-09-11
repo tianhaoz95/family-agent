@@ -8,6 +8,7 @@ struct DiscoveryView: View {
     @State private var scanning = true
     @State private var scanID = UUID()
     @State private var showScanner = false
+    @State private var tailscaleActive = false
 
     private let discovery = ServerDiscovery()
 
@@ -28,6 +29,26 @@ struct DiscoveryView: View {
                 Text("On the desktop app: Settings → Pair a phone.")
                     .appBodySmall().foregroundStyle(Theme.textMuted)
 
+                // A server this device connected to before — the actual fix
+                // for Tailscale/off-LAN addresses, which the scan below can
+                // never rediscover on its own (see ServerDiscovery.swift).
+                if !model.recentServers.isEmpty {
+                    Text("Recent").font(.inter(12.5, .semibold)).foregroundStyle(Theme.textMuted)
+                    ForEach(model.recentServers) { server in
+                        AppCard(onTap: { model.pickServer(server.url) }) {
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(server.name).appTitle()
+                                    Text(server.url).appBodySmall().foregroundStyle(Theme.textMuted)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textFaint)
+                            }
+                        }
+                    }
+                    Spacer().frame(height: 4)
+                }
+
                 if servers.isEmpty {
                     AppCard {
                         if scanning {
@@ -39,7 +60,9 @@ struct DiscoveryView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("No server found automatically.")
                                     .appTitleSmall().foregroundStyle(Theme.text)
-                                Text("Automatic scan only sees the Wi-Fi this phone is on. Connecting from elsewhere — cellular, another network, or over Tailscale / a VPN — is normal: scan the QR code above, or type the address from the desktop's \u{201C}Pair a phone\u{201D} list. On the same Wi-Fi with still nothing, Family Agent may need Local Network access (Settings → Family Agent).")
+                                Text(tailscaleActive
+                                     ? "Tailscale looks active on this phone. Automatic scan only ever sees the Wi-Fi this phone is on — it can't find a server that's only reachable over Tailscale, even on the same tailnet. Scan the QR code above, or enter the Tailscale address from the desktop's \u{201C}Pair a phone\u{201D} panel; once it works it's remembered here as \u{201C}Recent\u{201D}."
+                                     : "Automatic scan only sees the Wi-Fi this phone is on. Connecting from elsewhere — cellular, another network, or over Tailscale / a VPN — is normal: scan the QR code above, or type the address from the desktop's \u{201C}Pair a phone\u{201D} list. On the same Wi-Fi with still nothing, Family Agent may need Local Network access (Settings → Family Agent).")
                                     .appBodySmall().foregroundStyle(Theme.textBody)
                             }
                         }
@@ -85,6 +108,7 @@ struct DiscoveryView: View {
         }
         .task(id: scanID) {
             scanning = true
+            tailscaleActive = ServerDiscovery.tailscaleLikelyActive()
             for await found in discovery.discover() {
                 servers = found
             }

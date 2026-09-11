@@ -7,6 +7,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 private val Context.dataStore by preferencesDataStore(name = "family_agent_settings")
 private val SERVER_URL_KEY = stringPreferencesKey("server_url")
@@ -25,6 +27,12 @@ private val MIC_ON_LEFT_KEY = booleanPreferencesKey("mic_button_on_left")
 private val REMEMBERED_LOGIN_URL_KEY = stringPreferencesKey("remembered_login_url")
 private val REMEMBERED_USERNAME_KEY = stringPreferencesKey("remembered_username")
 private val REMEMBERED_PASSWORD_KEY = stringPreferencesKey("remembered_password")
+// Recently connected servers — a one-tap reconnect on the discovery screen.
+// This is what makes a Tailscale (or any off-LAN) address usable at all after
+// the first time: mDNS can't find it again on its own (multicast doesn't
+// cross a tailnet), so remembering it here is the fix, not a better scan.
+private val RECENT_SERVERS_KEY = stringPreferencesKey("recent_servers")
+private val recentServersJson = Json { ignoreUnknownKeys = true }
 private val TASK_VIEWS = listOf("list", "day", "3day", "week", "month")
 
 // Prefill for the manual-address field only. The normal path is LAN discovery
@@ -125,6 +133,22 @@ class SettingsStore(private val context: Context) {
             it.remove(REMEMBERED_LOGIN_URL_KEY)
             it.remove(REMEMBERED_USERNAME_KEY)
             it.remove(REMEMBERED_PASSWORD_KEY)
+        }
+    }
+
+    /** Most-recently-used first, deduped by URL, capped at 5. */
+    val recentServers = context.dataStore.data.map { prefs ->
+        val raw = prefs[RECENT_SERVERS_KEY] ?: return@map emptyList<RecentServer>()
+        runCatching { recentServersJson.decodeFromString<List<RecentServer>>(raw) }.getOrDefault(emptyList())
+    }
+
+    suspend fun addRecentServer(name: String, url: String) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[RECENT_SERVERS_KEY]?.let {
+                runCatching { recentServersJson.decodeFromString<List<RecentServer>>(it) }.getOrDefault(emptyList())
+            } ?: emptyList()
+            val next = (listOf(RecentServer(name, url)) + current.filter { it.url != url }).take(5)
+            prefs[RECENT_SERVERS_KEY] = recentServersJson.encodeToString(next)
         }
     }
 }

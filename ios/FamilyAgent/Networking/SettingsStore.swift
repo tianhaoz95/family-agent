@@ -14,6 +14,7 @@ struct SettingsStore {
         static let taskView = "task_view"
         static let autoRead = "auto_read_replies"
         static let micOnLeft = "mic_button_on_left"
+        static let recentServers = "recent_servers"
     }
 
     struct Session {
@@ -21,6 +22,37 @@ struct SettingsStore {
         var token: String
         var serverName: String
         var userName: String
+    }
+
+    /// A server this device has successfully connected to before — shown on
+    /// the discovery screen as a one-tap reconnect. This is what makes a
+    /// Tailscale (or any off-LAN) address usable at all after the first time:
+    /// Bonjour/mDNS can't find it again on its own (multicast doesn't cross
+    /// a tailnet), so remembering it here is the fix, not a better scan.
+    struct RecentServer: Codable, Identifiable, Equatable {
+        var name: String
+        var url: String
+        var id: String { url }
+    }
+
+    /// Most-recently-used first, deduped by URL, capped at 5.
+    var recentServers: [RecentServer] {
+        get {
+            guard let data = defaults.data(forKey: K.recentServers),
+                  let list = try? JSONDecoder().decode([RecentServer].self, from: data) else { return [] }
+            return list
+        }
+        nonmutating set {
+            guard let data = try? JSONEncoder().encode(Array(newValue.prefix(5))) else { return }
+            defaults.set(data, forKey: K.recentServers)
+        }
+    }
+
+    func addRecentServer(name: String, url: String) {
+        var list = recentServers
+        list.removeAll { $0.url == url }
+        list.insert(RecentServer(name: name, url: url), at: 0)
+        recentServers = list
     }
 
     var session: Session? {

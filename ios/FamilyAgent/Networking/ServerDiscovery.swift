@@ -172,6 +172,31 @@ final class ServerDiscovery: Sendable {
         }
     }
 
+    /// True when this device has a Tailscale-shaped address (100.64.0.0/10 —
+    /// Tailscale's whole tailnet lives in this CGNAT block) on any interface.
+    /// Bonjour/mDNS relies on link-local multicast, which a tailnet's
+    /// point-to-point mesh doesn't relay, and the /24 probe above only ever
+    /// covers a real local subnet (192.168./10./172.) — so when this is true,
+    /// automatic discovery can only find a server on the SAME Wi-Fi as this
+    /// device, never one reachable purely over Tailscale. Used to show an
+    /// accurate hint instead of a scan that silently can't ever succeed.
+    static func tailscaleLikelyActive() -> Bool {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0 else { return false }
+        defer { freeifaddrs(ifaddr) }
+        var ptr = ifaddr
+        while let addr = ptr {
+            defer { ptr = addr.pointee.ifa_next }
+            guard let sa = addr.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+            var hostBuf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            getnameinfo(sa, socklen_t(sa.pointee.sa_len), &hostBuf, socklen_t(hostBuf.count), nil, 0, NI_NUMERICHOST)
+            let ip = String(decoding: hostBuf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            let parts = ip.split(separator: ".").compactMap { Int($0) }
+            if parts.count == 4, parts[0] == 100, (64...127).contains(parts[1]) { return true }
+        }
+        return false
+    }
+
     /// This device's own IPv4 /24 (last octet 1…254, excluding self).
     private static func localSubnetHosts() -> [String] {
         var hosts: [String] = []
