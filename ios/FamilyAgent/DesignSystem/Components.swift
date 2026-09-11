@@ -77,6 +77,10 @@ struct ScreenScaffold<Content: View>: View {
                 ScrollView {
                     body(fillHeight: false)
                 }
+                // Content dissolves into the title as it scrolls up
+                // underneath — the same trick Chat/Messages introduced,
+                // standardized here so every scrollable screen gets it.
+                .overlay(alignment: .top) { TopScrollFade() }
             } else {
                 body(fillHeight: true)
             }

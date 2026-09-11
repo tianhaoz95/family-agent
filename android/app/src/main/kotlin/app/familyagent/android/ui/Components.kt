@@ -101,28 +101,37 @@ fun ScreenScaffold(
     hasMenuButton: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(modifier.fillMaxSize()) {
-        Text(
-            title,
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier
-                .padding(start = if (hasMenuButton) 66.dp else 20.dp, end = 20.dp)
-                .padding(top = if (hasMenuButton) 12.dp else 58.dp, bottom = 6.dp),
-        )
-        Column(
-            Modifier
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 8.dp),
-        ) {
+    Box(Modifier.fillMaxSize()) {
+        Column(modifier.fillMaxSize()) {
             Text(
-                subtitle,
-                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = SourceSerif),
-                color = AppAccents.textBody,
+                title,
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier
+                    .padding(start = if (hasMenuButton) 66.dp else 20.dp, end = 20.dp)
+                    .padding(top = if (hasMenuButton) 12.dp else 58.dp, bottom = 6.dp),
             )
-            Spacer(Modifier.height(22.dp))
-            content()
+            Column(
+                Modifier
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 8.dp),
+            ) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = SourceSerif),
+                    color = AppAccents.textBody,
+                )
+                Spacer(Modifier.height(22.dp))
+                content()
+            }
         }
+        // Content dissolves into the header as it scrolls up underneath —
+        // the same trick Chat/Messages introduced, standardized here so
+        // every screen gets it. Sits outside the scrolling Column above (a
+        // fixed sibling in this Box), whether that scrolling comes from a
+        // `verticalScroll` modifier the caller passed in or an inner
+        // LazyColumn in `content()`.
+        TopScrollFade(Modifier.align(Alignment.TopCenter))
     }
 }
 
