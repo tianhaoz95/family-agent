@@ -5,6 +5,20 @@ import SwiftUI
 /// The iOS mirror of the desktop `#view-artifacts` and Android `ArtifactsScreen`.
 struct ArtifactsView: View {
     @Environment(AppModel.self) private var model
+    // Set imperatively, only inside the row's tap action — NOT
+    // `NavigationLink(value: ArtifactPresentation(...))`, which was tried
+    // first and made tapping a row silently do nothing: that constructs a
+    // fresh (random-UUID) value on every view *re-render*, not just on tap,
+    // since it's computed declaratively in the body. SwiftUI needs a
+    // NavigationLink's value to stay stable across renders while a tap is
+    // being recognized; regenerating it on every render — confirmed via
+    // device logs: zero requests to /artifacts/:id ever fired — can drop
+    // the tap before it ever reaches the destination or the network.
+    // `.navigationDestination(item:)` (same pattern as `AppModel
+    // .viewingArtifact` + `fullScreenCover(item:)`) pushes only when this
+    // is explicitly set, so it's still a fresh identity per tap without
+    // that hazard.
+    @State private var pushed: ArtifactPresentation?
 
     var body: some View {
         ScrollView {
@@ -20,7 +34,9 @@ struct ArtifactsView: View {
                         )
                     } else {
                         ForEach(model.artifacts) { a in
-                            NavigationLink(value: ArtifactPresentation(artifactId: a.id)) {
+                            Button {
+                                pushed = ArtifactPresentation(artifactId: a.id)
+                            } label: {
                                 AppCard {
                                     HStack(spacing: 8) {
                                         VStack(alignment: .leading, spacing: 3) {
@@ -46,7 +62,7 @@ struct ArtifactsView: View {
                 }
             }
         }
-        .navigationDestination(for: ArtifactPresentation.self) { presentation in
+        .navigationDestination(item: $pushed) { presentation in
             ArtifactViewerView(artifactId: presentation.artifactId, presentedAsSheet: false)
         }
         .task { await model.refreshArtifacts() }

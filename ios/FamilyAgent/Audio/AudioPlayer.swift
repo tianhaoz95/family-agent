@@ -58,7 +58,7 @@ final class AudioPlayer: NSObject, AVAudioPlayerDelegate {
         // `.playback` makes `setCategory` throw, which used to be swallowed by the
         // catch in `toggle`, so the reply fetched but never played a sound.
         let options: AVAudioSession.CategoryOptions =
-            category == .playAndRecord ? [.duckOthers, .defaultToSpeaker, .allowBluetooth] : [.duckOthers]
+            category == .playAndRecord ? [.duckOthers, .defaultToSpeaker, .allowBluetoothHFP] : [.duckOthers]
         try s.setCategory(category, mode: .spokenAudio, options: options)
         try s.setActive(true, options: [])
     }

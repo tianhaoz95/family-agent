@@ -273,7 +273,17 @@ final class ArtifactWebBridge {
         let anchors = comments.map { ["id": $0.id, "quote": $0.quote ?? "", "prefix": $0.prefix ?? "", "suffix": $0.suffix ?? "", "status": $0.status] }
         guard let data = try? JSONSerialization.data(withJSONObject: anchors),
               let json = String(data: data, encoding: .utf8) else { return }
-        webView?.evaluateJavaScript("window.__artifactApi && window.__artifactApi.setComments(\(json));", completionHandler: nil)
+        // evaluateJavaScript is main-actor-isolated (WKWebView); this class
+        // itself isn't (its callers span plain View methods that aren't all
+        // statically MainActor), so hop over for just this call rather than
+        // isolating the whole class and rippling that requirement outward.
+        // Capture the WKWebView reference itself, not `self` — sending
+        // `self` (a non-Sendable class) into the @MainActor closure is what
+        // strict concurrency flags as a race risk.
+        let wv = webView
+        Task { @MainActor in
+            _ = try? await wv?.evaluateJavaScript("window.__artifactApi && window.__artifactApi.setComments(\(json));")
+        }
     }
 }
 

@@ -109,7 +109,6 @@ struct Artifact: Codable, Sendable, Hashable, Identifiable {
     var sourceId: String? = nil
     var revision: Int = 0
     var canRevert: Bool = false
-    var openComments: Int = 0
     var createdAt: String = ""
     var updatedAt: String? = nil
     /// The raw <body> fragment the model wrote (for "view source").

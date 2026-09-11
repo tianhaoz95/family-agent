@@ -113,6 +113,12 @@ private struct QRCameraView: UIViewRepresentable {
 
         init(onCode: @escaping (String) -> Void) { self.onCode = onCode }
 
+        // PreviewView is a UIView subclass (implicitly main-actor-isolated);
+        // this is only ever called from makeUIView, itself @MainActor per
+        // the UIViewRepresentable protocol requirement, so this is a real
+        // MainActor context, not just a nonisolated method the compiler
+        // can't see is always called from one.
+        @MainActor
         func attach(to view: PreviewView) {
             guard let device = AVCaptureDevice.default(for: .video),
                   let input = try? AVCaptureDeviceInput(device: device),
