@@ -28,11 +28,15 @@ fun SettingsScreen(
     onSetCardsEnabled: (Boolean) -> Unit = {},
     onSetVaultEnabled: (Boolean) -> Unit = {},
     onSetWebAccess: (provider: String, url: String?, apiKey: String?, onDone: () -> Unit, onError: (String) -> Unit) -> Unit = { _, _, _, _, _ -> },
+    desktopUpdateStatus: app.familyagent.android.data.DesktopUpdateStatus? = null,
+    desktopUpdatePolling: Boolean = false,
+    onTriggerDesktopUpdate: () -> Unit = {},
     onSave: (String) -> Unit,
     onSignOut: () -> Unit,
 ) {
     var draft by remember(serverUrl) { mutableStateOf(serverUrl) }
     var showAdvanced by remember { mutableStateOf(false) }
+    var showUpdateConfirm by remember { mutableStateOf(false) }
 
     ScreenScaffold(
         title = "Settings",
@@ -135,6 +139,57 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(18.dp))
             InternetAccessSection(serverSettings, onSetWebAccess)
+
+            if (serverSettings.isAdmin) {
+                Spacer(Modifier.height(18.dp))
+                SectionLabel("Host machine")
+                Spacer(Modifier.height(4.dp))
+                AppCard {
+                    Text(
+                        "Update & restart the host",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Checks the laptop running Family Agent for a new version, installs it, and restarts — " +
+                            "everyone reconnects in a few seconds. Only works while that machine is on.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppAccents.textSecondary,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { showUpdateConfirm = true },
+                        enabled = !desktopUpdatePolling,
+                        shape = MaterialTheme.shapes.medium,
+                    ) { Text("Update & restart") }
+                    if (desktopUpdateStatus != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            desktopUpdateStatusText(desktopUpdateStatus),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (desktopUpdateStatus.state == "error") MaterialTheme.colorScheme.error else AppAccents.textSecondary,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (showUpdateConfirm) {
+            AlertDialog(
+                onDismissRequest = { showUpdateConfirm = false },
+                title = { Text("Update & restart the host?") },
+                text = {
+                    Text(
+                        "This restarts the Family Agent server on the host laptop. Everyone using it — " +
+                            "on this phone or any other — will reconnect in a few seconds."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showUpdateConfirm = false; onTriggerDesktopUpdate() }) { Text("Update & restart") }
+                },
+                dismissButton = { TextButton(onClick = { showUpdateConfirm = false }) { Text("Cancel") } },
+            )
         }
 
         Spacer(Modifier.height(18.dp))
@@ -173,6 +228,17 @@ fun SettingsScreen(
             ) { Text("Save & reconnect") }
         }
     }
+}
+
+private fun desktopUpdateStatusText(s: app.familyagent.android.data.DesktopUpdateStatus): String = when (s.state) {
+    "requested" -> "Waiting for the host to pick this up…"
+    "checking" -> "Checking for an update…"
+    "no-update" -> "Already up to date."
+    "downloading" -> s.percent?.let { "Downloading… ${it.toInt()}%" } ?: "Downloading…"
+    "installing" -> "Installing…"
+    "restarting" -> "Restarting — should be back in a few seconds."
+    "error" -> s.message?.let { "Failed: $it" } ?: "Update failed."
+    else -> ""
 }
 
 private val WEB_PROVIDERS = listOf(

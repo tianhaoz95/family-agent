@@ -130,6 +130,7 @@ class MainActivity : ComponentActivity() {
                         is AuthState.PickServer ->
                             DiscoveryScreen(
                                 discovery = discovery,
+                                recentServers = state.recentServers,
                                 onPick = viewModel::pickServer,
                             )
                         is AuthState.NeedLogin -> {
@@ -503,6 +504,9 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onSetCardsEnabled = viewModel::setCardsEnabled,
                         onSetVaultEnabled = viewModel::setVaultEnabled,
                         onSetWebAccess = viewModel::setWebAccess,
+                        desktopUpdateStatus = state.desktopUpdateStatus,
+                        desktopUpdatePolling = state.desktopUpdatePolling,
+                        onTriggerDesktopUpdate = viewModel::triggerDesktopUpdate,
                         onSave = viewModel::setServerUrl,
                         onSignOut = viewModel::signOut,
                     )

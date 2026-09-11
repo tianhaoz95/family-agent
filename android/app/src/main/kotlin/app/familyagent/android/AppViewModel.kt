@@ -175,6 +175,11 @@ data class AppUiState(
     val cardsMode: String = "off",
     /** Loaded when the Settings screen opens — for the admin toggle. */
     val serverSettings: app.familyagent.android.data.ServerSettings? = null,
+    // ---- remote update-and-restart of the host desktop app ----
+    val desktopUpdateStatus: app.familyagent.android.data.DesktopUpdateStatus? = null,
+    val desktopUpdatePolling: Boolean = false,
+    // ---- discovery: servers this device connected to before (one-tap reconnect) ----
+    val recentServers: List<app.familyagent.android.data.RecentServer> = emptyList(),
     /** Non-null while the detail bottom-sheet is open. */
     val detail: DetailContent? = null,
     // ---- password vault ----
@@ -221,6 +226,11 @@ class AppViewModel(
         viewModelScope.launch {
             settings.micOnLeft.collect { on ->
                 _state.value = _state.value.copy(micOnLeft = on)
+            }
+        }
+        viewModelScope.launch {
+            settings.recentServers.collect { list ->
+                _state.value = _state.value.copy(recentServers = list)
             }
         }
         viewModelScope.launch {
@@ -288,6 +298,11 @@ class AppViewModel(
             result.onSuccess { resp ->
                 api.authToken = resp.token
                 settings.saveSession(current.serverUrl, resp.token, resp.user.displayName, current.serverName)
+                // A real sign-in just succeeded against this address — worth
+                // remembering as a one-tap reconnect, since this may be the
+                // only way back (an address reachable only over Tailscale
+                // can't be rediscovered by mDNS/the LAN probe).
+                settings.addRecentServer(current.serverName.ifBlank { current.serverUrl }, current.serverUrl)
                 if (remember) {
                     settings.saveRememberedLogin(current.serverUrl, username.trim(), password)
                 } else {
@@ -1410,6 +1425,45 @@ class AppViewModel(
             apiCall { api.setVaultEnabled(enabled) }.onSuccess {
                 _state.value = _state.value.copy(serverSettings = it, vaultMode = if (it.vaultEnabled) "on" else "off")
             }
+        }
+    }
+
+    // ---- remote update-and-restart of the host desktop app ----
+    //
+    // The desktop app itself does the actual check/download/install/relaunch
+    // (only its webview has the Tauri updater plugin) — this just asks it to,
+    // then polls the same hand-off status every client can see. A restart
+    // drops the connection out from under this poll partway through, which is
+    // expected: stop after a run of consecutive failures and let the normal
+    // connection banner take it from there.
+    fun triggerDesktopUpdate() {
+        if (_state.value.desktopUpdatePolling) return
+        viewModelScope.launch {
+            val started = apiCall { api.requestDesktopUpdate() }.getOrNull() ?: return@launch
+            _state.value = _state.value.copy(desktopUpdateStatus = started, desktopUpdatePolling = true)
+            var consecutiveFailures = 0
+            for (i in 0 until 45) { // ~90s at 2s/tick — comfortably covers check+download+install
+                delay(2000)
+                val result = runCatching { api.getDesktopUpdateStatus() }
+                var stop = false
+                result.onSuccess { status ->
+                    consecutiveFailures = 0
+                    _state.value = _state.value.copy(desktopUpdateStatus = status)
+                    if (status.state == "no-update" || status.state == "error") stop = true
+                }.onFailure {
+                    consecutiveFailures++
+                    // A few misses in a row almost certainly means the host is
+                    // mid-relaunch, not that something's actually wrong.
+                    if (consecutiveFailures >= 3) {
+                        _state.value = _state.value.copy(
+                            desktopUpdateStatus = _state.value.desktopUpdateStatus?.copy(state = "restarting")
+                        )
+                        stop = true
+                    }
+                }
+                if (stop) break
+            }
+            _state.value = _state.value.copy(desktopUpdatePolling = false)
         }
     }
 

@@ -354,6 +354,43 @@ extension AppModel {
             await refreshStatus()
         }
     }
+
+    // MARK: Remote update-and-restart of the host desktop app
+    //
+    // The desktop app itself does the actual check/download/install/relaunch
+    // (only its webview has the Tauri updater plugin) — this just asks it to,
+    // then polls the same hand-off status every client can see. A restart
+    // drops the connection out from under this poll partway through, which is
+    // expected and not an error: stop after a run of consecutive failures
+    // and let the normal connection banner take it from there.
+
+    func triggerDesktopUpdate() {
+        guard !desktopUpdatePolling else { return }
+        Task {
+            desktopUpdateStatus = await perform { try await api.requestDesktopUpdate() }
+            guard desktopUpdateStatus != nil else { return }
+            desktopUpdatePolling = true
+            var consecutiveFailures = 0
+            for _ in 0..<45 { // ~90s at 2s/tick — comfortably covers check+download+install
+                try? await Task.sleep(for: .seconds(2))
+                do {
+                    let status = try await api.getDesktopUpdateStatus()
+                    desktopUpdateStatus = status
+                    consecutiveFailures = 0
+                    if status.state == "no-update" || status.state == "error" { break }
+                } catch {
+                    consecutiveFailures += 1
+                    // A few misses in a row almost certainly means the host is
+                    // mid-relaunch, not that something's actually wrong.
+                    if consecutiveFailures >= 3 {
+                        desktopUpdateStatus = DesktopUpdateStatus(state: "restarting", requestedAt: desktopUpdateStatus?.requestedAt, requestedBy: desktopUpdateStatus?.requestedBy)
+                        break
+                    }
+                }
+            }
+            desktopUpdatePolling = false
+        }
+    }
     /// Internet access: provider "none" = off; searxng needs `url`; tavily/brave need `apiKey`.
     func setWebAccess(provider: String, url: String?, apiKey: String?) {
         Task {

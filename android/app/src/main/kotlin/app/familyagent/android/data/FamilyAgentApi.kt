@@ -139,6 +139,11 @@ class FamilyAgentApi(
     suspend fun setVaultEnabled(enabled: Boolean): ServerSettings =
         json.decodeFromString(send("PUT", "/settings", json.encodeToString(UpdateSettingsRequest(vaultEnabled = enabled))))
 
+    // ---- remote update-and-restart of the host desktop app ----
+    suspend fun getDesktopUpdateStatus(): DesktopUpdateStatus = json.decodeFromString(get("/system/update-status"))
+    suspend fun requestDesktopUpdate(): DesktopUpdateStatus =
+        json.decodeFromString(sendNoBody("POST", "/system/update-request"))
+
     /** Set the internet-access provider (`"none"` = off) and its companion URL / API key. */
     suspend fun setWebAccess(provider: String, url: String? = null, apiKey: String? = null): ServerSettings =
         json.decodeFromString(

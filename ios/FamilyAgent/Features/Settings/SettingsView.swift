@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var serverURLDraft = ""
     @State private var showAdvanced = false
+    @State private var showUpdateConfirm = false
 
     var body: some View {
         ScreenScaffold(title: "Settings",
@@ -64,6 +65,26 @@ struct SettingsView: View {
 
                     section("Internet access")
                     InternetAccessSection(settings: s)
+
+                    if s.isAdmin {
+                        section("Host machine")
+                        AppCard {
+                            Text("Update & restart the host").appTitleSmall()
+                            Spacer().frame(height: 4)
+                            Text("Checks the laptop running Family Agent for a new version, installs it, and restarts \u{2014} everyone reconnects in a few seconds. Only works while that machine is on.")
+                                .appBodySmall().foregroundStyle(Theme.textMuted)
+                            Spacer().frame(height: 10)
+                            Button("Update & restart") { showUpdateConfirm = true }
+                                .buttonStyle(.soft)
+                                .disabled(model.desktopUpdatePolling)
+                            if let status = model.desktopUpdateStatus {
+                                Spacer().frame(height: 8)
+                                Text(desktopUpdateStatusText(status))
+                                    .appLabelSmall()
+                                    .foregroundStyle(status.state == "error" ? Theme.danger : Theme.textMuted)
+                            }
+                        }
+                    }
                 }
 
                 section("Signed in as")
@@ -97,6 +118,12 @@ struct SettingsView: View {
             await model.refreshServerSettings()
             serverURLDraft = model.serverURL
         }
+        .alert("Update & restart the host?", isPresented: $showUpdateConfirm) {
+            Button("Update & restart", role: .destructive) { model.triggerDesktopUpdate() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This restarts the Family Agent server on the host laptop. Everyone using it \u{2014} on this phone or any other \u{2014} will reconnect in a few seconds.")
+        }
     }
 
     @ViewBuilder
@@ -106,6 +133,19 @@ struct SettingsView: View {
             .font(.inter(11.5, .bold)).tracking(0.3)
             .foregroundStyle(Theme.textMuted)
         Spacer().frame(height: 8)
+    }
+
+    private func desktopUpdateStatusText(_ s: DesktopUpdateStatus) -> String {
+        switch s.state {
+        case "requested": return "Waiting for the host to pick this up\u{2026}"
+        case "checking": return "Checking for an update\u{2026}"
+        case "no-update": return "Already up to date."
+        case "downloading": return s.percent.map { "Downloading\u{2026} \(Int($0))%" } ?? "Downloading\u{2026}"
+        case "installing": return "Installing\u{2026}"
+        case "restarting": return "Restarting \u{2014} should be back in a few seconds."
+        case "error": return s.message.map { "Failed: \($0)" } ?? "Update failed."
+        default: return ""
+        }
     }
 
     private func cardsHint(_ s: ServerSettings) -> String {

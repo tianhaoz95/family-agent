@@ -684,6 +684,15 @@ export function toolUrl(toolsPort: number, path: string): string {
   return `http://127.0.0.1:${toolsPort}${path}`;
 }
 
+/** Remote update-and-restart of the host desktop app (triggered from a phone). */
+export interface DesktopUpdateStatus {
+  state: "idle" | "requested" | "checking" | "no-update" | "downloading" | "installing" | "restarting" | "error";
+  message?: string;
+  percent?: number;
+  requestedAt?: string;
+  requestedBy?: string;
+}
+
 export const api = {
   health: () => request<Health>("/health"),
 
@@ -709,6 +718,12 @@ export const api = {
   updateUser: (id: string, patch: { displayName?: string; password?: string; role?: "admin" | "member" }) =>
     request<{ user: User }>(`/users/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteUser: (id: string) => request<{ deleted: true }>(`/users/${id}`, { method: "DELETE" }),
+
+  // ---- remote update-and-restart of the host desktop app ----
+  getDesktopUpdateStatus: () => request<DesktopUpdateStatus>("/system/update-status"),
+  requestDesktopUpdate: () => request<DesktopUpdateStatus>("/system/update-request", { method: "POST" }),
+  reportDesktopUpdateStatus: (patch: Omit<DesktopUpdateStatus, "requestedAt" | "requestedBy">) =>
+    request<DesktopUpdateStatus>("/system/update-report", { method: "POST", body: JSON.stringify(patch) }),
 
   getSettings: () => request<Settings>("/settings"),
   updateSettings: (patch: SettingsPatch) =>

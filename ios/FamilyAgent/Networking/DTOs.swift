@@ -275,6 +275,21 @@ struct EnvLocked: Codable, Sendable {
     var vaultEnabled: Bool = false
     var webSearchProvider: Bool = false
 }
+// MARK: - Remote update-and-restart of the host desktop app
+
+struct DesktopUpdateStatus: Codable, Sendable, Equatable {
+    var state: String = "idle" // idle | requested | checking | no-update | downloading | installing | restarting | error
+    var message: String? = nil
+    var percent: Double? = nil
+    var requestedAt: String? = nil
+    var requestedBy: String? = nil
+}
+struct UpdateReportRequest: Codable, Sendable {
+    var state: String
+    var message: String? = nil
+    var percent: Double? = nil
+}
+
 struct UpdateSettingsRequest: Codable, Sendable {
     var cardsEnabled: Bool? = nil
     var vaultEnabled: Bool? = nil

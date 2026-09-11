@@ -331,6 +331,18 @@ data class EnvLocked(
     val webSearchProvider: Boolean = false,
 )
 
+// ---- remote update-and-restart of the host desktop app ----
+
+@Serializable
+data class DesktopUpdateStatus(
+    // idle | requested | checking | no-update | downloading | installing | restarting | error
+    val state: String = "idle",
+    val message: String? = null,
+    val percent: Double? = null,
+    val requestedAt: String? = null,
+    val requestedBy: String? = null,
+)
+
 @Serializable
 data class UpdateSettingsRequest(
     val cardsEnabled: Boolean? = null,

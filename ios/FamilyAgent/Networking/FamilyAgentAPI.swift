@@ -181,6 +181,11 @@ struct FamilyAgentAPI: Sendable {
     func setVaultEnabled(_ enabled: Bool) async throws -> ServerSettings {
         try await send("PUT", "/settings", body: UpdateSettingsRequest(vaultEnabled: enabled))
     }
+
+    // MARK: - Remote update-and-restart of the host desktop app
+
+    func getDesktopUpdateStatus() async throws -> DesktopUpdateStatus { try await get("/system/update-status") }
+    func requestDesktopUpdate() async throws -> DesktopUpdateStatus { try await send("POST", "/system/update-request") }
     /// Set the internet-access provider (`"none"` = off) plus its companion URL / API key.
     func setWebAccess(provider: String, url: String? = nil, apiKey: String? = nil) async throws -> ServerSettings {
         try await send("PUT", "/settings", body: UpdateSettingsRequest(

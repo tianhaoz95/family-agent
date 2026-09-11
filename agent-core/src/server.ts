@@ -81,6 +81,7 @@ import { lanAddrs } from "./lan.js";
 import { warmCompute } from "./compute/run.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { persistSettings } from "./settingsFile.js";
+import { getDesktopUpdateStatus, requestDesktopUpdate, reportDesktopUpdateStatus } from "./desktopUpdate.js";
 import { verifyPassword, bearerToken } from "./auth.js";
 import { wrapCard, type CardRecord, type RenderedCard } from "./cards/wrap.js";
 import { wrapArtifact, toAnchor } from "./artifacts/wrap.js";
@@ -2806,6 +2807,28 @@ export function buildServer(
     }
 
     return settingsPayload(req.authUser);
+  });
+
+  // ---- remote update-and-restart of the host desktop app ----
+  // See desktopUpdate.ts for the full hand-off shape. Reading/reporting is
+  // open to any signed-in user (the desktop's own webview may currently be
+  // signed in as a non-admin family member and still needs to report
+  // progress); only the trigger itself is admin-gated.
+  app.get("/system/update-status", async () => getDesktopUpdateStatus());
+
+  app.post("/system/update-request", { preHandler: requireAdmin }, async (req) => {
+    return requestDesktopUpdate(req.authUser.displayName);
+  });
+
+  const UpdateReportBody = z.object({
+    state: z.enum(["checking", "no-update", "downloading", "installing", "restarting", "error"]),
+    message: z.string().trim().max(500).optional(),
+    percent: z.number().min(0).max(100).optional(),
+  });
+  app.post("/system/update-report", async (req, reply) => {
+    const parsed = UpdateReportBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    return reportDesktopUpdateStatus(parsed.data);
   });
 
   return app;

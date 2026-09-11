@@ -4526,6 +4526,33 @@ async function checkForUpdate({ quiet = false } = {}): Promise<void> {
 
 settingsUpdateCheckBtn.addEventListener("click", () => void checkForUpdate());
 
+// Shared by the manual "Install" button below and the remote-triggered flow
+// (pollRemoteUpdateRequest) — downloads, installs, and relaunches, reporting
+// progress through onProgress as it goes. Never asks for confirmation itself;
+// callers that need one (the manual button) ask before calling this.
+async function performUpdateInstall(update: PendingUpdate, onProgress: (text: string) => void): Promise<void> {
+  let downloaded = 0;
+  let total = 0;
+  await update.downloadAndInstall((event: any) => {
+    if (event?.event === "Started") {
+      total = event.data?.contentLength ?? 0;
+      onProgress("Downloading…");
+    } else if (event?.event === "Progress") {
+      downloaded += event.data?.chunkLength ?? 0;
+      onProgress(
+        total
+          ? `Downloading… ${Math.round((downloaded / total) * 100)}%`
+          : `Downloading… ${(downloaded / 1_000_000).toFixed(0)} MB`
+      );
+    } else if (event?.event === "Finished") {
+      onProgress("Installing…");
+    }
+  });
+  const { relaunch } = await import("@tauri-apps/plugin-process");
+  onProgress("Restarting…");
+  await relaunch();
+}
+
 settingsUpdateInstallBtn.addEventListener("click", async () => {
   if (!pendingUpdate) return;
   if (!confirm(
@@ -4536,23 +4563,9 @@ settingsUpdateInstallBtn.addEventListener("click", async () => {
   settingsUpdateInstallBtn.disabled = true;
   settingsUpdateCheckBtn.disabled = true;
   try {
-    let downloaded = 0;
-    let total = 0;
-    await pendingUpdate.downloadAndInstall((event: any) => {
-      if (event?.event === "Started") {
-        total = event.data?.contentLength ?? 0;
-        settingsUpdateStatusEl.textContent = "Downloading…";
-      } else if (event?.event === "Progress") {
-        downloaded += event.data?.chunkLength ?? 0;
-        settingsUpdateStatusEl.textContent = total
-          ? `Downloading… ${Math.round((downloaded / total) * 100)}%`
-          : `Downloading… ${(downloaded / 1_000_000).toFixed(0)} MB`;
-      } else if (event?.event === "Finished") {
-        settingsUpdateStatusEl.textContent = "Installing…";
-      }
+    await performUpdateInstall(pendingUpdate, (text) => {
+      settingsUpdateStatusEl.textContent = text;
     });
-    const { relaunch } = await import("@tauri-apps/plugin-process");
-    await relaunch();
   } catch (err) {
     settingsUpdateStatusEl.textContent =
       `Update failed: ${err instanceof Error ? err.message : String(err)}`;
@@ -4560,6 +4573,71 @@ settingsUpdateInstallBtn.addEventListener("click", async () => {
     settingsUpdateCheckBtn.disabled = false;
   }
 });
+
+// ---------- remote update-and-restart, triggered from a phone ----------
+// A phone calls POST /system/update-request (admin-only); we just poll for
+// that the same way we'd poll for anything else, and when we see it, run the
+// exact same check -> download -> install -> relaunch sequence as the manual
+// button above, minus the confirm() dialog (the phone-side admin already
+// confirmed before sending the request — nobody would be at the laptop to
+// click a local dialog anyway). Progress is reported back so every client
+// polling GET /system/update-status (including the one that triggered it)
+// can show it. See agent-core/src/desktopUpdate.ts for the full shape.
+let handlingRemoteUpdateRequest = false;
+let lastHandledRemoteRequestAt: string | null = null;
+
+async function pollRemoteUpdateRequest(): Promise<void> {
+  if (!isTauri() || handlingRemoteUpdateRequest) return;
+  let status: Awaited<ReturnType<typeof api.getDesktopUpdateStatus>>;
+  try {
+    status = await api.getDesktopUpdateStatus();
+  } catch {
+    return; // signed out, or the server is mid-restart already — try again next tick
+  }
+  if (status.state !== "requested" || status.requestedAt === lastHandledRemoteRequestAt) return;
+  lastHandledRemoteRequestAt = status.requestedAt ?? null;
+  handlingRemoteUpdateRequest = true;
+
+  const report = (patch: Parameters<typeof api.reportDesktopUpdateStatus>[0]) => {
+    void api.reportDesktopUpdateStatus(patch).catch(() => {
+      /* best-effort — a failed status report shouldn't stop the update itself */
+    });
+  };
+  const who = status.requestedBy ? ` (requested by ${status.requestedBy} on their phone)` : "";
+  try {
+    report({ state: "checking" });
+    settingsUpdateCheckBtn.disabled = true;
+    settingsUpdateStatusEl.textContent = `Checking for an update${who}…`;
+    const { check } = await import("@tauri-apps/plugin-updater");
+    const update = await check();
+    if (!update) {
+      report({ state: "no-update" });
+      settingsUpdateStatusEl.textContent = "You're up to date.";
+      settingsUpdateCheckBtn.disabled = false;
+      handlingRemoteUpdateRequest = false;
+      return;
+    }
+    pendingUpdate = update as unknown as PendingUpdate;
+    settingsUpdateInstallBtn.disabled = true;
+    await performUpdateInstall(pendingUpdate, (text) => {
+      settingsUpdateStatusEl.textContent = text;
+      const percentMatch = /(\d+)%/.exec(text);
+      report(
+        percentMatch
+          ? { state: "downloading", percent: Number(percentMatch[1]) }
+          : { state: /Restarting/.test(text) ? "restarting" : "installing" }
+      );
+    });
+    // relaunch() ends this process — nothing below ever runs on success.
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    report({ state: "error", message });
+    settingsUpdateStatusEl.textContent = `Remote-triggered update failed: ${message}`;
+    settingsUpdateCheckBtn.disabled = false;
+    settingsUpdateInstallBtn.disabled = false;
+    handlingRemoteUpdateRequest = false;
+  }
+}
 
 // ---------- auth gate + boot ----------
 const gate = document.getElementById("gate")!;
@@ -4619,6 +4697,7 @@ function enterApp(user: User) {
   startChannelBadgePolling();
   showView("chat");
   void initUpdates();
+  setInterval(() => void pollRemoteUpdateRequest(), 5000);
   // A slow welcome drift until the first interaction (atmosphere.ts).
   atmosphereWelcome();
 }

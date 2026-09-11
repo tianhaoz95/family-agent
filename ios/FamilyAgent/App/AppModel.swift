@@ -140,6 +140,10 @@ final class AppModel {
     }
     var calAnchor: Date = Calendar.gregorianMonday.startOfDay(for: .now)
 
+    // ---- remote update-and-restart of the host desktop app ----
+    var desktopUpdateStatus: DesktopUpdateStatus?
+    var desktopUpdatePolling = false
+
     // Set while ArtifactViewerView is pushed (not presented as a sheet) —
     // mirrors `activeChannel`: MainShell hides its floating menu button while
     // this is true, since the pushed viewer's own system back button then
@@ -258,6 +262,11 @@ final class AppModel {
         }
     }
 
+    /// Recently connected servers — a one-tap reconnect on the discovery
+    /// screen, most valuable for an address auto-scan can't rediscover
+    /// (Tailscale/off-LAN). See SettingsStore.RecentServer.
+    var recentServers: [SettingsStore.RecentServer] { settings.recentServers }
+
     func backToServerPick() { auth = .pickServer }
 
     /// True while a scanned pairing QR is being redeemed (brief).
@@ -333,6 +342,10 @@ final class AppModel {
     private func finishSignIn(url: String, name: String, resp: LoginResponse) {
         api = FamilyAgentAPI(baseURL: url, authToken: resp.token)
         settings.saveSession(serverURL: url, token: resp.token, serverName: name, userName: resp.user.displayName)
+        // A real sign-in just succeeded against this address — worth
+        // remembering as a one-tap reconnect, since this may be the only way
+        // back (an address reachable only over Tailscale can't be rescanned).
+        settings.addRecentServer(name: name.isEmpty ? url : name, url: url)
         auth = .authed(resp.user)
         Task { await refreshStatus(); await refreshChannels() }
     }
