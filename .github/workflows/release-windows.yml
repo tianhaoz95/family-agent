@@ -1,0 +1,99 @@
+name: Release (Windows)
+
+# The macOS release is a local, notarized build (scripts/release-mac.sh).
+# Windows has no notarization step either, so it runs here, same pattern as
+# release-linux.yml: when a release is published, build the NSIS installer on
+# a clean Windows runner and attach it to that same release.
+# `workflow_dispatch` re-runs it against any existing tag, or (with
+# `no_upload`) just builds to validate the pipeline without touching a real
+# release.
+#
+# Auto-updates for Windows need the same Tauri updater signing key as the
+# Linux release, already set (or not) as a repo secret:
+#   gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/family-agent-updater.key
+#   gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD        # if the key has one
+# Without it the job still ships an installable .exe — just no updater entry.
+#
+# No OS-level code signing here — an unsigned .exe shows a SmartScreen
+# "unknown publisher" prompt on first run. That's a separate, bigger decision
+# (a code-signing cert) independent of the updater working at all.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the Windows build to (blank = latest)"
+        required: false
+      no_upload:
+        description: "Build only — don't attach to a release (pipeline validation)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    # Keep this workflow's shell the same as release-linux.yml's (and every
+    # other release script) rather than forking into PowerShell/cmd for one
+    # platform. GitHub's windows-latest runner ships Git for Windows, which
+    # puts bash.exe on PATH — same as any dev box with Git installed.
+    shell: bash
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Resolve the tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          if [ -z "$TAG" ] && [ "${{ inputs.no_upload }}" != "true" ]; then
+            TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Attaching Windows bundle to ${TAG:-<none, --no-upload>}"
+
+      # Check out the commit this workflow runs against, NOT the release tag —
+      # see the identical note in release-linux.yml. Same reasoning here.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - run: npm ci
+
+      - name: Build and publish the Windows bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          ARGS=()
+          [ -n "${{ steps.tag.outputs.tag }}" ] && ARGS+=(--tag "${{ steps.tag.outputs.tag }}")
+          [ "${{ inputs.no_upload }}" = "true" ] && ARGS+=(--no-upload)
+          ./scripts/release-windows.sh "${ARGS[@]}"
+
+      - name: Upload the installer as a workflow artifact
+        if: ${{ inputs.no_upload == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: desktop/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

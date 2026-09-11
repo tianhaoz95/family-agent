@@ -22,9 +22,17 @@ if [ ! -d "$AGENT_CORE/dist" ]; then
   exit 1
 fi
 
+# Portable digest: `shasum` (mac, most Linux) isn't guaranteed on every
+# builder — Git Bash on the Windows release runner has no Perl `shasum`, but
+# does ship GNU `sha256sum`. Either produces "<hex>  filename" lines, so the
+# `cut -d' ' -f1` below works unchanged with whichever is picked.
+if command -v shasum >/dev/null 2>&1; then HASH_CMD=(shasum -a 256)
+else HASH_CMD=(sha256sum)
+fi
+
 # A fingerprint of what the bundle depends on: the built JS + the dep manifest.
-STAMP_INPUT="$(cd "$AGENT_CORE" && find dist -type f -exec shasum {} + | shasum; shasum package.json)"
-STAMP="$(printf '%s' "$STAMP_INPUT" | shasum | cut -d' ' -f1)"
+STAMP_INPUT="$(cd "$AGENT_CORE" && find dist -type f -exec "${HASH_CMD[@]}" {} + | "${HASH_CMD[@]}"; "${HASH_CMD[@]}" package.json)"
+STAMP="$(printf '%s' "$STAMP_INPUT" | "${HASH_CMD[@]}" | cut -d' ' -f1)"
 STAMP_FILE="$STAGE/.stamp"
 
 if [ -f "$STAMP_FILE" ] && [ "$(cat "$STAMP_FILE")" = "$STAMP" ] \
@@ -41,10 +49,18 @@ mkdir -p "$STAGE/agent-core"
 cp -R "$AGENT_CORE/dist" "$STAGE/agent-core/dist"
 cp "$AGENT_CORE/package.json" "$STAGE/agent-core/package.json"
 
-# The Node binary (resolve nvm shim -> the real Mach-O).
+# The Node binary (resolve nvm shim -> the real Mach-O). On a plain PATH
+# install with no shim to resolve (e.g. actions/setup-node on the Windows
+# runner, where `command -v` also hands back an MSYS-style "/c/..." path a
+# native python3/node can't realpath anyway) just fall back to the
+# as-found path — it's already the real binary.
 NODE_BIN="$(command -v node || true)"
 [ -n "$NODE_BIN" ] || { echo "!! no 'node' on PATH to bundle" >&2; exit 1; }
-NODE_REAL="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_BIN")"
+if command -v python3 >/dev/null 2>&1; then
+  NODE_REAL="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_BIN" 2>/dev/null || echo "$NODE_BIN")"
+else
+  NODE_REAL="$NODE_BIN"
+fi
 cp "$NODE_REAL" "$STAGE/node"
 chmod +x "$STAGE/node"
 
