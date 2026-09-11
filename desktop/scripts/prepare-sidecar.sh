@@ -4,7 +4,7 @@
 # system Node or the repo checkout (see src-tauri/src/main.rs resolve_agent_core).
 #
 # `tauri.conf.json` ships `sidecar/` as bundle.resources, so in a packaged app
-# these land at <resource_dir>/sidecar/{agent-core,node}.
+# these land at <resource_dir>/sidecar/{agent-core,node(.exe)}.
 #
 # Idempotent: skips the (slow, downloading) production `npm install` when the
 # staged copy is already current for the built agent-core. Runs from
@@ -16,6 +16,19 @@ DESKTOP_DIR="$(dirname "$SCRIPT_DIR")"
 ROOT_DIR="$(dirname "$DESKTOP_DIR")"
 AGENT_CORE="$ROOT_DIR/agent-core"
 STAGE="$DESKTOP_DIR/src-tauri/sidecar"
+
+# Git Bash/MSYS is how this script runs on the Windows release runner (and
+# any dev box with Git for Windows) — several steps below need to know.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ON_WINDOWS=1 ;;
+  *)                    ON_WINDOWS=0 ;;
+esac
+
+# Windows' copy needs the .exe extension: an extensionless "node" resource
+# file wasn't picked up by Tauri's bundler there (tauri.windows.conf.json
+# declares "sidecar/node.exe" to match; see resolve_agent_core in main.rs).
+if [ "$ON_WINDOWS" -eq 1 ]; then NODE_DEST_NAME="node.exe"; else NODE_DEST_NAME="node"; fi
+NODE_DEST="$STAGE/$NODE_DEST_NAME"
 
 if [ ! -d "$AGENT_CORE/dist" ]; then
   echo "!! agent-core/dist missing — run 'npm --prefix ../agent-core run build' first" >&2
@@ -38,7 +51,7 @@ STAMP_FILE="$STAGE/.stamp"
 if [ -f "$STAMP_FILE" ] && [ "$(cat "$STAMP_FILE")" = "$STAMP" ] \
    && [ -f "$STAGE/agent-core/dist/server.js" ] \
    && [ -d "$STAGE/agent-core/node_modules" ] \
-   && [ -x "$STAGE/node" ]; then
+   && [ -x "$NODE_DEST" ]; then
   echo "==> prepare-sidecar: staged copy is current — skipping"
   exit 0
 fi
@@ -59,30 +72,25 @@ cp "$AGENT_CORE/package.json" "$STAGE/agent-core/package.json"
 # which is already the real binary.
 NODE_BIN="$(command -v node || true)"
 [ -n "$NODE_BIN" ] || { echo "!! no 'node' on PATH to bundle" >&2; exit 1; }
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*)
-    NODE_REAL="$NODE_BIN"
-    ;;
-  *)
-    if command -v python3 >/dev/null 2>&1; then
-      NODE_REAL="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_BIN" 2>/dev/null || echo "$NODE_BIN")"
-    else
-      NODE_REAL="$NODE_BIN"
-    fi
-    ;;
-esac
-cp "$NODE_REAL" "$STAGE/node"
+if [ "$ON_WINDOWS" -eq 1 ]; then
+  NODE_REAL="$NODE_BIN"
+elif command -v python3 >/dev/null 2>&1; then
+  NODE_REAL="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_BIN" 2>/dev/null || echo "$NODE_BIN")"
+else
+  NODE_REAL="$NODE_BIN"
+fi
+cp "$NODE_REAL" "$NODE_DEST"
 # Fail loudly here rather than leaving Tauri's later, less specific
-# "resource path `sidecar/node` doesn't exist" to explain it.
-if [ ! -f "$STAGE/node" ]; then
-  echo "!! staging the node binary failed: cp '$NODE_REAL' '$STAGE/node' left nothing there" >&2
+# "resource path `sidecar/node...` doesn't exist" to explain it.
+if [ ! -f "$NODE_DEST" ]; then
+  echo "!! staging the node binary failed: cp '$NODE_REAL' '$NODE_DEST' left nothing there" >&2
   echo "   NODE_BIN=$NODE_BIN" >&2
   echo "   NODE_REAL=$NODE_REAL" >&2
   ls -la -- "$NODE_REAL" >&2 2>&1 || echo "   (ls can't see NODE_REAL either)" >&2
   ls -la -- "$STAGE" >&2 2>&1 || echo "   (ls can't see \$STAGE either)" >&2
   exit 1
 fi
-chmod +x "$STAGE/node"
+chmod +x "$NODE_DEST"
 
 # Production deps, installed in isolation (the repo root is an npm workspace, so
 # installing there hoists + pulls devDeps; a symlink to it loops the resource

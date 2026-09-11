@@ -52,10 +52,16 @@ fn resolve_agent_core(app: &tauri::App) -> AgentCoreLaunch {
     if let Ok(res_dir) = app.path().resource_dir() {
         let bundled_core = res_dir.join("sidecar").join("agent-core");
         let bundled_entry = bundled_core.join("dist").join("server.js");
-        let bundled_node = res_dir.join("sidecar").join("node");
+        // Windows' bundled copy is "node.exe" (see prepare-sidecar.sh and
+        // tauri.windows.conf.json) — an extensionless "node" resource file
+        // wasn't picked up by Tauri's Windows resource bundler.
+        let bundled_node_exe = res_dir.join("sidecar").join("node.exe");
+        let bundled_node_noext = res_dir.join("sidecar").join("node");
         if bundled_entry.exists() {
-            let node = if bundled_node.exists() {
-                bundled_node
+            let node = if bundled_node_exe.exists() {
+                bundled_node_exe
+            } else if bundled_node_noext.exists() {
+                bundled_node_noext
             } else {
                 PathBuf::from("node")
             };
