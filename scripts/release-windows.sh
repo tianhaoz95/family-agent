@@ -65,15 +65,24 @@ to_native_path() {
 # Built natively on whatever architecture this runs on (an arm64 GitHub
 # runner, e.g. windows-11-arm, produces an arm64 build — no cross-
 # compilation). Normalized to Rust/Tauri's own naming (x86_64/aarch64,
-# matching the updater platform keys darwin-aarch64 etc. already use) —
-# `uname -m` under Git Bash on Windows has been seen to report either
-# style depending on the Git for Windows build, so accept both.
+# matching the updater platform keys darwin-aarch64 etc. already use).
 # $WIN_ARCH is the installer filename's own convention (x64/arm64, what
 # Windows users actually expect to see, not Rust's x86_64/aarch64).
-case "$(uname -m)" in
-  x86_64|amd64|AMD64)   ARCH="x86_64";  WIN_ARCH="x64" ;;
-  aarch64|arm64|ARM64)  ARCH="aarch64"; WIN_ARCH="arm64" ;;
-  *) die "unsupported architecture: $(uname -m)" ;;
+#
+# NOT `uname -m`: confirmed on a real windows-11-arm run that it reports
+# "x86_64" there, not "aarch64" — Git for Windows' bash.exe apparently
+# runs under x64 emulation even on an arm64 host, so `uname` sees the
+# emulated environment, not the true CPU. The whole build silently came
+# out named/labeled as x64 (and clobbered the real x64 upload's
+# latest.json entry) before this was caught. FA_ARCH_HINT (set from the
+# GitHub Actions `runner.arch` context, which GitHub itself derives from
+# the actual runner hardware — not from any binary that could itself be
+# emulated) is authoritative when present; uname is only a fallback for
+# a manual/local run with nothing else to go on.
+case "${FA_ARCH_HINT:-$(uname -m)}" in
+  x86_64|amd64|AMD64|X64)   ARCH="x86_64";  WIN_ARCH="x64" ;;
+  aarch64|arm64|ARM64)      ARCH="aarch64"; WIN_ARCH="arm64" ;;
+  *) die "unsupported architecture: ${FA_ARCH_HINT:-$(uname -m)}" ;;
 esac
 
 command -v node  >/dev/null 2>&1 || die "node not found"

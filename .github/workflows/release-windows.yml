@@ -117,6 +117,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # `uname -m` under Git Bash is not trustworthy for this — see the
+          # comment in release-windows.sh. runner.arch reflects GitHub's own
+          # knowledge of the actual runner hardware.
+          FA_ARCH_HINT: ${{ runner.arch }}
         run: |
           ARGS=()
           [ -n "${{ steps.tag.outputs.tag }}" ] && ARGS+=(--tag "${{ steps.tag.outputs.tag }}")
