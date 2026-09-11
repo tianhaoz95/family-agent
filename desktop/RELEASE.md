@@ -256,5 +256,25 @@ from the signed and stapled app.
   packaging".
 - **Every update is a full 321 MB download.** Tauri has no delta updates, so the
   whole bundle comes down each time. Worth batching changes into fewer releases.
-- **Updates only reach macOS.** The Linux `deb` build has no updater path
-  (Tauri supports AppImage only), and nothing is built for Windows.
+- **Windows** isn't built at all.
+
+## Linux
+
+Linux has no OS code-signing or notarization, so its release runs in CI, not
+locally: `.github/workflows/release-linux.yml` fires on `release: published`,
+builds the `.deb` + `.AppImage` on a clean Ubuntu runner via
+`scripts/release-linux.sh`, and attaches them to the same release the macOS
+build created. `workflow_dispatch` re-runs it against any existing tag.
+
+**Auto-update** for Linux needs the Tauri updater key as a repo secret (the
+same minisign key `~/.tauri/family-agent-updater.key` the macOS release uses):
+
+```
+gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/family-agent-updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD        # if the key has one
+```
+
+Without the secret the workflow still ships installable `.deb`/`.AppImage`
+packages — it just skips adding the `linux-x86_64` entry to `latest.json`, so
+installed copies don't self-update. `.deb` is never an updater target
+regardless (Tauri updates the AppImage only).

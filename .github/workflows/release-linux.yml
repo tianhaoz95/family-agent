@@ -1,0 +1,79 @@
+name: Release (Linux)
+
+# The macOS release is a local, notarized build (scripts/release-mac.sh). Linux
+# has no notarization step, so it runs here: when a release is published, build
+# the .deb + .AppImage on a clean Ubuntu runner and attach them to that same
+# release. `workflow_dispatch` re-runs it against any existing tag.
+#
+# Auto-updates for Linux need the Tauri updater signing key as a secret:
+#   gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/family-agent-updater.key
+#   gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD        # if the key has one
+# Without it the job still ships installable packages — just no updater entry.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the Linux build to (blank = latest)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-linux-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve the tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Attaching Linux bundles to $TAG"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            file
+          # AppImage tooling wants FUSE 2; the package was renamed on 24.04.
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2 || true
+
+      - run: npm ci
+
+      - name: Build and publish the Linux bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: ./scripts/release-linux.sh --tag "${{ steps.tag.outputs.tag }}"
