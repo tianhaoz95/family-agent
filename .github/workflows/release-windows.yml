@@ -62,6 +62,19 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Attaching Windows bundle to ${TAG:-<none, --no-upload>}"
 
+      # Leading hypothesis for a build failure seen here: prepare-sidecar.sh's
+      # own `[ -f ]` check confirms sidecar/node exists right after it's
+      # copied (a plain node.exe renamed with no extension), yet Tauri's
+      # build script reports it missing several minutes later, after nothing
+      # else in the build touches that path. That gap-then-vanish pattern is
+      # the signature of Windows Defender's real-time scan quarantining a
+      # freshly-written binary mid-build — a known flake on GitHub-hosted
+      # Windows runners; excluding the workspace is the standard fix. If the
+      # file still goes missing with this in place, look elsewhere.
+      - name: Exclude the workspace from Windows Defender
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+
       # Check out the commit this workflow runs against, NOT the release tag —
       # see the identical note in release-linux.yml. Same reasoning here.
       - uses: actions/checkout@v4
