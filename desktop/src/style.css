@@ -273,6 +273,14 @@ textarea {
   flex-direction: column;
   gap: 2px;
   flex: 1;
+  /* When the window is too short for every nav item, scroll the nav list on
+     its own instead of letting it overflow the rail — which .rail's own
+     `overflow: hidden` was silently cropping, with no way to reach whatever
+     fell below the fold. `min-height: 0` is required: a flex child defaults
+     to `min-height: auto` (won't shrink below its content), which would
+     otherwise stop this overflow/scroll from ever engaging. */
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .nav-item {
