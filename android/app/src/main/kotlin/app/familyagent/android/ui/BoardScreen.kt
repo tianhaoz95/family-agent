@@ -10,8 +10,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,6 +40,17 @@ private val NOTE_COLORS = listOf(
 )
 
 private const val NOTE_SIZE_DP = 148
+// Zoom shrinks/grows the STICKERS, not the board: the corkboard Surface
+// (fillMaxSize, measured once via onSizeChanged into `boardSize`) never
+// changes size. What changes is the logical coordinate space notes live in
+// (boardSize / zoom) and the on-screen size/position each note is rendered
+// at (pos and NOTE_SIZE_DP, each multiplied by zoom) — so zooming out
+// reveals more logical space for notes to spread into while the canvas
+// itself stays put. Mirrors the desktop/iOS fix. Plain arithmetic, no
+// graphicsLayer scale, so the drag gesture's raw pointer delta needs only a
+// divide-by-zoom to become a logical delta.
+private const val BOARD_ZOOM_MIN = 0.5f
+private const val BOARD_ZOOM_MAX = 1.5f
 
 private fun noteColor(name: String): Color =
     NOTE_COLORS.firstOrNull { it.first == name }?.second ?: NOTE_COLORS[0].second
@@ -63,6 +76,7 @@ fun BoardScreen(
     LaunchedEffect(Unit) { onRefresh() }
     var editing by remember { mutableStateOf<StickyNote?>(null) }
     var boardSize by remember { mutableStateOf(IntSize.Zero) }
+    var zoom by rememberSaveable { mutableFloatStateOf(1f) }
     val density = LocalDensity.current
     val notePx = with(density) { NOTE_SIZE_DP.dp.toPx() }
 
@@ -80,6 +94,8 @@ fun BoardScreen(
                     ) { Text(label) }
                 }
             }
+            Spacer(Modifier.width(10.dp))
+            ZoomControls(zoom = zoom, onZoom = { zoom = it.coerceIn(BOARD_ZOOM_MIN, BOARD_ZOOM_MAX) })
             Spacer(Modifier.width(10.dp))
             FilledTonalButton(
                 onClick = {
@@ -124,6 +140,7 @@ fun BoardScreen(
                         note = note,
                         boardSize = boardSize,
                         notePx = notePx,
+                        zoom = zoom,
                         onTap = { editing = note },
                         onMoved = { x, y -> onMove(note.id, x, y) },
                         onDelete = { onDelete(note.id) },
@@ -155,36 +172,64 @@ fun BoardScreen(
 }
 
 @Composable
+private fun ZoomControls(zoom: Float, onZoom: (Float) -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
+            IconButton(onClick = { onZoom(zoom - 0.1f) }, enabled = zoom > BOARD_ZOOM_MIN) {
+                Icon(Icons.Rounded.Remove, contentDescription = "Zoom out", modifier = Modifier.size(16.dp))
+            }
+            Text(
+                "${(zoom * 100).roundToInt()}%",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.widthIn(min = 34.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            IconButton(onClick = { onZoom(zoom + 0.1f) }, enabled = zoom < BOARD_ZOOM_MAX) {
+                Icon(Icons.Rounded.Add, contentDescription = "Zoom in", modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
 private fun DraggableNote(
     note: StickyNote,
     boardSize: IntSize,
     notePx: Float,
+    zoom: Float,
     onTap: () -> Unit,
     onMoved: (Float, Float) -> Unit,
     onDelete: () -> Unit,
 ) {
     val density = LocalDensity.current
-    // Position in px; seeded from the note's stored dp position, kept across
-    // recomposition (key() above scopes it per note).
+    // `pos` is logical (unzoomed) px — the same coordinate space note.x/y are
+    // stored in. Rendered position/size on screen are `pos * zoom` /
+    // `notePx * zoom`, computed below; kept across recomposition (key()
+    // above scopes it per note).
     var pos by remember { mutableStateOf(with(density) { Offset(note.x.dp.toPx(), note.y.dp.toPx()) }) }
     var dragging by remember { mutableStateOf(false) }
 
     fun clamp(o: Offset): Offset {
-        val maxX = (boardSize.width - notePx).coerceAtLeast(0f)
-        val maxY = (boardSize.height - notePx).coerceAtLeast(0f)
+        val maxX = (boardSize.width / zoom - notePx).coerceAtLeast(0f)
+        val maxY = (boardSize.height / zoom - notePx).coerceAtLeast(0f)
         return Offset(o.x.coerceIn(0f, maxX), o.y.coerceIn(0f, maxY))
     }
 
-    // Once the board has a size (and whenever it changes), pull a note that
-    // would sit off-screen — e.g. placed on a wider desktop board — into view.
-    LaunchedEffect(boardSize) {
+    // Once the board has a size (and whenever it or zoom changes), pull a
+    // note that would sit off-screen — e.g. placed on a wider desktop board,
+    // or now out of range after a zoom change — into view.
+    LaunchedEffect(boardSize, zoom) {
         if (boardSize != IntSize.Zero) pos = clamp(pos)
     }
 
     Box(
         Modifier
-            .offset { IntOffset(pos.x.roundToInt(), pos.y.roundToInt()) }
-            .size(NOTE_SIZE_DP.dp)
+            .offset { IntOffset((pos.x * zoom).roundToInt(), (pos.y * zoom).roundToInt()) }
+            .size(with(density) { (notePx * zoom).toDp() })
             .rotate(if (dragging) 0f else noteTilt(note.id))
             .shadow(if (dragging) 12.dp else 4.dp, RoundedCornerShape(3.dp))
             .clip(RoundedCornerShape(3.dp))
@@ -192,7 +237,7 @@ private fun DraggableNote(
             .pointerInput(note.id) {
                 detectTapGestures(onTap = { onTap() })
             }
-            .pointerInput(note.id, boardSize) {
+            .pointerInput(note.id, boardSize, zoom) {
                 detectDragGestures(
                     onDragStart = { dragging = true },
                     onDragEnd = {
@@ -204,23 +249,23 @@ private fun DraggableNote(
                     onDragCancel = { dragging = false },
                 ) { change, drag ->
                     change.consume()
-                    pos = clamp(pos + drag)
+                    pos = clamp(pos + drag / zoom)
                 }
             }
-            .padding(12.dp),
+            .padding(with(density) { (12 * zoom).toDp() }),
     ) {
         Text(
             note.text.ifBlank { "Tap to write…" },
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize * zoom),
             color = if (note.text.isBlank()) Color(0x660F172A) else Color(0xFF33302A),
-            modifier = Modifier.padding(top = 6.dp, end = 14.dp),
+            modifier = Modifier.padding(top = (6 * zoom).dp, end = (14 * zoom).dp),
         )
         Icon(
             Icons.Rounded.Close,
             contentDescription = "Remove note",
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .size(18.dp)
+                .size((18 * zoom).dp)
                 .clip(CircleShape)
                 .pointerInput(note.id) { detectTapGestures(onTap = { onDelete() }) },
             tint = Color(0x800F172A),
