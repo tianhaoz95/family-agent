@@ -49,6 +49,19 @@ done
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { echo "!! $*" >&2; exit 1; }
 
+# Git Bash (the shell this script runs under everywhere, including the
+# Windows CI runner) hands back POSIX-style paths ("/d/a/..."). MSYS's own
+# exec() auto-translates a *lone* argv token that looks like one of those
+# into a native "D:\a\..." path before handing it to a non-MSYS program —
+# but only when the whole argv is nothing but the path; embed it in a larger
+# string (JS source passed to `node -e`) or glue a suffix onto it (gh's
+# `path#label` upload syntax) and that heuristic doesn't fire, so node/gh
+# get a path they can't resolve. Convert explicitly wherever either of those
+# applies. No-op on mac/linux (no cygpath there).
+to_native_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
+}
+
 command -v node  >/dev/null 2>&1 || die "node not found"
 command -v cargo >/dev/null 2>&1 || { [ -s "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"; }
 command -v cargo >/dev/null 2>&1 || die "cargo not found — install Rust"
@@ -64,7 +77,7 @@ fi
 
 say "preflight"
 
-VERSION="$(node -e "console.log(require('$CONF').version)")"
+VERSION="$(node -e "console.log(require(process.argv[1]).version)" "$(to_native_path "$CONF")")"
 if [ -z "$TAG" ] && [ "$NO_UPLOAD" -eq 0 ]; then
   TAG="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
 fi
@@ -130,7 +143,7 @@ INSTALLER_NAME="Family-Agent-$VERSION-x64-setup.exe"
 # Tauri's built filename has spaces ("Family Agent_1.3.0_x64-setup.exe") and
 # GitHub rewrites spaces in an uploaded asset's name to dots — copy to the
 # name we actually want first, same reasoning as release-linux.sh.
-STAGE_DIR="$(mktemp -d)"
+STAGE_DIR="$(to_native_path "$(mktemp -d)")"
 cp "$INSTALLER" "$STAGE_DIR/$INSTALLER_NAME"
 INSTALLER="$STAGE_DIR/$INSTALLER_NAME"
 printf '    %s\n' "-> $INSTALLER_NAME"
@@ -160,7 +173,7 @@ gh release upload "$TAG" --repo "$REPO" --clobber "$INSTALLER"
 # stays intact.
 if [ "$HAVE_KEY" -eq 1 ]; then
   say "adding windows-x86_64 to latest.json"
-  TMP="$(mktemp -d)"
+  TMP="$(to_native_path "$(mktemp -d)")"
   gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$TMP" --clobber \
     || die "could not fetch the current latest.json from $TAG"
 
