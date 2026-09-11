@@ -72,12 +72,33 @@ echo "==> resolving package dependencies"
 xcodebuild -resolvePackageDependencies \
   -project "$IOS/FamilyAgent.xcodeproj" -scheme FamilyAgent >/dev/null
 
+# CODE_SIGN_STYLE=Automatic below normally resolves the distribution
+# certificate + provisioning profile through Xcode's own signed-in account
+# (ios/RELEASE.md step 4). Without one signed in — a CI runner, or this
+# machine before ever opening Xcode's Accounts pane — xcodebuild can still
+# do it non-interactively with -allowProvisioningUpdates and the same App
+# Store Connect API key --upload already uses below. Falls back to
+# whatever account IS signed into Xcode if the key isn't configured.
+SIGNING_AUTH=()
+if [ -n "${FA_ASC_KEY_ID:-}" ] && [ -n "${FA_ASC_ISSUER_ID:-}" ]; then
+  ASC_KEY_FILE="$HOME/.appstoreconnect/private_keys/AuthKey_${FA_ASC_KEY_ID}.p8"
+  [ -f "$ASC_KEY_FILE" ] || ASC_KEY_FILE="$HOME/private_keys/AuthKey_${FA_ASC_KEY_ID}.p8"
+  if [ -f "$ASC_KEY_FILE" ]; then
+    SIGNING_AUTH=(-allowProvisioningUpdates \
+      -authenticationKeyPath "$ASC_KEY_FILE" \
+      -authenticationKeyID "$FA_ASC_KEY_ID" \
+      -authenticationKeyIssuerID "$FA_ASC_ISSUER_ID")
+    echo "    signing         API key $FA_ASC_KEY_ID (no Xcode account needed)"
+  fi
+fi
+
 echo "==> archiving (Release, generic iOS device)"
 xcodebuild archive \
   -project "$IOS/FamilyAgent.xcodeproj" \
   -scheme FamilyAgent \
   -configuration Release \
   -destination 'generic/platform=iOS' \
+  "${SIGNING_AUTH[@]}" \
   -archivePath "$ARCHIVE" \
   DEVELOPMENT_TEAM="$FA_TEAM_ID" \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
@@ -122,6 +143,7 @@ xcodebuild -exportArchive \
   -archivePath "$ARCHIVE" \
   -exportPath "$EXPORT_DIR" \
   -exportOptionsPlist "$EXPORT_PLIST" \
+  "${SIGNING_AUTH[@]}" \
   | grep -E 'error:|EXPORT (FAILED|SUCCEEDED)' || true
 
 IPA="$(find "$EXPORT_DIR" -name '*.ipa' -maxdepth 1 | head -1)"

@@ -22,8 +22,14 @@ on:
 permissions:
   contents: write
 
+# Shared with release-windows.yml and release-mac.yml (same group name,
+# keyed on tag only): all three platforms attach to the same release and
+# each merges its own entry into that release's latest.json (download,
+# add a key, re-upload). Run two of them at once and whichever uploads
+# last silently wins, dropping the other's platform entry. A per-workflow
+# group here wouldn't catch that — only serializing across all three does.
 concurrency:
-  group: release-linux-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+  group: release-assets-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
   cancel-in-progress: false
 
 jobs:

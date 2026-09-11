@@ -167,13 +167,26 @@ done
 gh release upload "$TAG" --repo "$REPO" --clobber "$DEB" "$APPIMAGE"
 
 # Patch latest.json to add the linux platform, if we have a signed updater
-# artifact. The macOS release wrote it with just darwin-*; we merge, not
-# replace, so a re-run or a mac re-release stays intact.
+# artifact. Another platform's build may have already written it (with its
+# own entry) — merge, don't replace, so a re-run or a same-release sibling
+# build stays intact. Nothing may have written it yet either: mac, linux and
+# windows all attach to the same release independently now (no fixed
+# ordering), so whichever runs first has to create it, not fail.
 if [ "$HAVE_KEY" -eq 1 ]; then
   say "adding linux-x86_64 to latest.json"
   TMP="$(mktemp -d)"
-  gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$TMP" --clobber \
-    || die "could not fetch the current latest.json from $TAG"
+  gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$TMP" --clobber 2>/dev/null || {
+    echo "    no latest.json on $TAG yet (first platform to publish) — starting fresh"
+    VERSION="$VERSION" python3 -c "
+import json, os, datetime
+json.dump({
+    'version': os.environ['VERSION'],
+    'notes': 'See the release notes on GitHub.',
+    'pub_date': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'),
+    'platforms': {},
+}, open('$TMP/latest.json', 'w'), indent=2)
+"
+  }
 
   SIG="$(cat "$UPDATER_SIG")" \
   URL="https://github.com/$REPO/releases/download/$TAG/$APPIMAGE_NAME" \

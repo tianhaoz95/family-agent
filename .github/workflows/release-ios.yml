@@ -1,0 +1,89 @@
+name: Release (iOS)
+
+# Archive, sign and upload the iOS app to TestFlight via scripts/release-ios.sh.
+# Manual only (workflow_dispatch) — unlike the desktop mac/linux/windows
+# workflows, this has nothing to do with a GitHub release: iOS ships to
+# TestFlight on its own versioning (MARKETING_VERSION in project.pbxproj),
+# not tied to a GitHub release tag (see ios/RELEASE.md). Bump the version,
+# push it, then run this.
+#
+# Signing needs no local certificate at all: with an Admin-role App Store
+# Connect API key, Apple signs the build in the cloud — the private key
+# never touches the runner (confirmed: the exported .ipa's embedded
+# provisioning profile references a certificate `security find-identity`
+# never shows locally either). A Developer-role key fails export with
+# "Cloud signing permission error" — if this ever does, the key was
+# downgraded or replaced; see ios/RELEASE.md.
+#
+# Needs these repo secrets (the same ones release-mac.yml's notarization
+# step uses — literally the same Apple Developer account):
+#   APPLE_API_KEY       base64 of the App Store Connect API key .p8 (Admin role)
+#   APPLE_API_KEY_ID    its key id
+#   APPLE_API_ISSUER    the issuer id
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Build number (blank = UTC timestamp, always unique)"
+        required: false
+      no_upload:
+        description: "Archive and export only — don't upload to App Store Connect (pipeline validation)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ios
+  cancel-in-progress: false
+
+jobs:
+  ios:
+    # Needs the iOS 26 SDK to compile at all — Glass.swift's `#available(iOS
+    # 26, *)`-gated calls still need the symbols present at compile time.
+    # Same reasoning as the "iOS build" job in ci.yml.
+    runs-on: macos-26
+    steps:
+      - name: Check the toolchain
+        run: |
+          xcodebuild -version
+          if ! xcodebuild -showsdks | grep -qE 'iphonesimulator(2[6-9]|[3-9][0-9])'; then
+            echo "::error::need the iOS 26 SDK or newer for the Liquid Glass APIs in Glass.swift"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Import the App Store Connect API key
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          echo -n "$APPLE_API_KEY" | base64 --decode \
+            -o "$HOME/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"
+
+      - name: Archive, export and upload
+        env:
+          FA_TEAM_ID: 68CTFST8W2
+          FA_ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          FA_ASC_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          ARGS=()
+          [ -n "${{ inputs.build }}" ] && ARGS+=(--build "${{ inputs.build }}")
+          [ "${{ inputs.no_upload }}" != "true" ] && ARGS+=(--upload)
+          ./scripts/release-ios.sh "${ARGS[@]}"
+
+      - name: Upload the .ipa as a workflow artifact
+        if: ${{ inputs.no_upload == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: ios/build/release/export/*.ipa
+          if-no-files-found: error
+
+      - name: Clean up the API key
+        if: always()
+        run: rm -rf "$HOME/.appstoreconnect"

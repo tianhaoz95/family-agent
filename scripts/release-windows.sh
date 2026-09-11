@@ -169,13 +169,26 @@ gh release delete-asset "$TAG" --repo "$REPO" "Family.Agent_${VERSION}_x64-setup
 gh release upload "$TAG" --repo "$REPO" --clobber "$INSTALLER"
 
 # Patch latest.json to add the windows platform, if we have a signed updater
-# artifact. We merge, not replace, so a re-run or another platform's release
-# stays intact.
+# artifact. Another platform's build may have already written it — merge,
+# don't replace, so a re-run or a same-release sibling build stays intact.
+# Nothing may have written it yet either: mac, linux and windows all attach
+# to the same release independently now (no fixed ordering), so whichever
+# runs first has to create it, not fail.
 if [ "$HAVE_KEY" -eq 1 ]; then
   say "adding windows-x86_64 to latest.json"
   TMP="$(to_native_path "$(mktemp -d)")"
-  gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$TMP" --clobber \
-    || die "could not fetch the current latest.json from $TAG"
+  gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$TMP" --clobber 2>/dev/null || {
+    echo "    no latest.json on $TAG yet (first platform to publish) — starting fresh"
+    FA_VERSION="$VERSION" FA_LATEST_JSON="$TMP/latest.json" node -e '
+      const fs = require("fs");
+      fs.writeFileSync(process.env.FA_LATEST_JSON, JSON.stringify({
+        version: process.env.FA_VERSION,
+        notes: "See the release notes on GitHub.",
+        pub_date: new Date().toISOString(),
+        platforms: {},
+      }, null, 2) + "\n");
+    '
+  }
 
   FA_SIG="$(cat "$UPDATER_SIG")" \
   FA_URL="https://github.com/$REPO/releases/download/$TAG/$INSTALLER_NAME" \
