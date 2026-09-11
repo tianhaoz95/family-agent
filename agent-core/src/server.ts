@@ -2470,6 +2470,24 @@ export function buildServer(
     return { deleted: true };
   });
 
+  // Manual resolve — the human marks a comment done without asking the
+  // assistant to touch the page. Distinct from resolve-comments below (which
+  // is AI-driven and may also edit the artifact); this is a plain status
+  // change, available on every open comment regardless of AI involvement.
+  app.post("/artifacts/:id/comments/:cid/resolve", async (req, reply) => {
+    if (artifactsGate(reply)) return;
+    const { id, cid } = req.params as { id: string; cid: string };
+    if (!req.userStore.getArtifact(id)) return reply.code(404).send({ error: "artifact not found" });
+    const parsed = z.object({ resolution: z.string().trim().max(2000).optional() }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const c = req.userStore.resolveArtifactComment(id, cid, {
+      resolution: parsed.data.resolution || "Marked resolved.",
+      resolvedBy: "user",
+    });
+    if (!c) return reply.code(404).send({ error: "comment not found" });
+    return { comment: c };
+  });
+
   // Run the assistant over the open comments: it edits the artifact and/or
   // replies to each. Awaited like POST /chat (a planner turn is slow).
   app.post("/artifacts/:id/resolve-comments", { bodyLimit: 4 * 1024 * 1024 }, async (req, reply) => {
@@ -2596,6 +2614,7 @@ export function buildServer(
     embedEnabled: config.embedEnabled,
     serverName: config.serverName,
     cardsEnabled: config.cardsEnabled,
+    vaultEnabled: config.vaultEnabled,
     // Internet access (research agent). The key itself is never sent back —
     // only whether one is stored.
     webEnabled: webEnabled(),
@@ -2622,6 +2641,7 @@ export function buildServer(
     embedModel: z.string().trim().max(120).optional(),
     serverName: z.string().trim().min(1).max(60).optional(),
     cardsEnabled: z.boolean().optional(),
+    vaultEnabled: z.boolean().optional(),
     webSearchProvider: z.enum(["searxng", "tavily", "brave", "ddg", "none"]).optional(),
     webSearchUrl: z.string().trim().max(300).optional(),
     webSearchApiKey: z.string().trim().max(400).optional(),
@@ -2634,12 +2654,12 @@ export function buildServer(
       return reply.code(400).send({ error: "Nothing to update." });
     }
 
-    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "webSearchProvider", "webSearchUrl", "webSearchApiKey"] as const;
+    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "vaultEnabled", "webSearchProvider", "webSearchUrl", "webSearchApiKey"] as const;
     if (req.authUser.role !== "admin" && adminFields.some((f) => patch[f] !== undefined)) {
       return reply.code(403).send({ error: "Only an admin can change machine settings." });
     }
 
-    for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled"] as const) {
+    for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "vaultEnabled"] as const) {
       if (patch[key] !== undefined && envLocked[key]) {
         return reply.code(400).send({
           error: `"${key}" is pinned by an environment variable and can't be changed here.`,
@@ -2693,6 +2713,7 @@ export function buildServer(
       embedModel: patch.embedModel,
       serverName: patch.serverName,
       cardsEnabled: patch.cardsEnabled,
+      vaultEnabled: patch.vaultEnabled,
       webSearchProvider: patch.webSearchProvider,
       webSearchUrl: patch.webSearchUrl,
       webSearchApiKey: patch.webSearchApiKey,
@@ -2719,6 +2740,10 @@ export function buildServer(
       config.cardsEnabled = patch.cardsEnabled;
       dropAllAgents(); // re-wire render_card into (or out of) every agent
     }
+    // No dropAllAgents() needed: vault-agent is forced-turn-only (/vault) and
+    // never wired into the planner's cached subagents array or any other
+    // cached agent's tool list, so there's no stale cache to invalidate.
+    if (patch.vaultEnabled !== undefined) config.vaultEnabled = patch.vaultEnabled;
     const webWas = webEnabled();
     if (patch.webSearchProvider !== undefined) config.webSearchProvider = patch.webSearchProvider;
     if (patch.webSearchUrl !== undefined) config.webSearchUrl = patch.webSearchUrl;
@@ -2765,6 +2790,10 @@ export function buildServer(
       [
         `AI-generated cards turned ${patch.cardsEnabled ? "on" : "off"}`,
         patch.cardsEnabled !== undefined,
+      ],
+      [
+        `Password vault turned ${patch.vaultEnabled ? "on" : "off"}`,
+        patch.vaultEnabled !== undefined,
       ],
       [
         config.webSearchProvider === "none"

@@ -165,6 +165,29 @@ describe("HTTP API — artifact comments", () => {
     expect((await inject(`/artifacts/${art.id}/comments`)).json().comments).toHaveLength(0);
   });
 
+  it("a comment can be resolved manually (no AI) and reopened again", async () => {
+    const art = store.scoped(admin.user.id).createArtifact({ title: "Plan", html: "<p>step one</p>" });
+    const created = await inject({
+      method: "POST",
+      url: `/artifacts/${art.id}/comments`,
+      payload: { body: "looks fine actually", quote: "step one", prefix: "", suffix: "" },
+    });
+    const cid = created.json().comment.id;
+
+    const resolved = await inject({ method: "POST", url: `/artifacts/${art.id}/comments/${cid}/resolve` });
+    expect(resolved.statusCode).toBe(200);
+    expect(resolved.json().comment.status).toBe("resolved");
+    expect(resolved.json().comment.resolvedBy).toBe("user");
+
+    // Resolved comments stay in the list (not deleted) — the client filters them.
+    const list = (await inject(`/artifacts/${art.id}/comments`)).json().comments;
+    expect(list).toHaveLength(1);
+    expect(list[0].status).toBe("resolved");
+
+    const reopened = await inject({ method: "PATCH", url: `/artifacts/${art.id}/comments/${cid}`, payload: { status: "open" } });
+    expect(reopened.json().comment.status).toBe("open");
+  });
+
   it("revert 409s when there's nothing to revert to", async () => {
     const art = store.scoped(admin.user.id).createArtifact({ title: "P", html: "<p>x</p>" });
     expect((await inject({ method: "POST", url: `/artifacts/${art.id}/revert` })).statusCode).toBe(409);

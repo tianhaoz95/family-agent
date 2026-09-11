@@ -36,6 +36,7 @@ export const envLocked = {
   embedModel: process.env.FAMILY_AGENT_EMBED_MODEL !== undefined,
   serverName: process.env.FAMILY_AGENT_SERVER_NAME !== undefined,
   cardsEnabled: process.env.FAMILY_AGENT_CARDS !== undefined,
+  vaultEnabled: process.env.FAMILY_AGENT_VAULT !== undefined,
   // One lock for the whole web-access group (provider + URL + key) — set any of
   // the three env vars and the Settings-page controls go read-only.
   webSearchProvider:
@@ -242,10 +243,16 @@ export const config = {
   // ---- password vault ----
   // A per-user encrypted store for passwords + TOTP seeds (optionally shared
   // across the family) that the local assistant can read out on request. OFF
-  // by default: it holds the family's most sensitive data and it changes the
-  // security posture, so it's an operator env switch like FAMILY_AGENT_WEB /
-  // _SHELL / _MCP, not a Settings-page toggle. FAMILY_AGENT_VAULT=1 enables it.
-  vaultEnabled: process.env.FAMILY_AGENT_VAULT === "1",
+  // by default — it holds the family's most sensitive data. An admin-only
+  // desktop Settings toggle, same as cardsEnabled: FAMILY_AGENT_VAULT=1/0
+  // pins it (env-locked, read-only in the UI) when set; otherwise the
+  // persisted setting from PUT /settings applies. The vault's own HTTP
+  // routes all gate on this per-request (see vaultGuard in server.ts), not
+  // at server startup, so flipping it takes effect immediately — no restart.
+  vaultEnabled:
+    process.env.FAMILY_AGENT_VAULT !== undefined
+      ? process.env.FAMILY_AGENT_VAULT === "1"
+      : persisted.vaultEnabled ?? false,
   // Whether the assistant may read vault secrets via tool calls (the "/vault"
   // forced chat turn). Separate switch so a family can keep the vault UI
   // without giving the AI access. Only consulted when vaultEnabled is on;

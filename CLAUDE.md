@@ -66,8 +66,9 @@ desktop style".
   (Settings → Internet access — pick DuckDuckGo for a keyless setup), or pin it with
   `FAMILY_AGENT_WEB_SEARCH_PROVIDER` = `searxng` (+ `_URL`), `tavily`/`brave` (+ `_API_KEY`),
   or `ddg`. An env var makes the in-app control read-only.
-- *Optional, for the password vault* (`FAMILY_AGENT_VAULT=1`): no extra deps — the crypto is
-  Node's built-in `node:crypto`. `FAMILY_AGENT_VAULT_AI=0` keeps the vault but denies the
+- *Optional, for the password vault*: no extra deps — the crypto is Node's built-in
+  `node:crypto`. Off by default; an admin flips it on from Settings, or pin it with
+  `FAMILY_AGENT_VAULT=1`/`0`. `FAMILY_AGENT_VAULT_AI=0` keeps the vault but denies the
   assistant. See "Password vault" below.
 - Android toolchain (JDK 17, Android SDK) lives in `.toolchains/` at the repo root, gitignored and
   machine-local — see `docs/BUILD_LOG.md`'s "android" section if it's missing and needs
@@ -187,6 +188,13 @@ returns `needsSetup: true` → `POST /auth/bootstrap` creates the first admin an
 data from a migrated single-user DB (owned by the `_legacy_` sentinel). Machine settings
 (`model`, `ollamaBaseUrl`, `ocrModel`, `serverName`) are admin-only; `inboxDir` is per-user.
 An upgraded single-user DB is migrated in `Store.migrate()` (adds `user_id` with a DEFAULT).
+iOS and Android's login screens have a **"Remember me"** toggle (on by default) that saves the
+typed username/password locally, keyed per server address, and pre-fills the form next time —
+purely a client-side convenience for re-typing credentials, unrelated to the session bearer
+token (which is what actually keeps a device signed in). iOS: `RememberedLogin` in
+`Networking/Keychain.swift` (real Keychain entry). Android: `SettingsStore.rememberedLogin`/
+`saveRememberedLogin` (plain DataStore, same trust boundary as the token already stored there —
+not field-level encrypted). Unchecking it on a sign-in clears anything saved for that server.
 
 **QR phone pairing.** The desktop "Pair a phone" panel has a toggle (device-local
 `localStorage` `familyAgent.pairAutoLogin`, **default on**): on, the QR carries a
@@ -950,11 +958,19 @@ Tests: `test/skills.test.ts`, `test/mcp.test.ts`.
 
 A per-user encrypted store for **passwords + TOTP seeds**, optionally shared
 across the family, that the local assistant can read out on request. OFF by
-default: `FAMILY_AGENT_VAULT=1` enables it, `FAMILY_AGENT_VAULT_AI=0` keeps the
-vault but denies the assistant — an operator env switch like
-`FAMILY_AGENT_WEB`/`_SHELL`/`_MCP`, not a Settings toggle, because it holds the
-family's most sensitive data. `/health.vault` (`"on"|"off"`) + `.vaultAi` gate
-both clients' Vault screen and the `/vault` command.
+default. **Admin-toggleable from Settings now** (as of 2026-09-11 — it was
+previously env-var-only, same as web access's history): each client's Settings
+page has an "Enable the password vault" switch that writes `vaultEnabled`
+through `PUT /settings` (admin-only, persisted via `settingsFile.ts`), same
+env > persisted > default precedence as `cardsEnabled`. Setting
+`FAMILY_AGENT_VAULT=1`/`0` still pins it (`envLocked.vaultEnabled`, control
+goes read-only) for an operator who wants it fixed regardless of what's saved
+in the UI. `FAMILY_AGENT_VAULT_AI=0` keeps the vault but denies the assistant
+— still env-only, since it's a narrower, less consequential switch than
+turning the whole vault on. `/health.vault` (`"on"|"off"`) + `.vaultAi` gate
+every client's Vault screen and the `/vault` command. No `dropAllAgents()` on
+toggle — `vault-agent` is forced-turn-only and never in any cached agent's
+tool list, so there's nothing stale to invalidate.
 
 - `agent-core/src/vault/crypto.ts` — hand-rolled envelope (same call as
   `auth.ts`'s scrypt, `mcp/client.ts`'s JSON-RPC): scrypt KDF, AES-256-GCM for

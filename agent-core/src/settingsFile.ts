@@ -25,6 +25,8 @@ export interface PersistedSettings {
   serverName?: string;
   /** Whether the assistant may answer with a generated HTML card (render_card). */
   cardsEnabled?: boolean;
+  /** Whether the password vault feature is turned on for this server. */
+  vaultEnabled?: boolean;
   /**
    * Web-search provider for the research agent (internet access). `"none"` (or
    * unset) means the whole web capability is off. See config.ts / web/search.ts.
@@ -40,7 +42,7 @@ const STRING_KEYS: (keyof PersistedSettings)[] = [
   "ocrModel", "asrModel", "ttsVoice", "embedModel", "model", "ollamaBaseUrl", "serverName",
   "webSearchProvider", "webSearchUrl", "webSearchApiKey",
 ];
-const BOOL_KEYS: (keyof PersistedSettings)[] = ["cardsEnabled"];
+const BOOL_KEYS: (keyof PersistedSettings)[] = ["cardsEnabled", "vaultEnabled"];
 
 function settingsPath(dataDir: string): string {
   return `${dataDir}/settings.json`;
