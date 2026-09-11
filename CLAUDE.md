@@ -604,10 +604,29 @@ reply's `artifact` chip opens it: desktop `#view-artifacts` (`main.ts`,
 `Destination.artifacts` → `ArtifactsView` + `ArtifactViewerView` (a
 fullScreenCover from the chip), Android `Destination.Artifacts` →
 `ArtifactsScreen` + `ArtifactViewScreen` (a nested `artifactview/{id}` route),
-both reusing the `CardWebView` isolation full-size. v1 has no iterate-in-place,
-export, channel-sharing, or `/artifact` forced turn. Tests:
-`test/artifacts.test.ts`. See `docs/DECISIONS.md` → "AI-generated full-page
-artifacts".
+both reusing the `CardWebView` isolation full-size. No export, channel-sharing,
+or `/artifact` forced turn. Tests: `test/artifacts.test.ts`.
+
+**Highlight-and-comment on an artifact.** Select text in the sealed viewer,
+leave a note, press **Ask AI** → an off-planner model call
+(`artifacts/resolve.ts`, `extraction.ts` pattern: two closure-bound tools,
+`edit_artifact({ html })` once + `resolve_comment({ commentId, reply })` per
+comment, validated with one retry) either edits the page or replies; an
+unaddressed comment stays open ("skipped"). `artifact_comments` on
+`ScopedStore` (scoped *through* the owning artifact), text-quote anchored
+(`quote` + `prefix`/`suffix`, re-located + `<mark>`-wrapped by
+`ARTIFACT_RUNTIME` = `CARD_RUNTIME` + an annotation IIFE). Editing keeps **one**
+prior version (`artifacts.prev_html` / `revision`); `POST
+/artifacts/:id/revert` is the one-step undo. The viewer↔page bridge is the same
+three-transport shape as the card height report (`postMessage` / WKScriptMessage
+/ `@JavascriptInterface`), carrying only strings. Routes: `GET/POST
+/artifacts/:id/comments`, `PATCH/DELETE …/:cid`, `POST
+/artifacts/:id/resolve-comments`, `POST /artifacts/:id/revert`. All three
+clients: a comments rail (desktop) / bottom sheet (mobile) beside the viewer.
+`wrapArtifact(a, comments)` now takes the comment list (seeds
+`window.__ARTIFACT_COMMENTS`; host re-pushes via `window.__artifactApi`).
+Tests: `test/artifactComments.test.ts`. See `docs/DECISIONS.md` →
+"AI-generated full-page artifacts" → "Follow-up: highlight-and-comment".
 
 ## "/" forces a chat turn to one specialist agent
 

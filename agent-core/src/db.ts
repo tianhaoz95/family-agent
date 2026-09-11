@@ -253,6 +253,10 @@ export interface ArtifactRecord {
   source: string | null;
   /** The chat session id / channel id it was born in, for a "back" link. */
   sourceId: string | null;
+  /** Bumped on every html change (a comment resolution or a revert). */
+  revision: number;
+  /** True when there's a prior version to revert to (one step). */
+  canRevert: boolean;
   createdAt: string;
   updatedAt: string | null;
 }
@@ -264,8 +268,45 @@ function rowToArtifact_(r: any): ArtifactRecord {
     html: r.html,
     source: r.source ?? null,
     sourceId: r.source_id ?? null,
+    revision: Number(r.revision ?? 0),
+    canRevert: !!r.prev_html,
     createdAt: r.created_at,
     updatedAt: r.updated_at ?? null,
+  };
+}
+
+export interface ArtifactCommentRecord {
+  id: string;
+  artifactId: string;
+  /** Who left the comment. */
+  userId: string;
+  body: string;
+  /** The highlighted text, and a little context on each side to anchor it. */
+  quote: string | null;
+  prefix: string | null;
+  suffix: string | null;
+  status: "open" | "resolved";
+  /** The assistant's reply, or a note on what it changed. */
+  resolution: string | null;
+  resolvedBy: "agent" | "user" | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+function rowToArtifactComment_(r: any): ArtifactCommentRecord {
+  return {
+    id: r.id,
+    artifactId: r.artifact_id,
+    userId: r.user_id,
+    body: r.body,
+    quote: r.quote ?? null,
+    prefix: r.prefix ?? null,
+    suffix: r.suffix ?? null,
+    status: r.status === "resolved" ? "resolved" : "open",
+    resolution: r.resolution ?? null,
+    resolvedBy: r.resolved_by ?? null,
+    createdAt: r.created_at,
+    resolvedAt: r.resolved_at ?? null,
   };
 }
 
@@ -547,6 +588,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
   user_id TEXT NOT NULL DEFAULT '${LEGACY_USER_ID}',
   title TEXT NOT NULL,
   html TEXT NOT NULL,
+  -- one-step undo for an AI edit driven by a comment; null = no prior version
+  prev_html TEXT,
+  -- bumped on every html change (a comment resolution or a revert)
+  revision INTEGER NOT NULL DEFAULT 0,
   -- where it was born, for a "back to the conversation" link: 'chat' | 'channel'
   source TEXT,
   source_id TEXT,
@@ -554,6 +599,26 @@ CREATE TABLE IF NOT EXISTS artifacts (
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_artifacts_user ON artifacts(user_id, created_at);
+
+-- Highlight-and-comment on an artifact. The user selects text in the sandboxed
+-- viewer and leaves a note; the assistant addresses it (edits the artifact, or
+-- replies). Anchored by the quoted text plus a little surrounding context so a
+-- highlight survives an edit. Scoped through the owning artifact (per-user).
+CREATE TABLE IF NOT EXISTS artifact_comments (
+  id TEXT PRIMARY KEY,
+  artifact_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  quote TEXT,            -- the highlighted text
+  prefix TEXT,           -- ~48 chars before it (disambiguates a repeated quote)
+  suffix TEXT,           -- ~48 chars after it
+  status TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'resolved'
+  resolution TEXT,       -- the assistant's reply / note on what changed
+  resolved_by TEXT,      -- 'agent' | 'user' | null
+  created_at TEXT NOT NULL,
+  resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_comments ON artifact_comments(artifact_id, created_at);
 
 CREATE TABLE IF NOT EXISTS channels (
   id TEXT PRIMARY KEY,
@@ -786,6 +851,11 @@ const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
       "ALTER TABLE sticky_notes ADD COLUMN pos_y REAL NOT NULL DEFAULT 0; " +
       "UPDATE sticky_notes SET pos_x = (abs(random()) % 460) + 16, pos_y = (abs(random()) % 320) + 16",
   },
+  // Artifact comments: an AI edit driven by a comment keeps one prior version
+  // for undo, and bumps a revision counter. A DB from the v1.2.0 artifacts
+  // release has the table but not these columns.
+  { table: "artifacts", column: "prev_html", ddl: "ALTER TABLE artifacts ADD COLUMN prev_html TEXT" },
+  { table: "artifacts", column: "revision", ddl: "ALTER TABLE artifacts ADD COLUMN revision INTEGER NOT NULL DEFAULT 0" },
 ];
 
 export class Store {
@@ -2413,6 +2483,8 @@ export class ScopedStore {
       html: input.html,
       source: input.source ?? null,
       sourceId: input.sourceId ?? null,
+      revision: 0,
+      canRevert: false,
       createdAt: new Date().toISOString(),
       updatedAt: null,
     };
@@ -2452,8 +2524,142 @@ export class ScopedStore {
     const a = this.getArtifact(id);
     if (!a) return undefined;
     this.db.prepare("DELETE FROM artifacts WHERE id = ? AND user_id = ?").run(id, this.userId);
+    this.db.prepare("DELETE FROM artifact_comments WHERE artifact_id = ?").run(id);
     this.logActivity("user", "artifact.deleted", `Deleted artifact "${a.title}"`);
     return a;
+  }
+
+  /** Replace an artifact's body, keeping the current one for a one-step revert. */
+  updateArtifactHtml(id: string, html: string): ArtifactRecord | undefined {
+    const cur = this.getArtifact(id);
+    if (!cur) return undefined;
+    this.db
+      .prepare(
+        "UPDATE artifacts SET prev_html = html, html = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND user_id = ?"
+      )
+      .run(html, new Date().toISOString(), id, this.userId);
+    return this.getArtifact(id);
+  }
+
+  /** Swap back to the version before the last edit (one level). */
+  revertArtifact(id: string): ArtifactRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM artifacts WHERE id = ? AND user_id = ?").get(id, this.userId) as any;
+    if (!row || !row.prev_html) return this.getArtifact(id);
+    this.db
+      .prepare(
+        "UPDATE artifacts SET html = prev_html, prev_html = NULL, revision = revision + 1, updated_at = ? WHERE id = ? AND user_id = ?"
+      )
+      .run(new Date().toISOString(), id, this.userId);
+    const a = this.getArtifact(id);
+    if (a) this.logActivity("user", "artifact.reverted", `Reverted artifact "${a.title}"`);
+    return a;
+  }
+
+  // ---- artifact comments ----
+  // Scoped through the owning artifact: every method checks the artifact
+  // belongs to this user before touching its comments.
+
+  private ownsArtifact_(artifactId: string): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM artifacts WHERE id = ? AND user_id = ?")
+      .get(artifactId, this.userId);
+  }
+
+  addArtifactComment(input: {
+    artifactId: string;
+    body: string;
+    quote?: string | null;
+    prefix?: string | null;
+    suffix?: string | null;
+  }): ArtifactCommentRecord | undefined {
+    if (!this.ownsArtifact_(input.artifactId)) return undefined;
+    const rec: ArtifactCommentRecord = {
+      id: shortId(),
+      artifactId: input.artifactId,
+      userId: this.userId,
+      body: input.body.trim().slice(0, 2000),
+      quote: input.quote?.slice(0, 1000) ?? null,
+      prefix: input.prefix?.slice(0, 80) ?? null,
+      suffix: input.suffix?.slice(0, 80) ?? null,
+      status: "open",
+      resolution: null,
+      resolvedBy: null,
+      createdAt: new Date().toISOString(),
+      resolvedAt: null,
+    };
+    this.db
+      .prepare(
+        "INSERT INTO artifact_comments (id, artifact_id, user_id, body, quote, prefix, suffix, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run(rec.id, rec.artifactId, rec.userId, rec.body, rec.quote, rec.prefix, rec.suffix, rec.createdAt);
+    return rec;
+  }
+
+  listArtifactComments(artifactId: string): ArtifactCommentRecord[] {
+    if (!this.ownsArtifact_(artifactId)) return [];
+    return (
+      this.db
+        .prepare("SELECT * FROM artifact_comments WHERE artifact_id = ? ORDER BY created_at ASC")
+        .all(artifactId) as any[]
+    ).map(rowToArtifactComment_);
+  }
+
+  getArtifactComment(artifactId: string, id: string): ArtifactCommentRecord | undefined {
+    if (!this.ownsArtifact_(artifactId)) return undefined;
+    const row = this.db
+      .prepare("SELECT * FROM artifact_comments WHERE id = ? AND artifact_id = ?")
+      .get(id, artifactId) as any;
+    return row ? rowToArtifactComment_(row) : undefined;
+  }
+
+  updateArtifactComment(artifactId: string, id: string, body: string): ArtifactCommentRecord | undefined {
+    if (!this.ownsArtifact_(artifactId)) return undefined;
+    this.db
+      .prepare("UPDATE artifact_comments SET body = ? WHERE id = ? AND artifact_id = ?")
+      .run(body.trim().slice(0, 2000), id, artifactId);
+    return this.getArtifactComment(artifactId, id);
+  }
+
+  deleteArtifactComment(artifactId: string, id: string): boolean {
+    if (!this.ownsArtifact_(artifactId)) return false;
+    const info = this.db
+      .prepare("DELETE FROM artifact_comments WHERE id = ? AND artifact_id = ?")
+      .run(id, artifactId);
+    return Number(info.changes ?? 0) > 0;
+  }
+
+  resolveArtifactComment(
+    artifactId: string,
+    id: string,
+    outcome: { resolution: string; resolvedBy: "agent" | "user" }
+  ): ArtifactCommentRecord | undefined {
+    if (!this.ownsArtifact_(artifactId)) return undefined;
+    this.db
+      .prepare(
+        "UPDATE artifact_comments SET status = 'resolved', resolution = ?, resolved_by = ?, resolved_at = ? WHERE id = ? AND artifact_id = ?"
+      )
+      .run(outcome.resolution.slice(0, 2000), outcome.resolvedBy, new Date().toISOString(), id, artifactId);
+    return this.getArtifactComment(artifactId, id);
+  }
+
+  reopenArtifactComment(artifactId: string, id: string): ArtifactCommentRecord | undefined {
+    if (!this.ownsArtifact_(artifactId)) return undefined;
+    this.db
+      .prepare(
+        "UPDATE artifact_comments SET status = 'open', resolution = NULL, resolved_by = NULL, resolved_at = NULL WHERE id = ? AND artifact_id = ?"
+      )
+      .run(id, artifactId);
+    return this.getArtifactComment(artifactId, id);
+  }
+
+  openArtifactCommentCount(artifactId: string): number {
+    return Number(
+      (
+        this.db
+          .prepare("SELECT COUNT(*) AS n FROM artifact_comments WHERE artifact_id = ? AND status = 'open'")
+          .get(artifactId) as any
+      ).n
+    );
   }
 
   // ---- sticky notes ----

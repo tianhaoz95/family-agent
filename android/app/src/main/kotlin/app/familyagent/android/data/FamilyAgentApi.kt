@@ -440,8 +440,8 @@ class FamilyAgentApi(
     suspend fun listArtifacts(): List<ArtifactSummary> =
         json.decodeFromString<ArtifactListResponse>(get("/artifacts")).artifacts
 
-    suspend fun getArtifact(id: String): Artifact =
-        json.decodeFromString<ArtifactResponse>(get("/artifacts/$id")).artifact
+    suspend fun getArtifact(id: String): ArtifactResponse =
+        json.decodeFromString<ArtifactResponse>(get("/artifacts/$id"))
 
     suspend fun renameArtifact(id: String, title: String): ArtifactSummary =
         json.decodeFromString<ArtifactSummaryResponse>(
@@ -451,6 +451,31 @@ class FamilyAgentApi(
     suspend fun deleteArtifact(id: String) {
         sendNoBody("DELETE", "/artifacts/$id")
     }
+
+    suspend fun revertArtifact(id: String): ResolveCommentsResponse =
+        json.decodeFromString(send("POST", "/artifacts/$id/revert", "{}"))
+
+    suspend fun artifactComments(id: String): List<ArtifactComment> =
+        json.decodeFromString<ArtifactCommentsResponse>(get("/artifacts/$id/comments")).comments
+
+    suspend fun addArtifactComment(id: String, req: NewArtifactCommentRequest): ArtifactComment =
+        json.decodeFromString<ArtifactCommentResponse>(
+            send("POST", "/artifacts/$id/comments", json.encodeToString(req))
+        ).comment
+
+    suspend fun deleteArtifactComment(id: String, cid: String) {
+        sendNoBody("DELETE", "/artifacts/$id/comments/$cid")
+    }
+
+    suspend fun reopenArtifactComment(id: String, cid: String): ArtifactComment =
+        json.decodeFromString<ArtifactCommentResponse>(
+            send("PATCH", "/artifacts/$id/comments/$cid", json.encodeToString(ReopenCommentRequest()))
+        ).comment
+
+    suspend fun resolveArtifactComments(id: String, commentIds: List<String>?): ResolveCommentsResponse =
+        json.decodeFromString(
+            send("POST", "/artifacts/$id/resolve-comments", json.encodeToString(ResolveCommentsRequest(commentIds)))
+        )
 
     // ---- password vault ----
 

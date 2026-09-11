@@ -8,7 +8,11 @@ import androidx.lifecycle.viewModelScope
 import app.familyagent.android.data.AGENT_SENDER_ID
 import app.familyagent.android.data.ActivityEntry
 import app.familyagent.android.data.Artifact
+import app.familyagent.android.data.ArtifactComment
+import app.familyagent.android.data.ArtifactResponse
 import app.familyagent.android.data.ArtifactSummary
+import app.familyagent.android.data.NewArtifactCommentRequest
+import app.familyagent.android.data.ResolveCommentsResponse
 import app.familyagent.android.data.Channel
 import app.familyagent.android.data.Document
 import app.familyagent.android.data.DocumentSearchHit
@@ -398,7 +402,7 @@ class AppViewModel(
         }
     }
 
-    suspend fun loadArtifact(id: String): Artifact? = apiCall { api.getArtifact(id) }.getOrNull()
+    suspend fun loadArtifact(id: String): ArtifactResponse? = apiCall { api.getArtifact(id) }.getOrNull()
 
     fun renameArtifact(id: String, title: String) {
         viewModelScope.launch {
@@ -410,6 +414,30 @@ class AppViewModel(
         viewModelScope.launch {
             apiCall { api.deleteArtifact(id) }.onSuccess { refreshArtifacts() }
         }
+    }
+
+    // ---- artifact comments ----
+    suspend fun addArtifactComment(id: String, req: NewArtifactCommentRequest): ArtifactComment? {
+        val c = apiCall { api.addArtifactComment(id, req) }.getOrNull()
+        if (c != null) refreshArtifacts()
+        return c
+    }
+    suspend fun deleteArtifactComment(id: String, cid: String): Boolean {
+        val ok = apiCall { api.deleteArtifactComment(id, cid) }.isSuccess
+        if (ok) refreshArtifacts()
+        return ok
+    }
+    suspend fun reopenArtifactComment(id: String, cid: String): ArtifactComment? =
+        apiCall { api.reopenArtifactComment(id, cid) }.getOrNull()
+    suspend fun resolveArtifactComments(id: String, commentIds: List<String>?): ResolveCommentsResponse? {
+        val r = apiCall { api.resolveArtifactComments(id, commentIds) }.getOrNull()
+        if (r != null) refreshArtifacts()
+        return r
+    }
+    suspend fun revertArtifact(id: String): ResolveCommentsResponse? {
+        val r = apiCall { api.revertArtifact(id) }.getOrNull()
+        if (r != null) refreshArtifacts()
+        return r
     }
 
     fun sendChat(message: String, images: List<String> = emptyList(), speakReply: Boolean = false) {

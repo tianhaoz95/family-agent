@@ -19,6 +19,7 @@ import {
   type ToolOperation,
   type ArtifactSummary,
   type Artifact,
+  type ArtifactComment,
   type Health,
   type User,
   AGENT_SENDER_ID,
@@ -6363,7 +6364,8 @@ function renderArtifactList(): void {
     li.className = "artifact-row" + (a.id === selectedArtifactId ? " is-selected" : "");
     li.tabIndex = 0;
     li.setAttribute("role", "button");
-    li.innerHTML = `<span class="artifact-row-title">${escapeHtml(a.title)}</span>
+    const badge = a.openComments > 0 ? `<span class="artifact-row-badge">${a.openComments}</span>` : "";
+    li.innerHTML = `<span class="artifact-row-title">${escapeHtml(a.title)}${badge}</span>
       <span class="artifact-row-date">${new Date(a.createdAt).toLocaleDateString()}</span>`;
     const open = () => void selectArtifact(a.id);
     li.addEventListener("click", open);
@@ -6377,17 +6379,229 @@ function renderArtifactList(): void {
   }
 }
 
+// State for the artifact currently open in the viewer.
+let artView: {
+  id: string;
+  frame: HTMLIFrameElement;
+  comments: ArtifactComment[];
+  railEl: HTMLElement;
+  onMsg: (e: MessageEvent) => void;
+} | null = null;
+
+function pushCommentsToFrame(): void {
+  if (!artView) return;
+  const anchors = artView.comments.map((c) => ({
+    id: c.id,
+    quote: c.quote,
+    prefix: c.prefix,
+    suffix: c.suffix,
+    status: c.status,
+  }));
+  artView.frame.contentWindow?.postMessage({ type: "artifact:comments", comments: anchors }, "*");
+}
+
+async function reloadArtViewComments(): Promise<void> {
+  if (!artView) return;
+  try {
+    artView.comments = (await api.artifactComments(artView.id)).comments;
+  } catch {
+    /* keep what we have */
+  }
+  renderCommentRail();
+  pushCommentsToFrame();
+}
+
+function snippet(s: string | null, n = 90): string {
+  if (!s) return "";
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > n ? t.slice(0, n) + "…" : t;
+}
+
+function renderCommentRail(): void {
+  if (!artView) return;
+  const rail = artView.railEl;
+  rail.replaceChildren();
+  const open = artView.comments.filter((c) => c.status === "open");
+  const summary = artifactsCache.find((a) => a.id === artView!.id);
+
+  const top = document.createElement("div");
+  top.className = "artifact-rail-top";
+  top.innerHTML = `<span class="artifact-rail-title">Comments</span>`;
+  if (open.length) {
+    const askAll = document.createElement("button");
+    askAll.type = "button";
+    askAll.className = "artifact-ask-btn";
+    askAll.textContent = `Ask AI to address ${open.length}`;
+    askAll.addEventListener("click", () => void resolveComments());
+    top.appendChild(askAll);
+  }
+  if (summary?.canRevert) {
+    const rev = document.createElement("button");
+    rev.type = "button";
+    rev.className = "ghost-btn";
+    rev.textContent = "Undo last edit";
+    rev.addEventListener("click", () => void revertArtifactEdit());
+    top.appendChild(rev);
+  }
+  rail.appendChild(top);
+
+  if (artView.comments.length === 0) {
+    const hint = document.createElement("p");
+    hint.className = "artifact-rail-empty";
+    hint.textContent = "Select text in the page to leave a comment.";
+    rail.appendChild(hint);
+    return;
+  }
+
+  for (const c of artView.comments) {
+    const card = document.createElement("div");
+    card.className = "artifact-comment" + (c.status === "resolved" ? " is-resolved" : "");
+    card.dataset.id = c.id;
+    const quoteHtml = c.quote ? `<blockquote class="artifact-comment-quote">${escapeHtml(snippet(c.quote))}</blockquote>` : "";
+    card.innerHTML = `${quoteHtml}<p class="artifact-comment-body">${escapeHtml(c.body)}</p>`;
+
+    if (c.status === "resolved") {
+      const res = document.createElement("p");
+      res.className = "artifact-comment-resolution";
+      res.textContent = (c.resolvedBy === "agent" ? "Assistant: " : "") + (c.resolution ?? "Resolved.");
+      card.appendChild(res);
+      const reopen = document.createElement("button");
+      reopen.type = "button";
+      reopen.className = "artifact-comment-link";
+      reopen.textContent = "Reopen";
+      reopen.addEventListener("click", async () => {
+        await api.reopenArtifactComment(artView!.id, c.id);
+        await reloadArtViewComments();
+      });
+      card.appendChild(reopen);
+    } else {
+      const row = document.createElement("div");
+      row.className = "artifact-comment-actions";
+      const ask = document.createElement("button");
+      ask.type = "button";
+      ask.className = "artifact-comment-link primary";
+      ask.textContent = "Ask AI";
+      ask.addEventListener("click", () => void resolveComments([c.id]));
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "artifact-comment-link danger";
+      del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        await api.deleteArtifactComment(artView!.id, c.id);
+        await reloadArtViewComments();
+        void refreshArtifactsBadges();
+      });
+      row.append(ask, del);
+      card.appendChild(row);
+    }
+    card.querySelector(".artifact-comment-quote")?.addEventListener("click", () => {
+      artView!.frame.contentWindow?.postMessage({ type: "artifact:scrollTo", id: c.id }, "*");
+    });
+    rail.appendChild(card);
+  }
+}
+
+async function refreshArtifactsBadges(): Promise<void> {
+  try {
+    artifactsCache = (await api.listArtifacts()).artifacts;
+    renderArtifactList();
+  } catch {
+    /* ignore */
+  }
+}
+
+async function resolveComments(ids?: string[]): Promise<void> {
+  if (!artView) return;
+  const rail = artView.railEl;
+  rail.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  const busy = document.createElement("p");
+  busy.className = "artifact-rail-busy";
+  busy.textContent = "The assistant is working through the comments — this can take a minute…";
+  rail.prepend(busy);
+  try {
+    const res = await api.resolveArtifactComments(artView.id, ids);
+    artView.comments = res.comments;
+    artView.frame.srcdoc = res.artifact.document; // reloads → the runtime re-seeds from the fresh comment list
+    renderCommentRail();
+    void refreshArtifactsBadges();
+  } catch (err) {
+    busy.className = "artifact-rail-busy is-error";
+    busy.textContent = `The assistant couldn't finish: ${err instanceof Error ? err.message : String(err)}`;
+    rail.querySelectorAll("button").forEach((b) => (b.disabled = false));
+  }
+}
+
+async function revertArtifactEdit(): Promise<void> {
+  if (!artView) return;
+  try {
+    const res = await api.revertArtifact(artView.id);
+    artView.comments = res.comments;
+    artView.frame.srcdoc = res.artifact.document;
+    renderCommentRail();
+    void refreshArtifactsBadges();
+  } catch (err) {
+    alert(`Couldn't revert: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function openCommentComposer(anchor: { quote: string; prefix: string; suffix: string }): void {
+  if (!artView) return;
+  const rail = artView.railEl;
+  rail.querySelector(".artifact-composer")?.remove();
+  const box = document.createElement("div");
+  box.className = "artifact-composer";
+  box.innerHTML = `<blockquote class="artifact-comment-quote">${escapeHtml(snippet(anchor.quote))}</blockquote>`;
+  const ta = document.createElement("textarea");
+  ta.placeholder = "What should change here? (or a question)";
+  ta.rows = 3;
+  const actions = document.createElement("div");
+  actions.className = "artifact-composer-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "artifact-ask-btn";
+  save.textContent = "Comment";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost-btn";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => box.remove());
+  save.addEventListener("click", async () => {
+    const body = ta.value.trim();
+    if (!body) return;
+    save.disabled = true;
+    try {
+      await api.addArtifactComment(artView!.id, body, anchor);
+      box.remove();
+      await reloadArtViewComments();
+      void refreshArtifactsBadges();
+    } catch (err) {
+      save.disabled = false;
+      alert(`Couldn't save the comment: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+  actions.append(save, cancel);
+  box.append(ta, actions);
+  rail.insertBefore(box, rail.children[1] ?? null);
+  ta.focus();
+}
+
 async function selectArtifact(id: string): Promise<void> {
   selectedArtifactId = id;
   renderArtifactList();
+  if (artView) window.removeEventListener("message", artView.onMsg);
+  artView = null;
   artifactDetailEl.replaceChildren();
   const loading = document.createElement("p");
   loading.className = "settings-hint";
   loading.textContent = "Loading…";
   artifactDetailEl.appendChild(loading);
+
   let artifact: Artifact;
+  let comments: ArtifactComment[];
   try {
-    artifact = (await api.getArtifact(id)).artifact;
+    const r = await api.getArtifact(id);
+    artifact = r.artifact;
+    comments = r.comments;
   } catch (err) {
     artifactDetailEl.replaceChildren();
     const p = document.createElement("p");
@@ -6402,7 +6616,6 @@ async function selectArtifact(id: string): Promise<void> {
   head.innerHTML = `<span class="artifact-detail-title">${escapeHtml(artifact.title)}</span>`;
   const actions = document.createElement("div");
   actions.className = "artifact-detail-actions";
-
   const renameBtn = document.createElement("button");
   renameBtn.type = "button";
   renameBtn.className = "ghost-btn";
@@ -6417,7 +6630,6 @@ async function selectArtifact(id: string): Promise<void> {
       alert(`Rename failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   });
-
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
   deleteBtn.className = "ghost-btn danger";
@@ -6435,14 +6647,37 @@ async function selectArtifact(id: string): Promise<void> {
   actions.append(renameBtn, deleteBtn);
   head.appendChild(actions);
 
+  const split = document.createElement("div");
+  split.className = "artifact-split";
   const frame = document.createElement("iframe");
   frame.className = "artifact-frame";
-  // allow-scripts ONLY — no allow-same-origin => opaque origin, no app/network.
   frame.setAttribute("sandbox", "allow-scripts");
   frame.setAttribute("referrerpolicy", "no-referrer");
   frame.srcdoc = artifact.document;
+  const rail = document.createElement("div");
+  rail.className = "artifact-rail";
+  split.append(frame, rail);
 
-  artifactDetailEl.replaceChildren(head, frame);
+  const onMsg = (e: MessageEvent) => {
+    if (!artView || e.source !== artView.frame.contentWindow) return;
+    const d = e.data;
+    if (!d || typeof d !== "object") return;
+    if (d.type === "artifact:selection" && typeof d.quote === "string") {
+      openCommentComposer({ quote: d.quote, prefix: d.prefix ?? "", suffix: d.suffix ?? "" });
+    } else if (d.type === "artifact:commentClick" && d.id) {
+      const card = rail.querySelector<HTMLElement>(`.artifact-comment[data-id="${d.id}"]`);
+      card?.scrollIntoView({ block: "center", behavior: "smooth" });
+      card?.classList.add("is-flash");
+      setTimeout(() => card?.classList.remove("is-flash"), 1200);
+    }
+  };
+  window.addEventListener("message", onMsg);
+
+  artView = { id, frame, comments, railEl: rail, onMsg };
+  artifactDetailEl.replaceChildren(head, split);
+  renderCommentRail();
+  // Re-push once the iframe has parsed its runtime (it also self-seeds).
+  frame.addEventListener("load", () => pushCommentsToFrame(), { once: true });
 }
 
 // ---- steps in the Messages (family channel) view ----

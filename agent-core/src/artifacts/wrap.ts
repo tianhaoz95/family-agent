@@ -1,7 +1,20 @@
-import { CARD_RUNTIME } from "../cards/runtime.js";
-import type { ArtifactRecord } from "../db.js";
+import { ARTIFACT_RUNTIME } from "./runtime.js";
+import type { ArtifactRecord, ArtifactCommentRecord } from "../db.js";
 
 export type { ArtifactRecord };
+
+/** The comment shape the in-page runtime needs to anchor a highlight. */
+export interface ArtifactCommentAnchor {
+  id: string;
+  quote: string | null;
+  prefix: string | null;
+  suffix: string | null;
+  status: "open" | "resolved";
+}
+
+export function toAnchor(c: ArtifactCommentRecord): ArtifactCommentAnchor {
+  return { id: c.id, quote: c.quote, prefix: c.prefix, suffix: c.suffix, status: c.status };
+}
 
 // Turns the model's `<body>` fragment into a full, self-contained, sandboxed
 // HTML page. We store only the fragment (on the `artifacts` row) and wrap it at
@@ -85,13 +98,15 @@ export interface RenderedArtifact extends ArtifactRecord {
   document: string;
 }
 
-export function wrapArtifact(a: ArtifactRecord): RenderedArtifact {
+export function wrapArtifact(a: ArtifactRecord, comments: ArtifactCommentAnchor[] = []): RenderedArtifact {
+  const seed = JSON.stringify(comments).replace(/</g, "\\u003c");
   const document = `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">
 <title>${escapeHtml(a.title)}</title>
 <style>${ARTIFACT_STYLE}</style>
-<script>${CARD_RUNTIME}</script>
+<script>window.__ARTIFACT_COMMENTS=${seed};</script>
+<script>${ARTIFACT_RUNTIME}</script>
 </head><body>
 ${a.html}
 </body></html>`;

@@ -303,6 +303,12 @@ export interface ArtifactSummary {
   title: string;
   source: string | null;
   sourceId: string | null;
+  /** Bumped on every html change (a comment resolution or a revert). */
+  revision: number;
+  /** True when the last edit can be undone (one step). */
+  canRevert: boolean;
+  /** How many comments are still open. */
+  openComments: number;
   createdAt: string;
   updatedAt: string | null;
 }
@@ -312,6 +318,30 @@ export interface Artifact extends ArtifactSummary {
   html: string;
   /** The full sandboxed HTML document — load into an opaque-origin iframe. */
   document: string;
+}
+
+/** A highlight-and-comment left on an artifact. */
+export interface ArtifactComment {
+  id: string;
+  artifactId: string;
+  userId: string;
+  body: string;
+  quote: string | null;
+  prefix: string | null;
+  suffix: string | null;
+  status: "open" | "resolved";
+  /** The assistant's reply, or a note on what it changed. */
+  resolution: string | null;
+  resolvedBy: "agent" | "user" | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+/** Per-comment outcome from POST /artifacts/:id/resolve-comments. */
+export interface CommentOutcome {
+  id: string;
+  action: "edited" | "replied" | "skipped";
+  resolution: string;
 }
 
 /** An operation a server tool exposes to the chat assistant (its MCP tools/list). */
@@ -944,13 +974,40 @@ export const api = {
 
   // ---- artifacts (render_artifact) ----
   listArtifacts: () => request<{ artifacts: ArtifactSummary[] }>("/artifacts"),
-  getArtifact: (id: string) => request<{ artifact: Artifact }>(`/artifacts/${id}`),
+  getArtifact: (id: string) =>
+    request<{ artifact: Artifact; comments: ArtifactComment[] }>(`/artifacts/${id}`),
   renameArtifact: (id: string, title: string) =>
     request<{ artifact: ArtifactSummary }>(`/artifacts/${id}`, {
       method: "PATCH",
       body: JSON.stringify({ title }),
     }),
   deleteArtifact: (id: string) => request<{ deleted: true }>(`/artifacts/${id}`, { method: "DELETE" }),
+  revertArtifact: (id: string) =>
+    request<{ artifact: Artifact; comments: ArtifactComment[] }>(`/artifacts/${id}/revert`, { method: "POST" }),
+  artifactComments: (id: string) =>
+    request<{ comments: ArtifactComment[] }>(`/artifacts/${id}/comments`),
+  addArtifactComment: (id: string, body: string, anchor?: { quote?: string; prefix?: string; suffix?: string }) =>
+    request<{ comment: ArtifactComment }>(`/artifacts/${id}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body, ...anchor }),
+    }),
+  updateArtifactComment: (id: string, cid: string, body: string) =>
+    request<{ comment: ArtifactComment }>(`/artifacts/${id}/comments/${cid}`, {
+      method: "PATCH",
+      body: JSON.stringify({ body }),
+    }),
+  reopenArtifactComment: (id: string, cid: string) =>
+    request<{ comment: ArtifactComment }>(`/artifacts/${id}/comments/${cid}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "open" }),
+    }),
+  deleteArtifactComment: (id: string, cid: string) =>
+    request<{ deleted: true }>(`/artifacts/${id}/comments/${cid}`, { method: "DELETE" }),
+  resolveArtifactComments: (id: string, commentIds?: string[]) =>
+    request<{ artifact: Artifact; comments: ArtifactComment[]; edited: boolean; outcomes: CommentOutcome[] }>(
+      `/artifacts/${id}/resolve-comments`,
+      { method: "POST", body: JSON.stringify(commentIds ? { commentIds } : {}) },
+    ),
   toolDb: (id: string) => request<ToolDbOverview>(`/tools/${id}/db`),
   toolDbRows: (
     id: string,

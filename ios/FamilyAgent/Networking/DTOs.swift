@@ -95,6 +95,9 @@ struct ArtifactSummary: Codable, Sendable, Hashable, Identifiable {
     let title: String
     var source: String? = nil
     var sourceId: String? = nil
+    var revision: Int = 0
+    var canRevert: Bool = false
+    var openComments: Int = 0
     var createdAt: String = ""
     var updatedAt: String? = nil
 }
@@ -104,6 +107,9 @@ struct Artifact: Codable, Sendable, Hashable, Identifiable {
     let title: String
     var source: String? = nil
     var sourceId: String? = nil
+    var revision: Int = 0
+    var canRevert: Bool = false
+    var openComments: Int = 0
     var createdAt: String = ""
     var updatedAt: String? = nil
     /// The raw <body> fragment the model wrote (for "view source").
@@ -112,9 +118,48 @@ struct Artifact: Codable, Sendable, Hashable, Identifiable {
     var document: String = ""
 }
 
+struct ArtifactComment: Codable, Sendable, Hashable, Identifiable {
+    let id: String
+    var artifactId: String = ""
+    var userId: String = ""
+    var body: String
+    var quote: String? = nil
+    var prefix: String? = nil
+    var suffix: String? = nil
+    var status: String = "open"
+    var resolution: String? = nil
+    var resolvedBy: String? = nil
+    var createdAt: String = ""
+    var resolvedAt: String? = nil
+}
+
+struct CommentOutcome: Codable, Sendable, Hashable {
+    let id: String
+    let action: String
+    let resolution: String
+}
+
 struct ArtifactListResponse: Codable, Sendable { var artifacts: [ArtifactSummary] = [] }
-struct ArtifactResponse: Codable, Sendable { let artifact: Artifact }
+struct ArtifactResponse: Codable, Sendable {
+    let artifact: Artifact
+    var comments: [ArtifactComment] = []
+}
+struct ArtifactCommentsResponse: Codable, Sendable { var comments: [ArtifactComment] = [] }
+struct ArtifactCommentResponse: Codable, Sendable { let comment: ArtifactComment }
+struct ResolveCommentsResponse: Codable, Sendable {
+    let artifact: Artifact
+    var comments: [ArtifactComment] = []
+    var edited: Bool = false
+    var outcomes: [CommentOutcome] = []
+}
 struct ArtifactSummaryResponse: Codable, Sendable { let artifact: ArtifactSummary }
+
+struct NewArtifactCommentRequest: Codable, Sendable {
+    let body: String
+    var quote: String? = nil
+    var prefix: String? = nil
+    var suffix: String? = nil
+}
 
 struct User: Codable, Sendable, Identifiable, Hashable {
     let id: String

@@ -332,13 +332,33 @@ struct FamilyAgentAPI: Sendable {
     func listArtifacts() async throws -> [ArtifactSummary] {
         try await get("/artifacts", as: ArtifactListResponse.self).artifacts
     }
-    func getArtifact(_ id: String) async throws -> Artifact {
-        try await get("/artifacts/\(id)", as: ArtifactResponse.self).artifact
+    func getArtifact(_ id: String) async throws -> ArtifactResponse {
+        try await get("/artifacts/\(id)", as: ArtifactResponse.self)
     }
     func renameArtifact(_ id: String, title: String) async throws -> ArtifactSummary {
         try await send("PATCH", "/artifacts/\(id)", body: ["title": title], as: ArtifactSummaryResponse.self).artifact
     }
     func deleteArtifact(_ id: String) async throws { try await sendVoid("DELETE", "/artifacts/\(id)") }
+    func revertArtifact(_ id: String) async throws -> ResolveCommentsResponse {
+        try await send("POST", "/artifacts/\(id)/revert", as: ResolveCommentsResponse.self)
+    }
+
+    func artifactComments(_ id: String) async throws -> [ArtifactComment] {
+        try await get("/artifacts/\(id)/comments", as: ArtifactCommentsResponse.self).comments
+    }
+    func addArtifactComment(_ id: String, _ req: NewArtifactCommentRequest) async throws -> ArtifactComment {
+        try await send("POST", "/artifacts/\(id)/comments", body: req, as: ArtifactCommentResponse.self).comment
+    }
+    func deleteArtifactComment(_ id: String, _ cid: String) async throws {
+        try await sendVoid("DELETE", "/artifacts/\(id)/comments/\(cid)")
+    }
+    func reopenArtifactComment(_ id: String, _ cid: String) async throws -> ArtifactComment {
+        try await send("PATCH", "/artifacts/\(id)/comments/\(cid)", body: ["status": "open"], as: ArtifactCommentResponse.self).comment
+    }
+    func resolveArtifactComments(_ id: String, commentIds: [String]?) async throws -> ResolveCommentsResponse {
+        struct Req: Codable { var commentIds: [String]? }
+        return try await send("POST", "/artifacts/\(id)/resolve-comments", body: Req(commentIds: commentIds), as: ResolveCommentsResponse.self)
+    }
 
     // MARK: - Vault
 

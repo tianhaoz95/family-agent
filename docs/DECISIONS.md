@@ -2555,3 +2555,56 @@ Files: `agent-core/src/artifacts/wrap.ts`, `agents/artifactTools.ts`,
 `index.html` / `main.ts` + `.artifact-*` CSS. iOS: `Destination.artifacts`,
 `ArtifactsView` + `ArtifactViewerView`. Android: `Destination.Artifacts`,
 `ArtifactsScreen`. Tests: `agent-core/test/artifacts.test.ts`.
+
+### Follow-up: highlight-and-comment, and "ask the assistant to address it"
+
+You can now select text in an artifact, leave a note, and press **Ask AI** — it
+edits the artifact to match, or replies to the comment if no change is warranted.
+The point is context: instead of re-describing the whole page in chat, you point
+at the exact passage.
+
+**Anchoring is text-quote, not a DOM path.** A comment stores the highlighted
+`quote` plus ~48 chars of `prefix`/`suffix`. On (re-)render the in-page runtime
+flattens the body's text, finds the quote (scored by how well prefix/suffix
+match, to disambiguate a repeated phrase), and wraps the range in `<mark>`s. A
+DOM-offset anchor would break the moment the assistant edits the page; a quote
+survives as long as the passage roughly does, and simply stops highlighting
+(the comment still shows in the rail) when it doesn't.
+
+**The sandbox keeps its shape.** The artifact still runs in the sealed
+opaque-origin frame with the no-network CSP. The only new surface is the
+existing three-transport bridge (`parent.postMessage` on desktop, a
+`WKScriptMessageHandler` on iOS, a `@JavascriptInterface` on Android — the same
+shape `CARD_RUNTIME` already uses for its height report), and it only ever
+carries plain strings: a selected quote out, the comment list in. `ARTIFACT_RUNTIME`
+= `CARD_RUNTIME` + an annotation IIFE; `wrapArtifact(a, comments)` seeds
+`window.__ARTIFACT_COMMENTS` inline so highlights paint on first load, and the
+host re-pushes via `window.__artifactApi.setComments(...)` after any change.
+
+**Resolution is an off-planner model call** (`artifacts/resolve.ts`), same
+reasoning as `agents/extraction.ts` / `rename.ts`: it's a bounded,
+button-triggered step, not a conversation. Two tools bound with the artifact in
+a closure — `edit_artifact({ html })` once for the whole revised body,
+`resolve_comment({ commentId, reply })` per comment. A comment the model
+doesn't resolve stays **open** and is reported as "skipped". The edit is
+validated (`validateArtifactFragment`) with one retry; on failure the replies
+are still recorded but no edit lands.
+
+**Editing an artifact — the v1 "no iterate-in-place" cut, undone here, but
+narrowly.** Artifacts were immutable (a re-ask made a new one). Now
+`updateArtifactHtml` keeps the **one** prior version in `prev_html` and bumps a
+`revision`; `POST /artifacts/:id/revert` swaps it back (one step, like
+`revertTool`). There's still no free-form "edit this artifact" — changes only
+come through a comment, so every edit has a stated reason attached.
+
+**All three clients**, since the value is in the mobile "point at the thing"
+gesture as much as desktop: a comments rail (desktop) / bottom sheet
+(iOS/Android) beside the sealed viewer, an "Ask AI to address N" button, and a
+per-comment Ask AI / Delete / Reopen.
+
+Routes: `GET/POST /artifacts/:id/comments`, `PATCH/DELETE
+/artifacts/:id/comments/:cid`, `POST /artifacts/:id/resolve-comments`, `POST
+/artifacts/:id/revert`. Files: `artifacts/runtime.ts` (`ARTIFACT_RUNTIME`),
+`artifacts/resolve.ts`, `db.ts` (`artifact_comments` table, `prev_html` /
+`revision` columns, CRUD + `updateArtifactHtml` / `revertArtifact`). Tests:
+`agent-core/test/artifactComments.test.ts`.

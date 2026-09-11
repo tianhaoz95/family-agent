@@ -159,6 +159,9 @@ data class ArtifactSummary(
     val title: String,
     val source: String? = null,
     val sourceId: String? = null,
+    val revision: Int = 0,
+    val canRevert: Boolean = false,
+    val openComments: Int = 0,
     val createdAt: String = "",
     val updatedAt: String? = null,
 )
@@ -169,6 +172,9 @@ data class Artifact(
     val title: String,
     val source: String? = null,
     val sourceId: String? = null,
+    val revision: Int = 0,
+    val canRevert: Boolean = false,
+    val openComments: Int = 0,
     val createdAt: String = "",
     val updatedAt: String? = null,
     /** The raw <body> fragment the model wrote. */
@@ -178,16 +184,76 @@ data class Artifact(
 )
 
 @Serializable
+data class ArtifactComment(
+    val id: String,
+    val artifactId: String = "",
+    val userId: String = "",
+    val body: String,
+    val quote: String? = null,
+    val prefix: String? = null,
+    val suffix: String? = null,
+    val status: String = "open",
+    val resolution: String? = null,
+    val resolvedBy: String? = null,
+    val createdAt: String = "",
+    val resolvedAt: String? = null,
+)
+
+@Serializable
+data class CommentOutcome(val id: String, val action: String, val resolution: String)
+
+/** The minimal comment shape the in-page runtime needs to anchor a highlight. */
+@Serializable
+data class ArtifactCommentAnchor(
+    val id: String,
+    val quote: String,
+    val prefix: String,
+    val suffix: String,
+    val status: String,
+)
+
+@Serializable
 data class ArtifactListResponse(val artifacts: List<ArtifactSummary> = emptyList())
 
 @Serializable
-data class ArtifactResponse(val artifact: Artifact)
+data class ArtifactResponse(
+    val artifact: Artifact,
+    val comments: List<ArtifactComment> = emptyList(),
+)
+
+@Serializable
+data class ArtifactCommentsResponse(val comments: List<ArtifactComment> = emptyList())
+
+@Serializable
+data class ArtifactCommentResponse(val comment: ArtifactComment)
+
+@Serializable
+data class ResolveCommentsResponse(
+    val artifact: Artifact,
+    val comments: List<ArtifactComment> = emptyList(),
+    val edited: Boolean = false,
+    val outcomes: List<CommentOutcome> = emptyList(),
+)
 
 @Serializable
 data class ArtifactSummaryResponse(val artifact: ArtifactSummary)
 
 @Serializable
 data class RenameArtifactRequest(val title: String)
+
+@Serializable
+data class NewArtifactCommentRequest(
+    val body: String,
+    val quote: String? = null,
+    val prefix: String? = null,
+    val suffix: String? = null,
+)
+
+@Serializable
+data class ResolveCommentsRequest(val commentIds: List<String>? = null)
+
+@Serializable
+data class ReopenCommentRequest(val status: String = "open")
 
 @Serializable
 data class BuildToolRequest(val prompt: String)

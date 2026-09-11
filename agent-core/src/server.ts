@@ -83,7 +83,8 @@ import { startInboxWatcher } from "./inboxWatcher.js";
 import { persistSettings } from "./settingsFile.js";
 import { verifyPassword, bearerToken } from "./auth.js";
 import { wrapCard, type CardRecord, type RenderedCard } from "./cards/wrap.js";
-import { wrapArtifact } from "./artifacts/wrap.js";
+import { wrapArtifact, toAnchor } from "./artifacts/wrap.js";
+import { resolveArtifactComments } from "./artifacts/resolve.js";
 import type { ReferenceHint } from "./agents/references.js";
 import { VaultKeyring } from "./vault/keyring.js";
 import {
@@ -2360,44 +2361,130 @@ export function buildServer(
   // ---- AI-generated full-page artifacts (render_artifact) ----
   // Per-user, browsable in the Artifacts tab. The list omits the (large) html;
   // GET /:id returns both the raw fragment and the wrapped sandboxed document.
-  const artifactSummary = (a: ArtifactRecord) => ({
+  const artifactSummary = (a: ArtifactRecord, openComments = 0) => ({
     id: a.id,
     title: a.title,
     source: a.source,
     sourceId: a.sourceId,
+    revision: a.revision,
+    canRevert: a.canRevert,
+    openComments,
     createdAt: a.createdAt,
     updatedAt: a.updatedAt,
   });
 
+  const artifactsGate = (reply: FastifyReply) =>
+    config.artifactsEnabled ? null : reply.code(404).send({ error: "Artifacts are disabled." });
+
   app.get("/artifacts", async (req, reply) => {
-    if (!config.artifactsEnabled) return reply.code(404).send({ error: "Artifacts are disabled." });
-    return { artifacts: req.userStore.listArtifacts().map(artifactSummary) };
+    if (artifactsGate(reply)) return;
+    return {
+      artifacts: req.userStore
+        .listArtifacts()
+        .map((a) => artifactSummary(a, req.userStore.openArtifactCommentCount(a.id))),
+    };
   });
 
   app.get("/artifacts/:id", async (req, reply) => {
-    if (!config.artifactsEnabled) return reply.code(404).send({ error: "Artifacts are disabled." });
+    if (artifactsGate(reply)) return;
     const { id } = req.params as { id: string };
     const a = req.userStore.getArtifact(id);
     if (!a) return reply.code(404).send({ error: "artifact not found" });
-    return { artifact: wrapArtifact(a) };
+    const comments = req.userStore.listArtifactComments(id);
+    return { artifact: wrapArtifact(a, comments.map(toAnchor)), comments };
   });
 
   app.patch("/artifacts/:id", async (req, reply) => {
-    if (!config.artifactsEnabled) return reply.code(404).send({ error: "Artifacts are disabled." });
+    if (artifactsGate(reply)) return;
     const { id } = req.params as { id: string };
     const parsed = z.object({ title: z.string().trim().min(1).max(120) }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
     const a = req.userStore.renameArtifact(id, parsed.data.title);
     if (!a) return reply.code(404).send({ error: "artifact not found" });
-    return { artifact: artifactSummary(a) };
+    return { artifact: artifactSummary(a, req.userStore.openArtifactCommentCount(id)) };
   });
 
   app.delete("/artifacts/:id", async (req, reply) => {
-    if (!config.artifactsEnabled) return reply.code(404).send({ error: "Artifacts are disabled." });
+    if (artifactsGate(reply)) return;
     const { id } = req.params as { id: string };
     const a = req.userStore.deleteArtifact(id);
     if (!a) return reply.code(404).send({ error: "artifact not found" });
     return { deleted: true };
+  });
+
+  app.post("/artifacts/:id/revert", async (req, reply) => {
+    if (artifactsGate(reply)) return;
+    const { id } = req.params as { id: string };
+    const before = req.userStore.getArtifact(id);
+    if (!before) return reply.code(404).send({ error: "artifact not found" });
+    if (!before.canRevert) return reply.code(409).send({ error: "There's no earlier version to revert to." });
+    const a = req.userStore.revertArtifact(id);
+    const comments = req.userStore.listArtifactComments(id);
+    return { artifact: wrapArtifact(a!, comments.map(toAnchor)), comments };
+  });
+
+  // ---- artifact comments (highlight + leave a note; the assistant addresses it) ----
+
+  app.get("/artifacts/:id/comments", async (req, reply) => {
+    if (artifactsGate(reply)) return;
+    const { id } = req.params as { id: string };
+    if (!req.userStore.getArtifact(id)) return reply.code(404).send({ error: "artifact not found" });
+    return { comments: req.userStore.listArtifactComments(id) };
+  });
+
+  app.post("/artifacts/:id/comments", async (req, reply) => {
+    if (artifactsGate(reply)) return;
+    const { id } = req.params as { id: string };
+    const parsed = z
+      .object({
+        body: z.string().trim().min(1).max(2000),
+        quote: z.string().max(1000).optional(),
+        prefix: z.string().max(80).optional(),
+        suffix: z.string().max(80).optional(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const c = req.userStore.addArtifactComment({ artifactId: id, ...parsed.data });
+    if (!c) return reply.code(404).send({ error: "artifact not found" });
+    return { comment: c };
+  });
+
+  app.patch("/artifacts/:id/comments/:cid", async (req, reply) => {
+    if (artifactsGate(reply)) return;
+    const { id, cid } = req.params as { id: string; cid: string };
+    const parsed = z
+      .object({ body: z.string().trim().min(1).max(2000).optional(), status: z.enum(["open"]).optional() })
+      .safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    let c = parsed.data.status === "open" ? req.userStore.reopenArtifactComment(id, cid) : undefined;
+    if (parsed.data.body) c = req.userStore.updateArtifactComment(id, cid, parsed.data.body);
+    c ??= req.userStore.getArtifactComment(id, cid);
+    if (!c) return reply.code(404).send({ error: "comment not found" });
+    return { comment: c };
+  });
+
+  app.delete("/artifacts/:id/comments/:cid", async (req, reply) => {
+    if (artifactsGate(reply)) return;
+    const { id, cid } = req.params as { id: string; cid: string };
+    if (!req.userStore.deleteArtifactComment(id, cid)) return reply.code(404).send({ error: "comment not found" });
+    return { deleted: true };
+  });
+
+  // Run the assistant over the open comments: it edits the artifact and/or
+  // replies to each. Awaited like POST /chat (a planner turn is slow).
+  app.post("/artifacts/:id/resolve-comments", { bodyLimit: 4 * 1024 * 1024 }, async (req, reply) => {
+    if (artifactsGate(reply)) return;
+    const { id } = req.params as { id: string };
+    if (!req.userStore.getArtifact(id)) return reply.code(404).send({ error: "artifact not found" });
+    const parsed = z
+      .object({ commentIds: z.array(z.string()).max(20).optional() })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const result = await resolveArtifactComments(extractionModel, req.userStore, id, parsed.data.commentIds);
+    if ("error" in result) return reply.code(502).send({ error: result.error });
+    const a = req.userStore.getArtifact(id)!;
+    const comments = req.userStore.listArtifactComments(id);
+    return { artifact: wrapArtifact(a, comments.map(toAnchor)), comments, ...result };
   });
 
   // ---- tool database inspector ----

@@ -143,7 +143,7 @@ extension AppModel {
         if let a = await perform({ try await api.listArtifacts() }) { artifacts = a }
         artifactsLoading = false
     }
-    func loadArtifact(_ id: String) async -> Artifact? {
+    func loadArtifact(_ id: String) async -> ArtifactResponse? {
         await perform { try await api.getArtifact(id) }
     }
     func renameArtifact(_ id: String, title: String) {

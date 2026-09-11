@@ -400,6 +400,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                     ArtifactViewScreen(
                         artifactId = id,
                         load = viewModel::loadArtifact,
+                        vm = viewModel,
                         onClose = { navController.popBackStack() },
                         onDelete = {
                             viewModel.deleteArtifact(id)
