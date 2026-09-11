@@ -62,6 +62,46 @@ architecture reference.
   <img src="assets/architecture.svg" alt="desktop, android and ios talk over HTTP to agent-core (:4173); agent-core talks to a local Ollama (:11434)" width="820">
 </p>
 
+For a closer look at what's inside **agent-core** itself — the one piece all
+four clients share — here's the same picture one level deeper:
+
+```mermaid
+flowchart LR
+    subgraph Clients["Four independent apps, no shared code"]
+        Desktop["desktop<br/>(Tauri)"]
+        Android["android<br/>(Kotlin/Compose)"]
+        iOS["ios<br/>(SwiftUI)"]
+    end
+
+    subgraph Core["agent-core — Node/TypeScript, one process per install (:4173)"]
+        API["Fastify HTTP API<br/>bearer-token auth, per-user ScopedStore"]
+        Planner["deepagents planner<br/>+ specialist subagents<br/>(tasks, documents, tools, routines, …)"]
+        Ingest["Document pipeline<br/>OCR · field extraction · search"]
+        DB[("SQLite<br/>node:sqlite")]
+    end
+
+    Ollama[("Ollama<br/>local model, :11434")]
+
+    Desktop -- "HTTP + bearer token" --> API
+    Android -- "HTTP + bearer token" --> API
+    iOS -- "HTTP + bearer token" --> API
+    API --> Planner
+    API --> Ingest
+    API --> DB
+    Planner --> Ollama
+    Ingest -.->|"speech-to-text, OCR,<br/>embeddings"| Ollama
+
+    Planner -. "opt-in, off by default" .-> Web[["web search / fetch"]]
+    Planner -. "opt-in, off by default" .-> MCP[["external MCP servers"]]
+```
+
+Everything lives behind that one HTTP boundary: a client never talks to
+Ollama, SQLite, or the filesystem directly — only agent-core does, which is
+what keeps "local-first" actually true regardless of which client you're
+looking at. Start reading at `agent-core/src/server.ts` (the route table) and
+`agent-core/src/agents/index.ts` (the planner + subagents) — the rest of this
+section, and `CLAUDE.md`, go a layer deeper from there.
+
 **agent-core** is the only thing that talks to a model or touches the
 filesystem. It owns:
 
