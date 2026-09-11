@@ -34,11 +34,12 @@ on:
 permissions:
   contents: write
 
-# Shared with release-linux.yml and release-mac.yml — see the comment there.
+# Not shared with release-{linux,mac}.yml — see the comment in
+# release-linux.yml on why a group shared across all three was reverted.
 # A `no_upload` validation run never touches a real release's latest.json, so
 # give it its own lane instead of queuing behind (or blocking) a real release.
 concurrency:
-  group: ${{ inputs.no_upload == true && format('release-windows-validate-{0}', github.run_id) || format('release-assets-{0}', github.event.release.tag_name || inputs.tag || 'latest') }}
+  group: ${{ inputs.no_upload == true && format('release-windows-validate-{0}', github.run_id) || format('release-windows-{0}', github.event.release.tag_name || inputs.tag || 'latest') }}
   cancel-in-progress: false
 
 defaults:

@@ -22,14 +22,18 @@ on:
 permissions:
   contents: write
 
-# Shared with release-windows.yml and release-mac.yml (same group name,
-# keyed on tag only): all three platforms attach to the same release and
-# each merges its own entry into that release's latest.json (download,
-# add a key, re-upload). Run two of them at once and whichever uploads
-# last silently wins, dropping the other's platform entry. A per-workflow
-# group here wouldn't catch that — only serializing across all three does.
+# NOT shared with release-{windows,mac}.yml: a group shared across all
+# three was tried and reverted — when a single `release: published` event
+# fires all three simultaneously, GitHub Actions concurrency only keeps
+# the currently-running run plus the *latest* queued one for a group;
+# an extra simultaneous arrival is cancelled outright, not queued behind.
+# Confirmed happening in practice (v1.3.1's linux run got cancelled this
+# way). The actual race this was guarding against — mac/linux/windows
+# each merging their own key into the release's shared latest.json — is
+# instead handled with a download/merge/upload/verify retry loop in each
+# release-*.sh script, which works regardless of scheduling.
 concurrency:
-  group: release-assets-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+  group: release-linux-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
   cancel-in-progress: false
 
 jobs:

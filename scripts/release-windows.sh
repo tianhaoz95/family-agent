@@ -169,42 +169,72 @@ gh release delete-asset "$TAG" --repo "$REPO" "Family.Agent_${VERSION}_x64-setup
 gh release upload "$TAG" --repo "$REPO" --clobber "$INSTALLER"
 
 # Patch latest.json to add the windows platform, if we have a signed updater
-# artifact. Another platform's build may have already written it — merge,
-# don't replace, so a re-run or a same-release sibling build stays intact.
-# Nothing may have written it yet either: mac, linux and windows all attach
-# to the same release independently now (no fixed ordering), so whichever
-# runs first has to create it, not fail.
+# artifact. mac, linux and windows all attach to the same release
+# independently (no fixed ordering) and each merges its own key into this
+# same shared file — download, add a key, re-upload — so two running at
+# once can race: both download the same base, both upload, whichever lands
+# last silently wins and drops the other's key. GitHub Releases has no
+# conditional/compare-and-swap upload, so there's no way to prevent the
+# race outright; instead, retry with verification — re-download after
+# uploading and confirm our own key actually stuck, and if a concurrent
+# writer clobbered it, redo the merge against whatever is there now. (An
+# actual GitHub Actions concurrency lock across all three workflows was
+# tried and reverted: when one `release: published` event fires all three
+# simultaneously, GitHub's concurrency groups only keep the running run
+# plus the *latest* queued one — a third simultaneous arrival is cancelled
+# outright, not queued. Confirmed happening in practice.)
 if [ "$HAVE_KEY" -eq 1 ]; then
   say "adding windows-x86_64 to latest.json"
-  TMP="$(to_native_path "$(mktemp -d)")"
-  gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$TMP" --clobber 2>/dev/null || {
-    echo "    no latest.json on $TAG yet (first platform to publish) — starting fresh"
-    FA_VERSION="$VERSION" FA_LATEST_JSON="$TMP/latest.json" node -e '
+  FA_SIG="$(cat "$UPDATER_SIG")"
+  FA_URL="https://github.com/$REPO/releases/download/$TAG/$INSTALLER_NAME"
+  ATTEMPT=0
+  while :; do
+    ATTEMPT=$((ATTEMPT + 1))
+    TMP="$(to_native_path "$(mktemp -d)")"
+    gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$TMP" --clobber 2>/dev/null || {
+      echo "    no latest.json on $TAG yet (first platform to publish) — starting fresh"
+      FA_VERSION="$VERSION" FA_LATEST_JSON="$TMP/latest.json" node -e '
+        const fs = require("fs");
+        fs.writeFileSync(process.env.FA_LATEST_JSON, JSON.stringify({
+          version: process.env.FA_VERSION,
+          notes: "See the release notes on GitHub.",
+          pub_date: new Date().toISOString(),
+          platforms: {},
+        }, null, 2) + "\n");
+      '
+    }
+
+    FA_SIG="$FA_SIG" FA_URL="$FA_URL" FA_LATEST_JSON="$TMP/latest.json" node -e '
       const fs = require("fs");
-      fs.writeFileSync(process.env.FA_LATEST_JSON, JSON.stringify({
-        version: process.env.FA_VERSION,
-        notes: "See the release notes on GitHub.",
-        pub_date: new Date().toISOString(),
-        platforms: {},
-      }, null, 2) + "\n");
+      const p = process.env.FA_LATEST_JSON;
+      const m = JSON.parse(fs.readFileSync(p, "utf8"));
+      m.platforms ??= {};
+      m.platforms["windows-x86_64"] = { signature: process.env.FA_SIG.trim(), url: process.env.FA_URL };
+      fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+      console.log("    platforms now:", Object.keys(m.platforms).join(", "));
     '
-  }
 
-  FA_SIG="$(cat "$UPDATER_SIG")" \
-  FA_URL="https://github.com/$REPO/releases/download/$TAG/$INSTALLER_NAME" \
-  FA_LATEST_JSON="$TMP/latest.json" \
-  node -e '
-    const fs = require("fs");
-    const p = process.env.FA_LATEST_JSON;
-    const m = JSON.parse(fs.readFileSync(p, "utf8"));
-    m.platforms ??= {};
-    m.platforms["windows-x86_64"] = { signature: process.env.FA_SIG.trim(), url: process.env.FA_URL };
-    fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
-    console.log("    platforms now:", Object.keys(m.platforms).join(", "));
-  '
+    gh release upload "$TAG" --repo "$REPO" --clobber "$TMP/latest.json#latest.json"
 
-  gh release upload "$TAG" --repo "$REPO" --clobber "$TMP/latest.json#latest.json"
-  rm -rf "$TMP"
+    VERIFY="$(to_native_path "$(mktemp -d)")"
+    gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$VERIFY" --clobber 2>/dev/null
+    OURS_STUCK="$(FA_SIG="$FA_SIG" FA_LATEST_JSON="$VERIFY/latest.json" node -e '
+      const fs = require("fs");
+      try {
+        const m = JSON.parse(fs.readFileSync(process.env.FA_LATEST_JSON, "utf8"));
+        const p = m.platforms?.["windows-x86_64"];
+        console.log(p && p.signature === process.env.FA_SIG.trim() ? "yes" : "no");
+      } catch { console.log("no"); }
+    ' 2>/dev/null || echo no)"
+    rm -rf "$TMP" "$VERIFY"
+    [ "$OURS_STUCK" = "yes" ] && break
+    if [ "$ATTEMPT" -ge 5 ]; then
+      echo "    !! windows-x86_64 didn't stick in latest.json after $ATTEMPT attempts (a concurrent writer keeps winning) — the installer is uploaded fine, but check latest.json by hand" >&2
+      break
+    fi
+    echo "    a concurrent platform build overwrote latest.json first — retrying (attempt $ATTEMPT)"
+    sleep $((RANDOM % 4 + 1))
+  done
 fi
 
 # ------------------------------------------------------------------- verify

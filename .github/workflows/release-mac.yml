@@ -38,10 +38,10 @@ on:
 permissions:
   contents: write
 
-# Shared with release-linux.yml / release-windows.yml — see the comment
-# there on why this has to be one lock across all three, not one per platform.
+# Not shared with release-{linux,windows}.yml — see the comment in
+# release-linux.yml on why a group shared across all three was reverted.
 concurrency:
-  group: ${{ inputs.no_upload == true && format('release-mac-validate-{0}', github.run_id) || format('release-assets-{0}', github.event.release.tag_name || inputs.tag || 'latest') }}
+  group: ${{ inputs.no_upload == true && format('release-mac-validate-{0}', github.run_id) || format('release-mac-{0}', github.event.release.tag_name || inputs.tag || 'latest') }}
   cancel-in-progress: false
 
 jobs:

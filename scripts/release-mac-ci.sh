@@ -134,39 +134,75 @@ gh release upload "$TAG" --repo "$REPO" --clobber \
   "$TARBALL#Family.Agent.app.tar.gz" \
   "$TARBALL.sig#Family.Agent.app.tar.gz.sig"
 
-# Patch latest.json to add this platform's entry. Another platform's build
-# may have already written it, or none may have yet (mac, linux and windows
-# all attach independently now — see cut-release.sh) — merge in, don't
-# replace, and start fresh if it's not there yet.
+# Patch latest.json to add this platform's entry. mac, linux and windows
+# all attach to the same release independently (no fixed ordering) and
+# each merges its own key into this same shared file — download, add a
+# key, re-upload — so two running at once can race: both download the same
+# base, both upload, whichever lands last silently wins and drops the
+# other's key. GitHub Releases has no conditional/compare-and-swap upload,
+# so there's no way to prevent the race outright; instead, retry with
+# verification — re-download after uploading and confirm our own key
+# actually stuck, and if a concurrent writer clobbered it, redo the merge
+# against whatever is there now. (An actual GitHub Actions concurrency
+# lock across all three workflows was tried and reverted: when one
+# `release: published` event fires all three simultaneously, GitHub's
+# concurrency groups only keep the running run plus the *latest* queued
+# one — a third simultaneous arrival is cancelled outright, not queued.
+# Confirmed happening in practice.)
 ARCH="$(uname -m)"; [ "$ARCH" = "arm64" ] && ARCH="aarch64"
 say "adding darwin-$ARCH to latest.json"
-TMP="$(mktemp -d)"
-gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$TMP" --clobber 2>/dev/null || {
-  echo "    no latest.json on $TAG yet (first platform to publish) — starting fresh"
+ATTEMPT=0
+while :; do
+  ATTEMPT=$((ATTEMPT + 1))
+  TMP="$(mktemp -d)"
+  gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$TMP" --clobber 2>/dev/null || {
+    echo "    no latest.json on $TAG yet (first platform to publish) — starting fresh"
+    node -e '
+      const fs = require("fs");
+      fs.writeFileSync(process.argv[1], JSON.stringify({
+        version: process.argv[2],
+        notes: "See the release notes on GitHub.",
+        pub_date: new Date().toISOString(),
+        platforms: {},
+      }, null, 2) + "\n");
+    ' "$TMP/latest.json" "$VERSION"
+  }
+
   node -e '
     const fs = require("fs");
-    fs.writeFileSync(process.argv[1], JSON.stringify({
-      version: process.argv[2],
-      notes: "See the release notes on GitHub.",
-      pub_date: new Date().toISOString(),
-      platforms: {},
-    }, null, 2) + "\n");
-  ' "$TMP/latest.json" "$VERSION"
-}
+    const [, , manifestPath, ourManifestPath, arch] = process.argv;
+    const m = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const ours = JSON.parse(fs.readFileSync(ourManifestPath, "utf8"));
+    m.platforms ??= {};
+    m.platforms[`darwin-${arch}`] = ours.platforms[`darwin-${arch}`];
+    fs.writeFileSync(manifestPath, JSON.stringify(m, null, 2) + "\n");
+    console.log("    platforms now:", Object.keys(m.platforms).join(", "));
+  ' "$TMP/latest.json" "$MANIFEST" "$ARCH"
 
-node -e '
-  const fs = require("fs");
-  const [, , manifestPath, ourManifestPath, arch] = process.argv;
-  const m = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const ours = JSON.parse(fs.readFileSync(ourManifestPath, "utf8"));
-  m.platforms ??= {};
-  m.platforms[`darwin-${arch}`] = ours.platforms[`darwin-${arch}`];
-  fs.writeFileSync(manifestPath, JSON.stringify(m, null, 2) + "\n");
-  console.log("    platforms now:", Object.keys(m.platforms).join(", "));
-' "$TMP/latest.json" "$MANIFEST" "$ARCH"
+  gh release upload "$TAG" --repo "$REPO" --clobber "$TMP/latest.json#latest.json"
 
-gh release upload "$TAG" --repo "$REPO" --clobber "$TMP/latest.json#latest.json"
-rm -rf "$TMP"
+  VERIFY="$(mktemp -d)"
+  gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$VERIFY" --clobber 2>/dev/null
+  OURS_STUCK="$(node -e '
+    const fs = require("fs");
+    const [, , verifyPath, ourManifestPath, arch] = process.argv;
+    try {
+      const m = JSON.parse(fs.readFileSync(verifyPath, "utf8"));
+      const ours = JSON.parse(fs.readFileSync(ourManifestPath, "utf8"));
+      const got = m.platforms?.[`darwin-${arch}`];
+      const want = ours.platforms[`darwin-${arch}`];
+      console.log(got && got.signature === want.signature ? "yes" : "no");
+    } catch { console.log("no"); }
+  ' "$VERIFY/latest.json" "$MANIFEST" "$ARCH" 2>/dev/null || echo no)"
+  rm -rf "$TMP" "$VERIFY"
+  [ "$OURS_STUCK" = "yes" ] && break
+  if [ "$ATTEMPT" -ge 5 ]; then
+    echo "    !! darwin-$ARCH didn't stick in latest.json after $ATTEMPT attempts (a concurrent writer keeps winning) — the DMG is uploaded fine, but check latest.json by hand" >&2
+    break
+  fi
+  echo "    a concurrent platform build overwrote latest.json first — retrying (attempt $ATTEMPT)"
+  sleep $((RANDOM % 4 + 1))
+done
 
 # ------------------------------------------------------------------- verify
 
