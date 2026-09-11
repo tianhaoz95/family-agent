@@ -49,19 +49,39 @@ mkdir -p "$STAGE/agent-core"
 cp -R "$AGENT_CORE/dist" "$STAGE/agent-core/dist"
 cp "$AGENT_CORE/package.json" "$STAGE/agent-core/package.json"
 
-# The Node binary (resolve nvm shim -> the real Mach-O). On a plain PATH
-# install with no shim to resolve (e.g. actions/setup-node on the Windows
-# runner, where `command -v` also hands back an MSYS-style "/c/..." path a
-# native python3/node can't realpath anyway) just fall back to the
-# as-found path — it's already the real binary.
+# The Node binary (resolve nvm shim -> the real Mach-O — a macOS-specific
+# concern; actions/setup-node on Linux/Windows CI installs a plain binary
+# with nothing to resolve). Skip the python3 detour on Git Bash/MSYS
+# (Windows): `command -v` there hands back a POSIX-mount-style "/c/..."
+# path, and piping that through a *native* python3 (or node) to realpath is
+# exactly the kind of cross-tool path-format mismatch this script's other
+# portability fixes exist to avoid — better to just use the as-found path,
+# which is already the real binary.
 NODE_BIN="$(command -v node || true)"
 [ -n "$NODE_BIN" ] || { echo "!! no 'node' on PATH to bundle" >&2; exit 1; }
-if command -v python3 >/dev/null 2>&1; then
-  NODE_REAL="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_BIN" 2>/dev/null || echo "$NODE_BIN")"
-else
-  NODE_REAL="$NODE_BIN"
-fi
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    NODE_REAL="$NODE_BIN"
+    ;;
+  *)
+    if command -v python3 >/dev/null 2>&1; then
+      NODE_REAL="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_BIN" 2>/dev/null || echo "$NODE_BIN")"
+    else
+      NODE_REAL="$NODE_BIN"
+    fi
+    ;;
+esac
 cp "$NODE_REAL" "$STAGE/node"
+# Fail loudly here rather than leaving Tauri's later, less specific
+# "resource path `sidecar/node` doesn't exist" to explain it.
+if [ ! -f "$STAGE/node" ]; then
+  echo "!! staging the node binary failed: cp '$NODE_REAL' '$STAGE/node' left nothing there" >&2
+  echo "   NODE_BIN=$NODE_BIN" >&2
+  echo "   NODE_REAL=$NODE_REAL" >&2
+  ls -la -- "$NODE_REAL" >&2 2>&1 || echo "   (ls can't see NODE_REAL either)" >&2
+  ls -la -- "$STAGE" >&2 2>&1 || echo "   (ls can't see \$STAGE either)" >&2
+  exit 1
+fi
 chmod +x "$STAGE/node"
 
 # Production deps, installed in isolation (the repo root is an npm workspace, so
