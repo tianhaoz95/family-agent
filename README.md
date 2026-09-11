@@ -2,6 +2,15 @@
   <img src="assets/header.svg" alt="Family Agent — local-first family organizer" width="760">
 </p>
 
+<p align="center">
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/ci.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-mac.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/release-mac.yml/badge.svg" alt="Release (macOS)"></a>
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-linux.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/release-linux.yml/badge.svg" alt="Release (Linux)"></a>
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-windows.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/release-windows.yml/badge.svg" alt="Release (Windows)"></a>
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-ios.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/release-ios.yml/badge.svg?branch=main" alt="Release (iOS)"></a>
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/pages.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/pages.yml/badge.svg?branch=main" alt="Deploy site"></a>
+</p>
+
 A local-first agentic app for a household's documents, calendar, tasks, notes
 and passwords. Everything — the model, the storage, the document and speech
 processing — runs on hardware you own. There's no account to create and no
