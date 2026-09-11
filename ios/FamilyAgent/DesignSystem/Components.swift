@@ -18,9 +18,16 @@ import SwiftUI
 /// HStack outside their ScrollView. This makes every ScreenScaffold user do
 /// the same thing by construction — the caller no longer wraps it in its own
 /// ScrollView; only `subtitle` + `content` scroll under the fixed title.
+///
+/// Set `scrollable: false` for a screen whose content needs a real bounded
+/// viewport instead of scrolling — Board's `GeometryReader` corkboard is the
+/// case that surfaces this: inside a ScrollView, GeometryReader has no
+/// incoming height constraint to report and collapses to a sliver, so the
+/// board rendered as a short card with notes spilling out past its edge.
 struct ScreenScaffold<Content: View>: View {
     let title: String
     let subtitle: String
+    var scrollable: Bool = true
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -33,25 +40,34 @@ struct ScreenScaffold<Content: View>: View {
                 .padding(.top, 58)
                 .padding(.bottom, 6)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // The serif voice stays, but quieter: at 16.5 it ran three lines on
-                    // Routines/Vault/Skills and pushed content far down the screen while
-                    // competing with the title for attention.
-                    Text(subtitle)
-                        .font(.serif(15))
-                        .lineSpacing(1.5)
-                        .foregroundStyle(Theme.textBody)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer().frame(height: 20)
-                    content
+            if scrollable {
+                ScrollView {
+                    body(fillHeight: false)
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 24)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+            } else {
+                body(fillHeight: true)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func body(fillHeight: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // The serif voice stays, but quieter: at 16.5 it ran three lines on
+            // Routines/Vault/Skills and pushed content far down the screen while
+            // competing with the title for attention.
+            Text(subtitle)
+                .font(.serif(15))
+                .lineSpacing(1.5)
+                .foregroundStyle(Theme.textBody)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer().frame(height: 20)
+            content
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, maxHeight: fillHeight ? .infinity : nil, alignment: .topLeading)
     }
 }
 

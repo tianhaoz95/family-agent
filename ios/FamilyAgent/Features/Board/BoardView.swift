@@ -8,7 +8,7 @@ struct BoardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ScreenScaffold(title: "Board", subtitle: "A corkboard of sticky notes. Drag to rearrange; tap to edit.") {
+            ScreenScaffold(title: "Board", subtitle: "A corkboard of sticky notes. Drag to rearrange; tap to edit.", scrollable: false) {
                 VStack(spacing: 14) {
                     HStack(spacing: 10) {
                         BrandSegmented(options: [("shared", "Shared"), ("private", "Mine")],
