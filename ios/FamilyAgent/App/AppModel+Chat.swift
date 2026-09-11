@@ -19,6 +19,15 @@ extension AppModel {
                 ChatMessage(role: m.role, text: m.body, images: m.images,
                             references: m.refs, steps: m.steps, cards: m.cards)
             }
+            // The session's own last word is a user message with no reply
+            // after it — a turn may still be running server-side (this
+            // device was killed or lost its connection mid-turn; the /chat
+            // route persists the user's message before it even calls the
+            // model, so the reply can land long after the request that
+            // started it is gone). Show the pending state and wait for it.
+            if msgs.last?.role == "user" {
+                watchForPendingReply(sessionId: id)
+            }
         }
     }
 
@@ -28,6 +37,38 @@ extension AppModel {
     func openMostRecentChatSession() async {
         await refreshChatSessions()
         if let id = chatSessions.first?.id { openChatSession(id) }
+    }
+
+    /// Re-poll a session's own message list until the pending reply resolves
+    /// (or a generous timeout passes), rather than losing the "still
+    /// working" state whenever this app instance wasn't the one waiting for
+    /// it. No live tool-call steps here — the turnId that would carry those
+    /// died with whatever launched the original request.
+    private func watchForPendingReply(sessionId: String) {
+        guard !chatSending else { return } // this instance is already actively sending it
+        chatSending = true
+        chatLiveSteps = []
+        Task {
+            defer { if activeChatSessionID == sessionId { chatSending = false } }
+            let deadline = Date().addingTimeInterval(210) // worst-case turn (~110s) plus margin
+            while Date() < deadline {
+                try? await Task.sleep(for: .seconds(3))
+                guard activeChatSessionID == sessionId else { return } // navigated elsewhere
+                guard let msgs = await perform({ try await api.chatSessionMessages(sessionId) }) else { continue }
+                if msgs.last?.role != "user" {
+                    chatMessages = msgs.map { m in
+                        ChatMessage(role: m.role, text: m.body, images: m.images,
+                                    references: m.refs, steps: m.steps, cards: m.cards)
+                    }
+                    return
+                }
+            }
+            // Gave up waiting — leave the transcript as-is rather than guess
+            // whether it errored out or is just unusually slow.
+            if activeChatSessionID == sessionId {
+                chatMessages.append(ChatMessage(role: "error", text: "No reply came back for that message. You can try sending it again."))
+            }
+        }
     }
 
     func sendChat(_ text: String, images: [String] = [], speakReply: Bool = false) {

@@ -658,6 +658,51 @@ class AppViewModel(
                         ChatMessage(role = it.role, text = it.body, images = it.images, references = it.refs, steps = it.steps, cards = it.cards)
                     },
                 )
+                // The session's own last word is the user's, with no reply
+                // after it — a turn may still be running server-side (this
+                // device was killed or lost its connection mid-turn; /chat
+                // persists the user's message before it even calls the
+                // model, so the reply can land long after the request that
+                // started it is gone). Show the pending state and wait for it.
+                if (messages.lastOrNull()?.role == "user") watchForPendingReply(id)
+            }
+        }
+    }
+
+    /** Re-poll a session's own message list until the pending reply resolves
+     *  (or a generous timeout passes), rather than losing the "still
+     *  working" state whenever this app instance wasn't the one waiting for
+     *  it. No live tool-call steps here — the turnId that would carry those
+     *  died with whatever launched the original request. */
+    private fun watchForPendingReply(sessionId: String) {
+        if (_state.value.chatSending) return // this instance is already actively sending it
+        _state.value = _state.value.copy(chatSending = true, chatLiveSteps = emptyList())
+        viewModelScope.launch {
+            val deadline = System.currentTimeMillis() + 210_000L // worst-case turn (~110s) plus margin
+            while (System.currentTimeMillis() < deadline) {
+                delay(3000)
+                if (_state.value.activeChatSessionId != sessionId) return@launch // navigated elsewhere
+                val messages = apiCall { api.getChatSessionMessages(sessionId) }.getOrNull() ?: continue
+                if (messages.lastOrNull()?.role != "user") {
+                    _state.value = _state.value.copy(
+                        chatMessages = messages.map {
+                            ChatMessage(role = it.role, text = it.body, images = it.images, references = it.refs, steps = it.steps, cards = it.cards)
+                        },
+                        chatSending = false,
+                        chatLiveSteps = emptyList(),
+                    )
+                    return@launch
+                }
+            }
+            // Gave up waiting — leave the transcript as-is rather than guess
+            // whether it errored out or is just unusually slow.
+            if (_state.value.activeChatSessionId == sessionId) {
+                _state.value = _state.value.copy(
+                    chatMessages = _state.value.chatMessages +
+                        ChatMessage("assistant", "No reply came back for that message. You can try sending it again."),
+                    chatSending = false,
+                    chatLiveSteps = emptyList(),
+                )
             }
         }
     }
