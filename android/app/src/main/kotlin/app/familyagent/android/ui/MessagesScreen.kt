@@ -326,18 +326,23 @@ fun ConversationScreen(
             )
         }
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 10.dp),
-        ) {
-            items(messages, key = { it.id }) { m ->
-                MessageBubble(
-                    m, own = m.senderId == currentUserId, channel,
-                    ttsEnabled, speakingText, speakLoadingText, onSpeak, onStepsClick, onViewCardSource,
-                )
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(vertical = 10.dp),
+            ) {
+                items(messages, key = { it.id }) { m ->
+                    MessageBubble(
+                        m, own = m.senderId == currentUserId, channel,
+                        ttsEnabled, speakingText, speakLoadingText, onSpeak, onStepsClick, onViewCardSource,
+                    )
+                }
             }
+            // Content dissolves into the header as it scrolls up underneath —
+            // Claude-app style.
+            TopScrollFade(Modifier.align(Alignment.TopCenter))
         }
 
         if (attached.isNotEmpty()) {
@@ -411,78 +416,85 @@ fun ConversationScreen(
                 onVoiceSend = onVoiceSend,
             )
         }
-        Row(
+        // Two rows, Claude-app style: the text field (plus mention chip) on
+        // top, attach/mic/send underneath — rather than everything crammed
+        // into one row.
+        Column(
             Modifier
                 .fillMaxWidth()
                 .shadow(5.dp, MaterialTheme.shapes.large, clip = false)
                 .clip(MaterialTheme.shapes.large)
                 .background(MaterialTheme.colorScheme.surface)
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large)
-                .padding(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = 8.dp, vertical = 6.dp),
         ) {
-            IconButton(
-                onClick = {
-                    pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                },
-                enabled = !sending && attached.size < MAX_MESSAGE_IMAGES,
-            ) {
-                Icon(
-                    Icons.Rounded.PhotoLibrary,
-                    contentDescription = "Attach image",
-                    modifier = Modifier.size(22.dp),
-                    tint = MaterialTheme.colorScheme.primary,
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (mentionChip) MentionChip(onRemove = { mentionChip = false })
+                TextField(
+                    value = input,
+                    onValueChange = { onInput(it) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .onPreviewKeyEvent { e ->
+                            // Backspace on an empty field drops the whole @agent
+                            // pill at once — never a partial "@age".
+                            if (e.type == KeyEventType.KeyDown &&
+                                e.key == Key.Backspace &&
+                                mentionChip &&
+                                input.isEmpty()
+                            ) {
+                                mentionChip = false
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                    placeholder = {
+                        Text(
+                            if (mentionChip) "Message the assistant" else "Message, or @agent",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    maxLines = 4,
+                    // Return sends the message instead of inserting a newline —
+                    // the composer only ever grows from wrapping, not manual breaks.
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { submit() }),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                    ),
                 )
             }
-            if (voiceEnabled && micOnLeft) mic()
-            if (mentionChip) MentionChip(onRemove = { mentionChip = false })
-            TextField(
-                value = input,
-                onValueChange = { onInput(it) },
-                modifier = Modifier
-                    .weight(1f)
-                    .onPreviewKeyEvent { e ->
-                        // Backspace on an empty field drops the whole @agent
-                        // pill at once — never a partial "@age".
-                        if (e.type == KeyEventType.KeyDown &&
-                            e.key == Key.Backspace &&
-                            mentionChip &&
-                            input.isEmpty()
-                        ) {
-                            mentionChip = false
-                            true
-                        } else {
-                            false
-                        }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = {
+                        pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     },
-                placeholder = {
-                    Text(
-                        if (mentionChip) "Message the assistant" else "Message, or @agent",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    enabled = !sending && attached.size < MAX_MESSAGE_IMAGES,
+                ) {
+                    Icon(
+                        Icons.Rounded.PhotoLibrary,
+                        contentDescription = "Attach image",
+                        modifier = Modifier.size(22.dp),
+                        tint = MaterialTheme.colorScheme.primary,
                     )
-                },
-                maxLines = 4,
-                // Return sends the message instead of inserting a newline —
-                // the composer only ever grows from wrapping, not manual breaks.
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { submit() }),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent,
-                ),
-            )
-            if (voiceEnabled && !micOnLeft) mic()
-            FilledIconButton(
-                onClick = submit,
-                enabled = (input.isNotBlank() || attached.isNotEmpty() || mentionChip) && !sending,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.size(46.dp),
-            ) {
-                Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
+                }
+                if (voiceEnabled && micOnLeft) mic()
+                Spacer(Modifier.weight(1f))
+                if (voiceEnabled && !micOnLeft) mic()
+                FilledIconButton(
+                    onClick = submit,
+                    enabled = (input.isNotBlank() || attached.isNotEmpty() || mentionChip) && !sending,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.size(46.dp),
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
+                }
             }
         }
     }

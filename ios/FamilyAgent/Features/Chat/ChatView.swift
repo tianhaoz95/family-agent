@@ -71,6 +71,7 @@ struct ChatView: View {
                 .onChange(of: model.chatSending) { _, sending in
                     if sending { withAnimation { proxy.scrollTo("typing", anchor: .bottom) } }
                 }
+                .overlay(alignment: .top) { TopScrollFade() }
             }
 
             if !attached.isEmpty {
@@ -184,41 +185,48 @@ struct ChatView: View {
 
     private var composer: some View {
         ComposerBar {
-            PhotosPicker(selection: $photoItem, matching: .images) {
-                Image(systemName: "photo").font(.system(size: 18))
-                    .foregroundStyle(Theme.accentInk)
-                    .frame(width: 34, height: 34)
-            }
-            .disabled(attached.count >= 4)
-            .opacity(attached.count >= 4 ? 0.35 : 1)
-
-            if model.voiceEnabled && model.micOnLeft { mic }
-
-            TextField("Ask anything, or type /", text: $input, axis: .vertical)
-                .font(.inter(15))
-                .lineLimit(1...4)
-                .padding(.vertical, 7)
-                .padding(.leading, 4)
-                .tint(Theme.accent)
-                .focused($composerFocused)
-                // Return sends instead of inserting a newline — the composer
-                // only ever grows from wrapping, not manual line breaks.
-                .submitLabel(.send)
-                .onSubmit { send() }
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button { composerFocused = false } label: {
-                            Image(systemName: "keyboard.chevron.compact.down")
-                                .font(.system(size: 16, weight: .semibold))
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("Ask anything, or type /", text: $input, axis: .vertical)
+                    .font(.inter(15))
+                    .lineLimit(1...4)
+                    .padding(.horizontal, 6)
+                    .padding(.top, 3)
+                    .tint(Theme.accent)
+                    .focused($composerFocused)
+                    // Return sends instead of inserting a newline — the composer
+                    // only ever grows from wrapping, not manual line breaks.
+                    .submitLabel(.send)
+                    .onSubmit { send() }
+                    .toolbar {
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            Button { composerFocused = false } label: {
+                                Image(systemName: "keyboard.chevron.compact.down")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                            .tint(Theme.accentInk)
                         }
-                        .tint(Theme.accentInk)
                     }
+
+                // Actions row — attach / mic / send, Claude-app style.
+                HStack(spacing: 4) {
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Image(systemName: "photo").font(.system(size: 18))
+                            .foregroundStyle(Theme.accentInk)
+                            .frame(width: 34, height: 34)
+                    }
+                    .disabled(attached.count >= 4)
+                    .opacity(attached.count >= 4 ? 0.35 : 1)
+
+                    if model.voiceEnabled && model.micOnLeft { mic }
+
+                    Spacer(minLength: 0)
+
+                    if model.voiceEnabled && !model.micOnLeft { mic }
+
+                    SendButton(sending: model.chatSending, enabled: canSend) { send() }
                 }
-
-            if model.voiceEnabled && !model.micOnLeft { mic }
-
-            SendButton(sending: model.chatSending, enabled: canSend) { send() }
+            }
         }
     }
 

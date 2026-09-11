@@ -1,18 +1,20 @@
 import SwiftUI
 
 /// The floating chat/message input pill — glass on iOS 26, a soft solid on 18.
-/// Shared by `ChatView` and `ConversationView` so they stay identical.
+/// Shared by `ChatView` and `ConversationView` so they stay identical. Two
+/// rows, Claude-app style: the caller supplies its own `VStack` — a text row
+/// on top, an actions row (attach / mic / send) underneath — rather than
+/// this wrapper imposing a layout, since the mention-pill case needs its own
+/// row-1 arrangement.
 struct ComposerBar<Content: View>: View {
     @ViewBuilder var content: Content
-    private let shape = RoundedRectangle(cornerRadius: 25, style: .continuous)
+    private let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 4) {
-            content
-        }
-        .padding(.leading, 8)
-        .padding(.trailing, 6)
-        .padding(.vertical, 5)
+        content
+        .padding(.horizontal, 12)
+        .padding(.top, 9)
+        .padding(.bottom, 6)
         .background {
             if #available(iOS 26, *) {
                 shape.fill(Color.white.opacity(0.35))

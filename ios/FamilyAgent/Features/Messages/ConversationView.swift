@@ -58,6 +58,7 @@ struct ConversationView: View {
                 .onChange(of: model.channelMessages.count) { _, _ in
                     withAnimation { proxy.scrollTo(model.channelMessages.last?.id, anchor: .bottom) }
                 }
+                .overlay(alignment: .top) { TopScrollFade() }
             }
 
             if !attached.isEmpty {
@@ -125,64 +126,73 @@ struct ConversationView: View {
     @ViewBuilder
     private var composer: some View {
         ComposerBar {
-            PhotosPicker(selection: $photoItem, matching: .images) {
-                Image(systemName: "photo").font(.system(size: 18))
-                    .foregroundStyle(Theme.accentInk)
-                    .frame(width: 34, height: 34)
-            }
-            .disabled(attached.count >= 4)
-            .opacity(attached.count >= 4 ? 0.35 : 1)
-
-            if model.voiceEnabled && model.micOnLeft { mic }
-
-            if mentionPill {
-                Button { mentionPill = false } label: {
-                    HStack(spacing: 3) {
-                        Text("@agent").font(.inter(12.5, .semibold))
-                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                    }
-                    .foregroundStyle(Theme.accentInk)
-                    .padding(.horizontal, 9).padding(.vertical, 5)
-                    .background(Theme.accentSoft, in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-
-            TextField(mentionPill ? "Message the assistant" : "Message, or @agent", text: $input, axis: .vertical)
-                .font(.inter(15))
-                .lineLimit(1...4)
-                .padding(.vertical, 7)
-                .padding(.leading, mentionPill ? 0 : 4)
-                .tint(Theme.accent)
-                .focused($composerFocused)
-                // Return sends instead of inserting a newline — the composer
-                // only ever grows from wrapping, not manual line breaks.
-                .submitLabel(.send)
-                .onSubmit { send() }
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button { composerFocused = false } label: {
-                            Image(systemName: "keyboard.chevron.compact.down")
-                                .font(.system(size: 16, weight: .semibold))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    if mentionPill {
+                        Button { mentionPill = false } label: {
+                            HStack(spacing: 3) {
+                                Text("@agent").font(.inter(12.5, .semibold))
+                                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                            }
+                            .foregroundStyle(Theme.accentInk)
+                            .padding(.horizontal, 9).padding(.vertical, 5)
+                            .background(Theme.accentSoft, in: Capsule())
                         }
-                        .tint(Theme.accentInk)
+                        .buttonStyle(.plain)
                     }
-                }
-                .onChange(of: input) { _, v in
-                    guard !mentionPill, v.hasPrefix("@") else { return }
-                    if let sp = v.firstIndex(where: { $0 == " " || $0 == "\t" }) {
-                        let mention = v[v.index(after: v.startIndex)..<sp].lowercased()
-                        if mentionNames.contains(mention) {
-                            mentionPill = true
-                            input = String(v[v.index(after: sp)...])
+
+                    TextField(mentionPill ? "Message the assistant" : "Message, or @agent", text: $input, axis: .vertical)
+                        .font(.inter(15))
+                        .lineLimit(1...4)
+                        .padding(.vertical, 3)
+                        .padding(.leading, mentionPill ? 0 : 6)
+                        .tint(Theme.accent)
+                        .focused($composerFocused)
+                        // Return sends instead of inserting a newline — the composer
+                        // only ever grows from wrapping, not manual line breaks.
+                        .submitLabel(.send)
+                        .onSubmit { send() }
+                        .toolbar {
+                            ToolbarItemGroup(placement: .keyboard) {
+                                Spacer()
+                                Button { composerFocused = false } label: {
+                                    Image(systemName: "keyboard.chevron.compact.down")
+                                        .font(.system(size: 16, weight: .semibold))
+                                }
+                                .tint(Theme.accentInk)
+                            }
                         }
-                    }
+                        .onChange(of: input) { _, v in
+                            guard !mentionPill, v.hasPrefix("@") else { return }
+                            if let sp = v.firstIndex(where: { $0 == " " || $0 == "\t" }) {
+                                let mention = v[v.index(after: v.startIndex)..<sp].lowercased()
+                                if mentionNames.contains(mention) {
+                                    mentionPill = true
+                                    input = String(v[v.index(after: sp)...])
+                                }
+                            }
+                        }
                 }
 
-            if model.voiceEnabled && !model.micOnLeft { mic }
+                // Actions row — attach / mic / send, Claude-app style.
+                HStack(spacing: 4) {
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Image(systemName: "photo").font(.system(size: 18))
+                            .foregroundStyle(Theme.accentInk)
+                            .frame(width: 34, height: 34)
+                    }
+                    .disabled(attached.count >= 4)
+                    .opacity(attached.count >= 4 ? 0.35 : 1)
 
-            SendButton(sending: model.channelSending, enabled: canSend) { send() }
+                    if model.voiceEnabled && model.micOnLeft { mic }
+
+                    Spacer(minLength: 0)
+
+                    if model.voiceEnabled && !model.micOnLeft { mic }
+
+                    SendButton(sending: model.channelSending, enabled: canSend) { send() }
+                }
+            }
         }
     }
 

@@ -190,25 +190,30 @@ fun ChatScreen(
                 },
             )
         } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(vertical = 4.dp),
-            ) {
-                items(messages) { msg ->
-                    ChatBubble(msg, onReferenceClick, ttsEnabled, speakingText, speakLoadingText, onSpeak, onStepsClick, onViewCardSource)
-                }
-                if (sending) {
-                    item {
-                        Column(horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            StepsStrip(liveSteps, live = true) { onStepsClick(liveSteps) }
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                                TypingDots()
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(vertical = 4.dp),
+                ) {
+                    items(messages) { msg ->
+                        ChatBubble(msg, onReferenceClick, ttsEnabled, speakingText, speakLoadingText, onSpeak, onStepsClick, onViewCardSource)
+                    }
+                    if (sending) {
+                        item {
+                            Column(horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                StepsStrip(liveSteps, live = true) { onStepsClick(liveSteps) }
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                                    TypingDots()
+                                }
                             }
                         }
                     }
                 }
+                // Content dissolves into the header as it scrolls up
+                // underneath — Claude-app style.
+                TopScrollFade(Modifier.align(Alignment.TopCenter))
             }
         }
 
@@ -309,51 +314,21 @@ fun ChatScreen(
                 onVoiceSend = onVoiceSend,
             )
         }
-        Row(
+        // Two rows, Claude-app style: the text field on top, attach/mic/send
+        // underneath — rather than everything crammed into one row.
+        Column(
             Modifier
                 .fillMaxWidth()
-                .shadow(5.dp, RoundedCornerShape(20.dp), clip = false)
-                .clip(RoundedCornerShape(20.dp))
+                .shadow(5.dp, RoundedCornerShape(24.dp), clip = false)
+                .clip(RoundedCornerShape(24.dp))
                 .background(MaterialTheme.colorScheme.surface)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(20.dp))
-                .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
         ) {
-            Box {
-                IconButton(onClick = { attachMenuOpen = true }, enabled = !sending && attached.size < MAX_IMAGES) {
-                    Icon(
-                        Icons.Rounded.PhotoLibrary,
-                        contentDescription = "Attach image",
-                        modifier = Modifier.size(22.dp),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Photo library") },
-                        leadingIcon = { Icon(Icons.Rounded.PhotoLibrary, contentDescription = null) },
-                        onClick = {
-                            attachMenuOpen = false
-                            pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Take photo") },
-                        leadingIcon = { Icon(Icons.Rounded.PhotoCamera, contentDescription = null) },
-                        onClick = {
-                            attachMenuOpen = false
-                            val uri = createChatPhotoUri(context)
-                            pendingCameraUri = uri
-                            takePhoto.launch(uri)
-                        },
-                    )
-                }
-            }
-            if (voiceEnabled && micOnLeft) mic()
             TextField(
                 value = input,
                 onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 placeholder = {
                     Text(
                         "Ask anything, or type /",
@@ -376,14 +351,48 @@ fun ChatScreen(
                     disabledIndicatorColor = Color.Transparent,
                 ),
             )
-            if (voiceEnabled && !micOnLeft) mic()
-            FilledIconButton(
-                onClick = submit,
-                enabled = !sending && (input.text.isNotBlank() || attached.isNotEmpty()),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.size(46.dp),
-            ) {
-                Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    IconButton(onClick = { attachMenuOpen = true }, enabled = !sending && attached.size < MAX_IMAGES) {
+                        Icon(
+                            Icons.Rounded.PhotoLibrary,
+                            contentDescription = "Attach image",
+                            modifier = Modifier.size(22.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Photo library") },
+                            leadingIcon = { Icon(Icons.Rounded.PhotoLibrary, contentDescription = null) },
+                            onClick = {
+                                attachMenuOpen = false
+                                pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Take photo") },
+                            leadingIcon = { Icon(Icons.Rounded.PhotoCamera, contentDescription = null) },
+                            onClick = {
+                                attachMenuOpen = false
+                                val uri = createChatPhotoUri(context)
+                                pendingCameraUri = uri
+                                takePhoto.launch(uri)
+                            },
+                        )
+                    }
+                }
+                if (voiceEnabled && micOnLeft) mic()
+                Spacer(Modifier.weight(1f))
+                if (voiceEnabled && !micOnLeft) mic()
+                FilledIconButton(
+                    onClick = submit,
+                    enabled = !sending && (input.text.isNotBlank() || attached.isNotEmpty()),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.size(46.dp),
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
+                }
             }
         }
     }

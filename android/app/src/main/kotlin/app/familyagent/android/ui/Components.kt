@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -49,6 +50,30 @@ import androidx.compose.ui.unit.dp
 import app.familyagent.android.ui.theme.AppAccents
 import app.familyagent.android.ui.theme.SourceSerif
 import kotlinx.coroutines.delay
+
+/**
+ * A soft fade strip pinned to the top of a scrolling transcript — content
+ * dissolves into the header as it scrolls up underneath, the same idea as
+ * the Claude app's chat view (the iOS counterpart, `TopScrollFade` in
+ * DesignSystem/Components.swift, gets a real `.ultraThinMaterial` blur under
+ * the gradient; Compose has no cheap backdrop blur across this app's
+ * minSdk 26, so this is the gradient-only half of that effect). Place inside
+ * a `Box` as the last child, aligned `TopCenter`, above the scrolling list.
+ */
+@Composable
+fun TopScrollFade(modifier: Modifier = Modifier, height: androidx.compose.ui.unit.Dp = 22.dp) {
+    val base = MaterialTheme.colorScheme.background
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(height)
+            .background(
+                Brush.verticalGradient(
+                    listOf(base.copy(alpha = 0.85f), base.copy(alpha = 0.35f), Color.Transparent)
+                )
+            )
+    )
+}
 
 /**
  * Standard screen frame: safe-area padding, a title and an editorial serif

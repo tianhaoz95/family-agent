@@ -2,6 +2,24 @@ import SwiftUI
 
 // Shared UI pieces — the iOS mirror of `android/.../ui/Components.kt`.
 
+// MARK: - TopScrollFade
+
+/// A soft blur-into-fade strip pinned to the top of a scrolling transcript —
+/// content dissolves into the header as it scrolls up underneath, the same
+/// idea as the Claude app's chat view. Non-interactive; drop it in as a
+/// `.overlay(alignment: .top)` on the ScrollView. Used by Chat and Messages.
+struct TopScrollFade: View {
+    var height: CGFloat = 26
+    var body: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .mask(LinearGradient(colors: [.black, .black.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom))
+            .frame(height: height)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .allowsHitTesting(false)
+    }
+}
+
 // MARK: - ScreenScaffold
 
 /// Standard screen frame: a title, an editorial serif subtitle, then content.
