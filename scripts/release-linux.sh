@@ -94,9 +94,14 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
     # this build only.
     BUILD_ARGS+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
   fi
-  # AppImage's bundled appimagetool runs unprivileged when FUSE is missing.
+  # linuxdeploy (which builds the AppImage) and its plugins are themselves
+  # AppImages; GitHub-hosted runners don't reliably support the FUSE mount an
+  # AppImage normally uses to run itself, so make every nested AppImage
+  # extract-and-run instead. --verbose so a real failure here isn't just
+  # tauri-bundler's opaque "failed to run linuxdeploy".
   export APPIMAGE_EXTRACT_AND_RUN=1
-  ( cd "$ROOT/desktop" && CI=true npm run tauri:build -- ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} )
+  echo "    /dev/fuse: $( [ -e /dev/fuse ] && echo present || echo absent )"
+  ( cd "$ROOT/desktop" && CI=true npm run tauri:build -- ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} --verbose )
 else
   say "skipping build"
 fi
