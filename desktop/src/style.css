@@ -4594,6 +4594,40 @@ input[type="file"]::file-selector-button:hover {
   animation: view-in var(--dur-lg) var(--ease-out);
 }
 
+/* ---- Top scroll fade ----------------------------------------------------
+   Content dissolves into the fixed header above it as it scrolls up
+   underneath, instead of cutting off sharply — the trick introduced on
+   Chat/Messages on iOS/Android, standardized here with a real
+   backdrop-filter blur (the desktop webview can afford it; Android can't).
+   Each of these is a flex-column scroll container with its header rendered
+   as a normal-flow sibling *before* it (the section's <h1>/subtitle/form),
+   so a `::before` pseudo-element works as the fade: as the first flex item,
+   `position: sticky` pins it to the top of this box's own scrollport while
+   later (real) rows scroll underneath and through its blurred band; the
+   negative margin keeps it from adding extra scroll height of its own. */
+.chat-log::before,
+.message-log::before,
+.channel-list::before,
+.task-list::before,
+.document-list::before,
+.activity-list::before,
+.tool-list::before {
+  content: "";
+  position: sticky;
+  top: 0;
+  left: 0;
+  right: 0;
+  flex: none;
+  height: 22px;
+  margin-bottom: -22px;
+  z-index: 5;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  -webkit-mask-image: linear-gradient(to bottom, #000, transparent);
+  mask-image: linear-gradient(to bottom, #000, transparent);
+}
+
 /* The centred composer floats a little more and glows on focus. */
 .chat-form {
   transition: box-shadow var(--dur) var(--ease-out), transform var(--dur) var(--ease-out);
