@@ -3408,19 +3408,53 @@ input[type="file"]::file-selector-button:hover {
 .board-add {
   white-space: nowrap;
 }
+.board-zoom {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 2px;
+}
+.board-zoom .ghost-btn {
+  border: none;
+  padding: 5px 10px;
+  font-size: 0.8rem;
+  min-width: 0;
+}
+#board-zoom-reset {
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+}
 
+/* The board VIEWPORT is the fixed-size window the user actually sees;
+   .note-board itself is CSS-transform-scaled inside it (see main.ts's
+   applyBoardZoom) so zooming never changes note-board's own layout box
+   (clientWidth/clientHeight) — that box is what note x/y coordinates are
+   clamped against (clampToBoard), so it has to stay constant across zoom
+   levels or a note's saved position would drift. Zooming out shrinks the
+   whole board+notes visually within this same fixed viewport — literally
+   "fit more sticky notes" on screen; zooming in makes them bigger to read,
+   scrollable via this viewport's own overflow. */
+.board-viewport {
+  margin-top: 6px;
+  min-height: 68vh;
+  overflow: auto;
+  border-radius: var(--r-lg);
+}
 /* The board surface: a plain white panel. Notes are absolutely positioned
    within it and dragged around. */
 .note-board {
   position: relative;
   width: 100%;
   min-height: 68vh;
-  margin-top: 6px;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   background-color: var(--surface);
   overflow: hidden;
   touch-action: none;
+  transform-origin: top left;
+  transition: transform var(--dur) var(--ease-out);
 }
 .note-board-empty {
   position: absolute;
@@ -3953,12 +3987,17 @@ input[type="file"]::file-selector-button:hover {
    see #artifact-comments-panel (a plain .side-panel) and the fab below. ---- */
 .artifact-viewer {
   position: absolute;
-  /* Same floating rounded card as .tool-viewer (see note there). */
+  /* Same floating rounded card as .tool-viewer (see note there). --comments-space
+     is set from JS (syncArtifactCommentsLayout in main.ts) only when the window
+     is wide enough to fit the open comments panel *and* a usable artifact width
+     side by side — the viewer shrinks to make room instead of the panel
+     covering it. On a narrow window --comments-space stays 0 and the panel
+     (higher z-index, position: fixed) simply overlays on top. */
   top: 14px;
-  right: 16px;
+  right: calc(16px + var(--comments-space, 0px));
   bottom: 16px;
   left: var(--rail-space);
-  transition: left var(--dur-lg) var(--ease-out);
+  transition: left var(--dur-lg) var(--ease-out), right var(--dur-lg) var(--ease-out);
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -4037,6 +4076,19 @@ input[type="file"]::file-selector-button:hover {
   font-size: 0.8rem;
   color: var(--text-muted);
   margin: 6px 2px;
+}
+.artifact-rail-resolved-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  margin: 0 2px 2px;
+}
+.artifact-rail-resolved-toggle input {
+  accent-color: var(--accent);
 }
 .artifact-rail-busy {
   font-size: 0.8rem;

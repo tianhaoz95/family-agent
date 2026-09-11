@@ -615,6 +615,8 @@ export interface Settings {
   serverName: string;
   /** Whether the assistant may answer with a generated HTML card — admin-toggleable. */
   cardsEnabled: boolean;
+  /** Whether the password vault is turned on for this server — admin-toggleable. */
+  vaultEnabled: boolean;
   /** Whether the research agent can reach the internet (a provider is configured). */
   webEnabled: boolean;
   /** Web-search provider: "none" = off; "ddg" | "searxng" | "tavily" | "brave". */
@@ -634,6 +636,7 @@ export interface Settings {
     ttsVoice: boolean;
     serverName: boolean;
     cardsEnabled: boolean;
+    vaultEnabled: boolean;
     webSearchProvider: boolean;
   };
 }
@@ -647,6 +650,7 @@ export interface SettingsPatch {
   ttsVoice?: string;
   serverName?: string;
   cardsEnabled?: boolean;
+  vaultEnabled?: boolean;
   webSearchProvider?: "none" | "ddg" | "searxng" | "tavily" | "brave";
   webSearchUrl?: string;
   webSearchApiKey?: string;
@@ -1003,6 +1007,11 @@ export const api = {
     }),
   deleteArtifactComment: (id: string, cid: string) =>
     request<{ deleted: true }>(`/artifacts/${id}/comments/${cid}`, { method: "DELETE" }),
+  resolveArtifactComment: (id: string, cid: string, resolution?: string) =>
+    request<{ comment: ArtifactComment }>(`/artifacts/${id}/comments/${cid}/resolve`, {
+      method: "POST",
+      body: JSON.stringify(resolution ? { resolution } : {}),
+    }),
   resolveArtifactComments: (id: string, commentIds?: string[]) =>
     request<{ artifact: Artifact; comments: ArtifactComment[]; edited: boolean; outcomes: CommentOutcome[] }>(
       `/artifacts/${id}/resolve-comments`,

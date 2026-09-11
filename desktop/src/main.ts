@@ -3769,6 +3769,8 @@ const settingsTtsStatusEl = document.getElementById("settings-tts-status")!;
 const settingsAutoReadCheckbox = document.getElementById("settings-auto-read") as HTMLInputElement;
 const settingsCardsCheckbox = document.getElementById("settings-cards-checkbox") as HTMLInputElement;
 const settingsCardsStatusEl = document.getElementById("settings-cards-status")!;
+const settingsVaultCheckbox = document.getElementById("settings-vault-checkbox") as HTMLInputElement;
+const settingsVaultStatusEl = document.getElementById("settings-vault-status")!;
 const settingsWebForm = document.getElementById("settings-web-form") as HTMLFormElement;
 const settingsWebProviderSelect = document.getElementById("settings-web-provider") as HTMLSelectElement;
 const settingsWebUrlRow = document.getElementById("settings-web-url-row") as HTMLElement;
@@ -4024,6 +4026,17 @@ async function refreshSettings() {
         ? "Only an admin can change this."
         : "";
 
+    if (document.activeElement !== settingsVaultCheckbox) {
+      settingsVaultCheckbox.checked = settings.vaultEnabled;
+    }
+    const vaultLock = settings.envLocked.vaultEnabled || !settings.isAdmin;
+    settingsVaultCheckbox.disabled = vaultLock;
+    settingsVaultStatusEl.textContent = settings.envLocked.vaultEnabled
+      ? "Pinned by FAMILY_AGENT_VAULT on the server."
+      : !settings.isAdmin
+        ? "Only an admin can change this."
+        : "";
+
     // Internet access — provider picker + conditional URL / API-key fields.
     if (document.activeElement !== settingsWebProviderSelect) {
       settingsWebProviderSelect.value = settings.webSearchProvider;
@@ -4179,6 +4192,16 @@ settingsCardsCheckbox.addEventListener("change", () => {
     { cardsEnabled: settingsCardsCheckbox.checked },
     settingsCardsStatusEl,
     (s) => `Saved — visual cards are ${s.cardsEnabled ? "on" : "off"}`
+  );
+});
+
+settingsVaultCheckbox.addEventListener("change", () => {
+  // refreshStatus() (called by saveSetting) re-reads /health and updates the
+  // nav item's visibility.
+  void saveSetting(
+    { vaultEnabled: settingsVaultCheckbox.checked },
+    settingsVaultStatusEl,
+    (s) => `Saved — the password vault is ${s.vaultEnabled ? "on" : "off"}`
   );
 });
 
@@ -5078,6 +5101,42 @@ const NOTE_H = 176;
 const noteBoard = document.getElementById("note-board")!;
 const noteAddBtn = document.getElementById("note-add") as HTMLButtonElement;
 const noteStatus = document.getElementById("note-status")!;
+const boardZoomOutBtn = document.getElementById("board-zoom-out") as HTMLButtonElement;
+const boardZoomInBtn = document.getElementById("board-zoom-in") as HTMLButtonElement;
+const boardZoomResetBtn = document.getElementById("board-zoom-reset") as HTMLButtonElement;
+const BOARD_ZOOM_KEY = "familyAgent.boardZoom";
+const BOARD_ZOOM_MIN = 0.5;
+const BOARD_ZOOM_MAX = 1.5;
+// Zooming shrinks/grows the whole board+notes visually within the same
+// viewport (see .board-viewport / .note-board in style.css) — zoom out to fit
+// more notes on screen without them overlapping, zoom in to read one clearly.
+// note-board's own layout box (clientWidth/clientHeight) never changes with
+// zoom, so clampToBoard's bounds — and every note's saved x/y — stay valid at
+// any zoom level; only the pointer-drag math below needs to account for it.
+let boardZoom = (() => {
+  const saved = Number(localStorage.getItem(BOARD_ZOOM_KEY));
+  return Number.isFinite(saved) && saved >= BOARD_ZOOM_MIN && saved <= BOARD_ZOOM_MAX ? saved : 1;
+})();
+
+function applyBoardZoom(): void {
+  noteBoard.style.transform = `scale(${boardZoom})`;
+  boardZoomResetBtn.textContent = `${Math.round(boardZoom * 100)}%`;
+  boardZoomOutBtn.disabled = boardZoom <= BOARD_ZOOM_MIN;
+  boardZoomInBtn.disabled = boardZoom >= BOARD_ZOOM_MAX;
+  try {
+    localStorage.setItem(BOARD_ZOOM_KEY, String(boardZoom));
+  } catch {
+    /* private mode */
+  }
+}
+function setBoardZoom(z: number): void {
+  boardZoom = Math.min(BOARD_ZOOM_MAX, Math.max(BOARD_ZOOM_MIN, Math.round(z * 100) / 100));
+  applyBoardZoom();
+}
+boardZoomOutBtn.addEventListener("click", () => setBoardZoom(boardZoom - 0.1));
+boardZoomInBtn.addEventListener("click", () => setBoardZoom(boardZoom + 0.1));
+boardZoomResetBtn.addEventListener("click", () => setBoardZoom(1));
+applyBoardZoom();
 const boardToggle = Array.from(
   document.querySelectorAll<HTMLButtonElement>('.seg-toggle [data-board]')
 );
@@ -5707,13 +5766,17 @@ function wireNoteDrag(card: HTMLElement, n: StickyNote, body: HTMLElement) {
     const t = e.target as HTMLElement;
     if (t.closest(".note-card-del, .note-card-palette, textarea")) return;
 
+    // getBoundingClientRect() reflects note-board's CSS transform scale, but
+    // n.x/n.y live in the board's own unscaled coordinate space — divide out
+    // the current zoom so a drag lands where the pointer visually is,
+    // regardless of zoom level.
     const boardRect = noteBoard.getBoundingClientRect();
     const startX = e.clientX;
     const startY = e.clientY;
     const originX = n.x;
     const originY = n.y;
-    const grabX = e.clientX - boardRect.left - n.x;
-    const grabY = e.clientY - boardRect.top - n.y;
+    const grabX = (e.clientX - boardRect.left) / boardZoom - n.x;
+    const grabY = (e.clientY - boardRect.top) / boardZoom - n.y;
     let moved = false;
 
     boardBusy = true;
@@ -5723,7 +5786,7 @@ function wireNoteDrag(card: HTMLElement, n: StickyNote, body: HTMLElement) {
     const onMove = (ev: PointerEvent) => {
       if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
       moved = true;
-      const p = clampToBoard(ev.clientX - boardRect.left - grabX, ev.clientY - boardRect.top - grabY);
+      const p = clampToBoard((ev.clientX - boardRect.left) / boardZoom - grabX, (ev.clientY - boardRect.top) / boardZoom - grabY);
       n.x = p.x;
       n.y = p.y;
       card.style.left = `${p.x}px`;
@@ -6416,13 +6479,39 @@ let artView: {
 // while the `hidden` attribute is set, since [hidden] forces display:none
 // regardless of transform.
 let artifactCommentsCloseTimer = 0;
+// The minimum width the artifact itself still needs when the viewer shrinks
+// to make room for the open comments panel — below this the panel overlays
+// instead (see .artifact-viewer's --comments-space in style.css).
+const ARTIFACT_MIN_WIDTH = 480;
+function syncArtifactCommentsLayout(): void {
+  if (!artifactCommentsPanel.classList.contains("is-open")) {
+    artifactViewer.style.removeProperty("--comments-space");
+    return;
+  }
+  const railSpace = parseFloat(getComputedStyle(document.getElementById("app")!).getPropertyValue("--rail-space")) || 268;
+  const panelWidth = artifactCommentsPanel.getBoundingClientRect().width;
+  const gap = 14; // matches the panel's own `right` inset — visual breathing room between the two
+  const wouldRemain = window.innerWidth - railSpace - 16 /* viewer's own right inset */ - panelWidth - gap;
+  if (wouldRemain >= ARTIFACT_MIN_WIDTH) {
+    artifactViewer.style.setProperty("--comments-space", `${panelWidth + gap}px`);
+  } else {
+    artifactViewer.style.removeProperty("--comments-space"); // not enough room — let the panel overlay
+  }
+}
+window.addEventListener("resize", () => {
+  if (artifactCommentsPanel.classList.contains("is-open")) syncArtifactCommentsLayout();
+});
 function openArtifactCommentsPanel(): void {
   window.clearTimeout(artifactCommentsCloseTimer);
   artifactCommentsPanel.hidden = false;
-  requestAnimationFrame(() => artifactCommentsPanel.classList.add("is-open"));
+  requestAnimationFrame(() => {
+    artifactCommentsPanel.classList.add("is-open");
+    syncArtifactCommentsLayout();
+  });
 }
 function closeArtifactCommentsPanel(): void {
   artifactCommentsPanel.classList.remove("is-open");
+  artifactViewer.style.removeProperty("--comments-space");
   window.clearTimeout(artifactCommentsCloseTimer);
   artifactCommentsCloseTimer = window.setTimeout(() => {
     artifactCommentsPanel.hidden = true;
@@ -6477,11 +6566,16 @@ function snippet(s: string | null, n = 90): string {
   return t.length > n ? t.slice(0, n) + "…" : t;
 }
 
+// Resolved comments stay in the DB (undo-able via Reopen) but are hidden
+// from the rail by default — this toggle, not persisted, shows them again.
+let showResolvedArtifactComments = false;
+
 function renderCommentRail(): void {
   if (!artView) return;
   const rail = artifactCommentsBody;
   rail.replaceChildren();
   const open = artView.comments.filter((c) => c.status === "open");
+  const resolved = artView.comments.filter((c) => c.status === "resolved");
   artifactCommentsFabBadge.textContent = String(open.length);
   artifactCommentsFabBadge.hidden = open.length === 0;
   const summary = artifactsCache.find((a) => a.id === artView!.id);
@@ -6508,6 +6602,20 @@ function renderCommentRail(): void {
   }
   rail.appendChild(top);
 
+  if (resolved.length) {
+    const toggleRow = document.createElement("label");
+    toggleRow.className = "artifact-rail-resolved-toggle";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = showResolvedArtifactComments;
+    cb.addEventListener("change", () => {
+      showResolvedArtifactComments = cb.checked;
+      renderCommentRail();
+    });
+    toggleRow.append(cb, document.createTextNode(`Show resolved (${resolved.length})`));
+    rail.appendChild(toggleRow);
+  }
+
   if (artView.comments.length === 0) {
     const hint = document.createElement("p");
     hint.className = "artifact-rail-empty";
@@ -6516,7 +6624,15 @@ function renderCommentRail(): void {
     return;
   }
 
-  for (const c of artView.comments) {
+  const visible = showResolvedArtifactComments ? artView.comments : open;
+  if (visible.length === 0) {
+    const hint = document.createElement("p");
+    hint.className = "artifact-rail-empty";
+    hint.textContent = "No open comments.";
+    rail.appendChild(hint);
+  }
+
+  for (const c of visible) {
     const card = document.createElement("div");
     card.className = "artifact-comment" + (c.status === "resolved" ? " is-resolved" : "");
     card.dataset.id = c.id;
@@ -6545,6 +6661,16 @@ function renderCommentRail(): void {
       ask.className = "artifact-comment-link primary";
       ask.textContent = "Ask AI";
       ask.addEventListener("click", () => void resolveComments([c.id]));
+      // Every comment gets a plain Resolve button, whether or not the AI
+      // ever touches it — a human can just mark it done.
+      const resolveBtn = document.createElement("button");
+      resolveBtn.type = "button";
+      resolveBtn.className = "artifact-comment-link";
+      resolveBtn.textContent = "Resolve";
+      resolveBtn.addEventListener("click", async () => {
+        await api.resolveArtifactComment(artView!.id, c.id);
+        await reloadArtViewComments();
+      });
       const del = document.createElement("button");
       del.type = "button";
       del.className = "artifact-comment-link danger";
@@ -6554,7 +6680,7 @@ function renderCommentRail(): void {
         await reloadArtViewComments();
         void refreshArtifacts();
       });
-      row.append(ask, del);
+      row.append(ask, resolveBtn, del);
       card.appendChild(row);
     }
     card.querySelector(".artifact-comment-quote")?.addEventListener("click", () => {
@@ -6671,6 +6797,7 @@ artifactDeleteBtn.addEventListener("click", async () => {
 async function openArtifactViewer(id: string): Promise<void> {
   if (artView) window.removeEventListener("message", artView.onMsg);
   artView = null;
+  showResolvedArtifactComments = false;
   closeArtifactCommentsPanel();
   artifactViewerTitle.textContent = "";
   artifactFrame.removeAttribute("srcdoc");

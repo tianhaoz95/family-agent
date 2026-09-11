@@ -338,11 +338,18 @@
                 <button type="button" data-board="shared" class="is-active" role="tab">Shared</button>
                 <button type="button" data-board="private" role="tab">Mine</button>
               </div>
+              <div class="board-zoom" role="group" aria-label="Zoom">
+                <button type="button" id="board-zoom-out" class="ghost-btn" aria-label="Zoom out">&minus;</button>
+                <button type="button" id="board-zoom-reset" class="ghost-btn" aria-label="Reset zoom">100%</button>
+                <button type="button" id="board-zoom-in" class="ghost-btn" aria-label="Zoom in">+</button>
+              </div>
               <button type="button" id="note-add" class="board-add">+ Add note</button>
             </div>
           </div>
           <p id="note-status" class="settings-hint" role="status"></p>
-          <div id="note-board" class="note-board"></div>
+          <div id="board-viewport" class="board-viewport">
+            <div id="note-board" class="note-board"></div>
+          </div>
         </section>
 
         <section id="view-documents" class="view" aria-label="Documents">
@@ -696,6 +703,19 @@
               Let the assistant show visual cards
             </label>
             <p id="settings-cards-status" class="settings-hint" role="status"></p>
+
+            <h3>Password vault</h3>
+            <p class="settings-hint">
+              An encrypted store for the family's passwords and two-factor codes,
+              unlocked with each person's own login password. Only the secret
+              itself is encrypted at rest. Off by default — turn it on here to
+              show the Vault tab on every client.
+            </p>
+            <label class="settings-checkbox">
+              <input type="checkbox" id="settings-vault-checkbox" />
+              Enable the password vault
+            </label>
+            <p id="settings-vault-status" class="settings-hint" role="status"></p>
 
             <h3>Internet access</h3>
             <p class="settings-hint">
