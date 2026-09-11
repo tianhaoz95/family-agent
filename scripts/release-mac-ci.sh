@@ -170,7 +170,7 @@ while :; do
 
   node -e '
     const fs = require("fs");
-    const [, , manifestPath, ourManifestPath, arch] = process.argv;
+    const [, manifestPath, ourManifestPath, arch] = process.argv;
     const m = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
     const ours = JSON.parse(fs.readFileSync(ourManifestPath, "utf8"));
     m.platforms ??= {};
@@ -185,7 +185,7 @@ while :; do
   gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$VERIFY" --clobber 2>/dev/null
   OURS_STUCK="$(node -e '
     const fs = require("fs");
-    const [, , verifyPath, ourManifestPath, arch] = process.argv;
+    const [, verifyPath, ourManifestPath, arch] = process.argv;
     try {
       const m = JSON.parse(fs.readFileSync(verifyPath, "utf8"));
       const ours = JSON.parse(fs.readFileSync(ourManifestPath, "utf8"));
