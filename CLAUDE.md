@@ -676,8 +676,8 @@ misrouting documented elsewhere in this file. A leading `/` on a 1:1 chat
 message skips that decision entirely and routes straight to one specialist,
 guaranteed structurally rather than by a stronger prompt:
 `parseForcedAgentCommand()` (`agents/index.ts`, next to `mentionsAgent()`)
-reads the word right after `/` — `build`→builder, `task`→task, `find`/`search`
-(alias)→document, `note`→notes, `schedule`/`remind` (alias)→routine,
+reads the word right after `/` — `build`→builder, `task`/`event` (alias)→task,
+`find`/`search` (alias)→document, `note`→notes, `schedule`/`remind` (alias)→routine,
 `web`/`lookup`→research, `run`/`shell`→workshop, `calc`/`compute`→calc,
 `skill`→skill, `connect`/`mcp`→connect — and
 returns `{ kind, text }`; anything else (a tool name, or nothing) still means

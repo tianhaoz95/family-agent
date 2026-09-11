@@ -5,7 +5,7 @@ import PhotosUI
 /// `FORCED_AGENT_KEYWORDS` in agent-core.
 let SLASH_COMMANDS: [(String, String)] = [
     ("build", "Build a new tool, or improve an existing one"),
-    ("task", "Add, list, or complete a to-do"),
+    ("task", "Add, list, or complete a to-do (alias: /event)"),
     ("find", "Search the family's documents (alias: /search)"),
     ("note", "Read or add a sticky note"),
     ("schedule", "Create or manage a scheduled routine (alias: /remind)"),

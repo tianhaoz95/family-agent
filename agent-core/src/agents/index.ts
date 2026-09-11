@@ -1005,12 +1005,13 @@ export type ForcedAgentKind =
   | "vault";
 
 // A keyword right after "/" picks the agent; "search" is a hand-typeable
-// alias for "find" and "remind" for "schedule" (not offered as separate
-// autocomplete suggestions, to keep that list short — see main.ts /
-// ChatScreen.kt).
+// alias for "find", "remind" for "schedule", and "event" for "task" (not
+// offered as separate autocomplete suggestions, to keep that list short —
+// see main.ts / ChatScreen.kt).
 const FORCED_AGENT_KEYWORDS: Record<string, ForcedAgentKind> = {
   build: "builder",
   task: "task",
+  event: "task",
   find: "document",
   search: "document",
   note: "notes",

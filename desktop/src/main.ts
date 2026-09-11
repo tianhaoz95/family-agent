@@ -277,17 +277,17 @@ let chatSessions: ChatSession[] = [];
 let activeChatSessionId: string | null = null;
 
 // "/" autocomplete: a fixed set of forced-agent commands (see
-// parseForcedAgentCommand, agent-core/src/agents/index.ts — keep these four
-// in sync with FORCED_AGENT_KEYWORDS there) plus the family's own tool names.
-// "search" is a hand-typeable alias for "find", not listed separately, to
-// keep this short.
+// parseForcedAgentCommand, agent-core/src/agents/index.ts — keep these in
+// sync with FORCED_AGENT_KEYWORDS there) plus the family's own tool names.
+// "search" (→ find), "remind" (→ schedule), and "event" (→ task) are
+// hand-typeable aliases, not listed separately, to keep this short.
 interface SlashEntry {
   name: string;
   description: string;
 }
 const SLASH_COMMANDS: SlashEntry[] = [
   { name: "build", description: "Build a new tool, or improve an existing one" },
-  { name: "task", description: "Add, list, or complete a to-do" },
+  { name: "task", description: "Add, list, or complete a to-do (alias: /event)" },
   { name: "find", description: "Search the family's documents (alias: /search)" },
   { name: "note", description: "Read or add a sticky note" },
   { name: "schedule", description: "Create or manage a scheduled routine (alias: /remind)" },

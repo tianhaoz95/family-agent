@@ -66,11 +66,11 @@ private fun endOf(text: String) = TextFieldValue(text, TextRange(text.length))
 /** "/" autocomplete: a fixed set of forced-agent commands (see
  *  parseForcedAgentCommand, agent-core/src/agents/index.ts — keep these in
  *  sync with FORCED_AGENT_KEYWORDS there) plus the family's own tool names.
- *  "search" (→ find) and "remind" (→ schedule) are hand-typeable aliases, not
- *  listed separately, to keep this short. */
+ *  "search" (→ find), "remind" (→ schedule), and "event" (→ task) are
+ *  hand-typeable aliases, not listed separately, to keep this short. */
 private val SLASH_COMMANDS = listOf(
     "build" to "Build a new tool, or improve an existing one",
-    "task" to "Add, list, or complete a to-do",
+    "task" to "Add, list, or complete a to-do (alias: /event)",
     "find" to "Search the family's documents (alias: /search)",
     "note" to "Read or add a sticky note",
     "schedule" to "Create or manage a scheduled routine (alias: /remind)",

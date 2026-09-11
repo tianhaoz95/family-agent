@@ -161,6 +161,7 @@ describe("parseForcedAgentCommand", () => {
       kind: "notes",
       text: "plumber comes Friday",
     });
+    expect(parseForcedAgentCommand("/event buy stamps")).toEqual({ kind: "task", text: "buy stamps" });
   });
 
   it("a keyword with nothing after it yields an empty text (caller supplies a fallback prompt)", () => {
