@@ -155,6 +155,10 @@ struct ConversationView: View {
                 .padding(.leading, mentionPill ? 0 : 4)
                 .tint(Theme.accent)
                 .focused($composerFocused)
+                // Return sends instead of inserting a newline — the composer
+                // only ever grows from wrapping, not manual line breaks.
+                .submitLabel(.send)
+                .onSubmit { send() }
                 .toolbar {
                     ToolbarItemGroup(placement: .keyboard) {
                         Spacer()
