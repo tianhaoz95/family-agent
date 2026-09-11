@@ -524,6 +524,12 @@ function appendUserMessage(text: string, images: string[]) {
     el.appendChild(p);
   }
   chatLog.appendChild(el);
+  if (text) {
+    const row = document.createElement("div");
+    row.className = "bubble-actions bubble-actions-user";
+    row.appendChild(makeCopyButton(text));
+    chatLog.appendChild(row);
+  }
   chatLog.scrollTop = chatLog.scrollHeight;
   return el;
 }

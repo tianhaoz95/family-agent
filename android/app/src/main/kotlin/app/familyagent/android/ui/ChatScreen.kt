@@ -534,10 +534,10 @@ private fun ChatBubble(
             CardView(c) { onViewCardSource(c) }
         }
     }
-    if (!isUser && msg.text.isNotBlank()) {
+    if (msg.text.isNotBlank()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             CopyButton(msg.text, Modifier.offset(x = (-4).dp))
-            if (ttsEnabled) {
+            if (!isUser && ttsEnabled) {
                 SpeakButton(msg.text, speakingText, speakLoadingText, onSpeak, Modifier.offset(x = (-8).dp))
             }
         }

@@ -3808,6 +3808,11 @@ input[type="file"]::file-selector-button:hover {
 .msg-actions {
   margin: 1px 0 0;
 }
+.bubble-actions-user {
+  align-self: flex-end;
+  padding-left: 0;
+  padding-right: 2px;
+}
 .bubble-copy,
 .bubble-speak {
   all: unset;

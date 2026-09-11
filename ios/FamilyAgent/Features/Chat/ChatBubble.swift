@@ -43,10 +43,10 @@ struct ChatBubble: View {
                     }
                     .frame(maxWidth: 320, alignment: .leading)
                 }
-                if !isUser && !isError {
+                if !isError && !message.text.isEmpty {
                     HStack(spacing: 12) {
                         CopyButton(text: message.text)
-                        if ttsEnabled {
+                        if !isUser && ttsEnabled {
                             SpeakButton(text: message.text, speakingText: speakingText,
                                         loadingText: loadingText, onToggle: onSpeak)
                         }
