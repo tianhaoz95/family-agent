@@ -14,28 +14,26 @@ struct RoutinesView: View {
     @State private var confirmDelete: Routine?
 
     var body: some View {
-        ScrollView {
-            ScreenScaffold(title: "Routines", subtitle: "A saved instruction the assistant runs on a schedule \u{2014} a morning briefing, a bill reminder, a weekly review.") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Button("New routine") { editing = RoutineEditSeed(routine: nil) }
-                        .buttonStyle(.primary)
+        ScreenScaffold(title: "Routines", subtitle: "A saved instruction the assistant runs on a schedule \u{2014} a morning briefing, a bill reminder, a weekly review.") {
+            VStack(alignment: .leading, spacing: 12) {
+                Button("New routine") { editing = RoutineEditSeed(routine: nil) }
+                    .buttonStyle(.primary)
 
-                    if let s = model.routineStatus {
-                        Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
-                    }
+                if let s = model.routineStatus {
+                    Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
+                }
 
-                    if model.routines.isEmpty {
-                        EmptyState(text: "No routines yet. Add one, or ask in Chat \u{2014} \"every morning summarise my day\".", systemImage: "clock.arrow.circlepath")
-                    } else {
-                        ForEach(model.routines) { r in
-                            RoutineCard(routine: r,
-                                        runs: model.routineRuns[r.id],
-                                        onToggle: { model.setRoutineEnabled(r.id, !r.enabled) },
-                                        onRun: { model.runRoutineNow(r.id) },
-                                        onEdit: { editing = RoutineEditSeed(routine: r) },
-                                        onDelete: { confirmDelete = r },
-                                        onLoadRuns: { model.loadRoutineRuns(r.id) })
-                        }
+                if model.routines.isEmpty {
+                    EmptyState(text: "No routines yet. Add one, or ask in Chat \u{2014} \"every morning summarise my day\".", systemImage: "clock.arrow.circlepath")
+                } else {
+                    ForEach(model.routines) { r in
+                        RoutineCard(routine: r,
+                                    runs: model.routineRuns[r.id],
+                                    onToggle: { model.setRoutineEnabled(r.id, !r.enabled) },
+                                    onRun: { model.runRoutineNow(r.id) },
+                                    onEdit: { editing = RoutineEditSeed(routine: r) },
+                                    onDelete: { confirmDelete = r },
+                                    onLoadRuns: { model.loadRoutineRuns(r.id) })
                     }
                 }
             }

@@ -21,41 +21,39 @@ struct ArtifactsView: View {
     @State private var pushed: ArtifactPresentation?
 
     var body: some View {
-        ScrollView {
-            ScreenScaffold(
-                title: "Artifacts",
-                subtitle: "Full pages the assistant made to explain something \u{2014} ask it for one in Chat."
-            ) {
-                VStack(alignment: .leading, spacing: 10) {
-                    if model.artifacts.isEmpty {
-                        EmptyState(
-                            text: "No artifacts yet. Ask the assistant to walk you through something with a page.",
-                            systemImage: "rectangle.on.rectangle.angled"
-                        )
-                    } else {
-                        ForEach(model.artifacts) { a in
-                            Button {
-                                pushed = ArtifactPresentation(artifactId: a.id)
-                            } label: {
-                                AppCard {
-                                    HStack(spacing: 8) {
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(a.title).appTitleSmall().lineLimit(2)
-                                            Text(relativeDate(a.createdAt))
-                                                .appLabelSmall().foregroundStyle(Theme.textMuted)
-                                        }
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundStyle(Theme.textFaint)
+        ScreenScaffold(
+            title: "Artifacts",
+            subtitle: "Full pages the assistant made to explain something \u{2014} ask it for one in Chat."
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                if model.artifacts.isEmpty {
+                    EmptyState(
+                        text: "No artifacts yet. Ask the assistant to walk you through something with a page.",
+                        systemImage: "rectangle.on.rectangle.angled"
+                    )
+                } else {
+                    ForEach(model.artifacts) { a in
+                        Button {
+                            pushed = ArtifactPresentation(artifactId: a.id)
+                        } label: {
+                            AppCard {
+                                HStack(spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(a.title).appTitleSmall().lineLimit(2)
+                                        Text(relativeDate(a.createdAt))
+                                            .appLabelSmall().foregroundStyle(Theme.textMuted)
                                     }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(Theme.textFaint)
                                 }
                             }
-                            .buttonStyle(.plain)
-                            .contextMenu {
-                                Button(role: .destructive) { model.deleteArtifact(a.id) } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) { model.deleteArtifact(a.id) } label: {
+                                Label("Delete", systemImage: "trash")
                             }
                         }
                     }

@@ -9,26 +9,24 @@ struct ChatSessionsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                ScreenScaffold(title: "Chat history",
-                               subtitle: "Past conversations with the assistant \u{2014} pick one to pick up where it left off.") {
-                    if model.chatSessions.isEmpty {
-                        EmptyState(text: "No conversations yet.", systemImage: "bubble.left.and.bubble.right")
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(model.chatSessions) { s in
-                                AppCard(onTap: { model.openChatSession(s.id); onClose() }) {
-                                    HStack(spacing: 8) {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(s.title).appTitleSmall().lineLimit(1)
-                                            Text(s.lastMessage ?? "No messages yet")
-                                                .appBodySmall().foregroundStyle(Theme.textMuted).lineLimit(1)
-                                        }
-                                        Spacer()
-                                        Button { confirmDelete = s } label: {
-                                            Image(systemName: "trash").font(.system(size: 15)).foregroundStyle(Theme.textMuted)
-                                        }.buttonStyle(.plain)
+            ScreenScaffold(title: "Chat history",
+                           subtitle: "Past conversations with the assistant \u{2014} pick one to pick up where it left off.") {
+                if model.chatSessions.isEmpty {
+                    EmptyState(text: "No conversations yet.", systemImage: "bubble.left.and.bubble.right")
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(model.chatSessions) { s in
+                            AppCard(onTap: { model.openChatSession(s.id); onClose() }) {
+                                HStack(spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(s.title).appTitleSmall().lineLimit(1)
+                                        Text(s.lastMessage ?? "No messages yet")
+                                            .appBodySmall().foregroundStyle(Theme.textMuted).lineLimit(1)
                                     }
+                                    Spacer()
+                                    Button { confirmDelete = s } label: {
+                                        Image(systemName: "trash").font(.system(size: 15)).foregroundStyle(Theme.textMuted)
+                                    }.buttonStyle(.plain)
                                 }
                             }
                         }

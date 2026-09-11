@@ -6,83 +6,90 @@ struct SettingsView: View {
     @State private var showAdvanced = false
 
     var body: some View {
-        ScrollView {
-            ScreenScaffold(title: "Settings",
-                           subtitle: "Your account and this device\u{2019}s connection.") {
-                VStack(alignment: .leading, spacing: 0) {
-                    AppCard {
-                        HStack(spacing: 10) {
-                            StatusDot(color: connectionColor)
-                            Text(connectionLabel).appBody()
-                            Spacer(minLength: 0)
-                        }
+        ScreenScaffold(title: "Settings",
+                       subtitle: "Your account and this device\u{2019}s connection.") {
+            VStack(alignment: .leading, spacing: 0) {
+                AppCard {
+                    HStack(spacing: 10) {
+                        StatusDot(color: connectionColor)
+                        Text(connectionLabel).appBody()
+                        Spacer(minLength: 0)
                     }
+                }
 
-                    if model.ttsEnabled || model.voiceEnabled {
-                        section("Voice")
-                        if model.ttsEnabled {
-                            Toggle(isOn: Binding(get: { model.autoRead }, set: { model.autoRead = $0 })) {
-                                Text("Read replies aloud automatically").appBody()
-                            }
-                            .padding(.vertical, 4)
+                if model.ttsEnabled || model.voiceEnabled {
+                    section("Voice")
+                    if model.ttsEnabled {
+                        Toggle(isOn: Binding(get: { model.autoRead }, set: { model.autoRead = $0 })) {
+                            Text("Read replies aloud automatically").appBody()
                         }
-                        if model.voiceEnabled {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Microphone button side").appBody()
-                                Picker("Microphone button side",
-                                       selection: Binding(get: { model.micOnLeft ? "left" : "right" },
-                                                          set: { model.micOnLeft = $0 == "left" })) {
-                                    Text("Left of the text field").tag("left")
-                                    Text("Right (next to Send)").tag("right")
-                                }
-                                .pickerStyle(.segmented)
-                                Text("Put it wherever your thumb lands — handy if you're left-handed.")
-                                    .appLabelSmall().foregroundStyle(Theme.textMuted)
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
-
-                    if let s = model.serverSettings {
-                        section("Assistant")
-                        Toggle(isOn: Binding(get: { s.cardsEnabled }, set: { model.setCardsEnabled($0) })) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Show visual cards").appBody()
-                                Text(cardsHint(s)).appLabelSmall().foregroundStyle(Theme.textMuted)
-                            }
-                        }
-                        .disabled(!s.isAdmin || s.envLocked.cardsEnabled)
                         .padding(.vertical, 4)
-
-                        section("Internet access")
-                        InternetAccessSection(settings: s)
                     }
-
-                    section("Signed in as")
-                    HStack(spacing: 8) {
-                        Text(model.currentUser?.displayName ?? "").appBody()
-                        if let role = model.currentUser?.role, !role.isEmpty { Chip(text: role) }
-                    }
-                    Spacer().frame(height: 12)
-                    Button { model.signOut() } label: { Text("Sign out") }
-                        .buttonStyle(.ghost)
-
-                    Spacer().frame(height: 24)
-                    Button(showAdvanced ? "Hide advanced" : "Advanced") { showAdvanced.toggle() }
-                        .buttonStyle(.soft)
-                    if showAdvanced {
-                        section("Server address")
-                        TextField("http://192.168.1.2:4173", text: $serverURLDraft)
-                            .textFieldStyle(.app)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        Spacer().frame(height: 10)
-                        Button("Save & reconnect") {
-                            model.setServerURL(serverURLDraft.isEmpty ? model.serverURL : serverURLDraft)
+                    if model.voiceEnabled {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Microphone button side").appBody()
+                            Picker("Microphone button side",
+                                   selection: Binding(get: { model.micOnLeft ? "left" : "right" },
+                                                      set: { model.micOnLeft = $0 == "left" })) {
+                                Text("Left of the text field").tag("left")
+                                Text("Right (next to Send)").tag("right")
+                            }
+                            .pickerStyle(.segmented)
+                            Text("Put it wherever your thumb lands — handy if you're left-handed.")
+                                .appLabelSmall().foregroundStyle(Theme.textMuted)
                         }
-                        .buttonStyle(.primary)
-                        .disabled(serverURLDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .padding(.vertical, 4)
                     }
+                }
+
+                if let s = model.serverSettings {
+                    section("Assistant")
+                    Toggle(isOn: Binding(get: { s.cardsEnabled }, set: { model.setCardsEnabled($0) })) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show visual cards").appBody()
+                            Text(cardsHint(s)).appLabelSmall().foregroundStyle(Theme.textMuted)
+                        }
+                    }
+                    .disabled(!s.isAdmin || s.envLocked.cardsEnabled)
+                    .padding(.vertical, 4)
+
+                    Toggle(isOn: Binding(get: { s.vaultEnabled }, set: { model.setVaultEnabled($0) })) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Password vault").appBody()
+                            Text(vaultHint(s)).appLabelSmall().foregroundStyle(Theme.textMuted)
+                        }
+                    }
+                    .disabled(!s.isAdmin || s.envLocked.vaultEnabled)
+                    .padding(.vertical, 4)
+
+                    section("Internet access")
+                    InternetAccessSection(settings: s)
+                }
+
+                section("Signed in as")
+                HStack(spacing: 8) {
+                    Text(model.currentUser?.displayName ?? "").appBody()
+                    if let role = model.currentUser?.role, !role.isEmpty { Chip(text: role) }
+                }
+                Spacer().frame(height: 12)
+                Button { model.signOut() } label: { Text("Sign out") }
+                    .buttonStyle(.ghost)
+
+                Spacer().frame(height: 24)
+                Button(showAdvanced ? "Hide advanced" : "Advanced") { showAdvanced.toggle() }
+                    .buttonStyle(.soft)
+                if showAdvanced {
+                    section("Server address")
+                    TextField("http://192.168.1.2:4173", text: $serverURLDraft)
+                        .textFieldStyle(.app)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Spacer().frame(height: 10)
+                    Button("Save & reconnect") {
+                        model.setServerURL(serverURLDraft.isEmpty ? model.serverURL : serverURLDraft)
+                    }
+                    .buttonStyle(.primary)
+                    .disabled(serverURLDraft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }
@@ -105,6 +112,12 @@ struct SettingsView: View {
         if s.envLocked.cardsEnabled { return "Pinned by the server (FAMILY_AGENT_CARDS)." }
         if !s.isAdmin { return "Only an admin can change this." }
         return "Charts, checklists, diagrams the assistant writes and runs in a sealed sandbox. Off = text only."
+    }
+
+    private func vaultHint(_ s: ServerSettings) -> String {
+        if s.envLocked.vaultEnabled { return "Pinned by the server (FAMILY_AGENT_VAULT)." }
+        if !s.isAdmin { return "Only an admin can change this." }
+        return "An encrypted store for the family's passwords and 2FA codes. Off by default."
     }
 
     private var connectionColor: Color {

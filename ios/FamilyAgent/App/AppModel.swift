@@ -140,6 +140,12 @@ final class AppModel {
     }
     var calAnchor: Date = Calendar.gregorianMonday.startOfDay(for: .now)
 
+    // Set while ArtifactViewerView is pushed (not presented as a sheet) —
+    // mirrors `activeChannel`: MainShell hides its floating menu button while
+    // this is true, since the pushed viewer's own system back button then
+    // sits in the same top-left corner the floating button otherwise owns.
+    var artifactViewerPushed = false
+
     // ---- family chat + board ----
     var familyMembers: [FamilyMember] = []
     var channels: [Channel] = []
@@ -288,16 +294,27 @@ final class AppModel {
         }
     }
 
-    func login(username: String, password: String) {
+    func login(username: String, password: String, remember: Bool = false) {
         guard case let .needLogin(url, name, _) = auth else { return }
         Task {
             do {
                 let resp = try await api.login(username, password)
+                if remember {
+                    RememberedLogin.save(username: username, password: password, for: url)
+                } else {
+                    RememberedLogin.clear(for: url)
+                }
                 finishSignIn(url: url, name: name, resp: resp)
             } catch {
                 auth = .needLogin(serverURL: url, serverName: name, error: error.localizedDescription)
             }
         }
+    }
+
+    /// A saved username/password for this server, if "Remember me" was
+    /// checked on a previous sign-in — the login screen pre-fills from it.
+    func rememberedLogin(for serverURL: String) -> (username: String, password: String)? {
+        RememberedLogin.load(for: serverURL)
     }
 
     func bootstrap(serverName: String, username: String, displayName: String, password: String) {

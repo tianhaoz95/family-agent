@@ -26,61 +26,59 @@ struct DocumentsView: View {
     private var searchActive: Bool { !model.documentSearchQuery.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
-        ScrollView {
-            ScreenScaffold(title: "Documents",
-                           subtitle: "Upload a PDF or photo, or scan a document with the camera.") {
-                VStack(alignment: .leading, spacing: 12) {
-                    searchField
-                    if searchActive {
-                        BrandSegmented(options: SEARCH_MODES,
-                                       selection: Binding(get: { model.documentSearchMode },
-                                                          set: { model.setDocumentSearch(query: model.documentSearchQuery, mode: $0) }))
-                        if let note = searchNote {
-                            Text(note).appLabelSmall().foregroundStyle(Theme.textMuted)
-                        }
+        ScreenScaffold(title: "Documents",
+                       subtitle: "Upload a PDF or photo, or scan a document with the camera.") {
+            VStack(alignment: .leading, spacing: 12) {
+                searchField
+                if searchActive {
+                    BrandSegmented(options: SEARCH_MODES,
+                                   selection: Binding(get: { model.documentSearchMode },
+                                                      set: { model.setDocumentSearch(query: model.documentSearchQuery, mode: $0) }))
+                    if let note = searchNote {
+                        Text(note).appLabelSmall().foregroundStyle(Theme.textMuted)
                     }
-
-                    HStack(spacing: 8) {
-                        Button { showImporter = true } label: {
-                            Label("Upload", systemImage: "arrow.up.doc").frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.ghost)
-                        Button { showCamera = true } label: {
-                            Label("Scan", systemImage: "camera")
-                                .font(.inter(14, .semibold)).foregroundStyle(Theme.accentInk)
-                                .frame(maxWidth: .infinity).padding(.vertical, 9)
-                                .background(Theme.accentSoft, in: Capsule())
-                                .overlay(Capsule().strokeBorder(Theme.accentInk.opacity(0.12), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    if let s = model.documentUploadStatus {
-                        Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
-                    }
-
-                    DisclosureGroup(isExpanded: $pasteExpanded) {
-                        VStack(spacing: 8) {
-                            TextField("Filename, e.g. electric-bill.txt", text: $pasteFilename)
-                                .textFieldStyle(.app)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            TextField("Paste the document text here", text: $pasteText, axis: .vertical)
-                                .lineLimit(4...8)
-                                .textFieldStyle(.app)
-                            Button("Ingest") {
-                                guard !pasteFilename.isEmpty, !pasteText.isEmpty else { return }
-                                model.ingestDocument(filename: pasteFilename, text: pasteText)
-                                pasteFilename = ""; pasteText = ""; pasteExpanded = false
-                            }
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                        }
-                        .padding(.top, 6)
-                    } label: {
-                        Text("Paste text directly").font(.inter(14, .medium)).foregroundStyle(Theme.accentInk)
-                    }
-
-                    Spacer().frame(height: 2)
-                    documentList
                 }
+
+                HStack(spacing: 8) {
+                    Button { showImporter = true } label: {
+                        Label("Upload", systemImage: "arrow.up.doc").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.ghost)
+                    Button { showCamera = true } label: {
+                        Label("Scan", systemImage: "camera")
+                            .font(.inter(14, .semibold)).foregroundStyle(Theme.accentInk)
+                            .frame(maxWidth: .infinity).padding(.vertical, 9)
+                            .background(Theme.accentSoft, in: Capsule())
+                            .overlay(Capsule().strokeBorder(Theme.accentInk.opacity(0.12), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+                if let s = model.documentUploadStatus {
+                    Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
+                }
+
+                DisclosureGroup(isExpanded: $pasteExpanded) {
+                    VStack(spacing: 8) {
+                        TextField("Filename, e.g. electric-bill.txt", text: $pasteFilename)
+                            .textFieldStyle(.app)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        TextField("Paste the document text here", text: $pasteText, axis: .vertical)
+                            .lineLimit(4...8)
+                            .textFieldStyle(.app)
+                        Button("Ingest") {
+                            guard !pasteFilename.isEmpty, !pasteText.isEmpty else { return }
+                            model.ingestDocument(filename: pasteFilename, text: pasteText)
+                            pasteFilename = ""; pasteText = ""; pasteExpanded = false
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text("Paste text directly").font(.inter(14, .medium)).foregroundStyle(Theme.accentInk)
+                }
+
+                Spacer().frame(height: 2)
+                documentList
             }
         }
         .task { await model.refreshDocuments() }

@@ -63,8 +63,9 @@ struct MainShell: View {
         }
     }
 
-    /// Hidden inside a conversation (its own back control) — matches Android.
-    private var showMenuButton: Bool { model.activeChannel == nil }
+    /// Hidden inside a conversation, or a pushed artifact viewer (each has its
+    /// own back control) — matches Android.
+    private var showMenuButton: Bool { model.activeChannel == nil && !model.artifactViewerPushed }
 
     var body: some View {
         ZStack(alignment: .topLeading) {

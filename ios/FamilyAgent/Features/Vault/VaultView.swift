@@ -8,79 +8,77 @@ struct VaultView: View {
     @State private var showAccessLog = false
 
     var body: some View {
-        ScrollView {
-            ScreenScaffold(title: "Vault", subtitle: "Passwords and two-factor codes for the family \u{2014} encrypted on the home server. Ask the assistant for one in a private \u{201C}/vault\u{201D} chat.") {
-                VStack(alignment: .leading, spacing: 12) {
-                    if let code = model.vaultRecoveryCode {
-                        AppCard(accent: Theme.accent) {
-                            Text("Save your recovery code").appTitle()
-                            Spacer().frame(height: 6)
-                            Text("If you forget your password (or an admin resets it) this is the ONLY way back into your vault. Write it down now — it isn't shown again.")
-                                .appBodySmall().foregroundStyle(Theme.textMuted)
-                            Spacer().frame(height: 14)
-                            Text(code)
-                                .font(.system(.title3, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(14)
-                                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.R.sm))
-                                .textSelection(.enabled)
-                            Spacer().frame(height: 12)
-                            HStack(spacing: 8) {
-                                Button("Copy") { UIPasteboard.general.string = code }.buttonStyle(.ghost)
-                                Button("I've saved it") { model.dismissVaultRecoveryCode() }.buttonStyle(.primary)
-                            }
+        ScreenScaffold(title: "Vault", subtitle: "Passwords and two-factor codes for the family \u{2014} encrypted on the home server. Ask the assistant for one in a private \u{201C}/vault\u{201D} chat.") {
+            VStack(alignment: .leading, spacing: 12) {
+                if let code = model.vaultRecoveryCode {
+                    AppCard(accent: Theme.accent) {
+                        Text("Save your recovery code").appTitle()
+                        Spacer().frame(height: 6)
+                        Text("If you forget your password (or an admin resets it) this is the ONLY way back into your vault. Write it down now — it isn't shown again.")
+                            .appBodySmall().foregroundStyle(Theme.textMuted)
+                        Spacer().frame(height: 14)
+                        Text(code)
+                            .font(.system(.title3, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.R.sm))
+                            .textSelection(.enabled)
+                        Spacer().frame(height: 12)
+                        HStack(spacing: 8) {
+                            Button("Copy") { UIPasteboard.general.string = code }.buttonStyle(.ghost)
+                            Button("I've saved it") { model.dismissVaultRecoveryCode() }.buttonStyle(.primary)
                         }
-                    } else if let status = model.vaultStatusValue {
-                        if !status.exists {
-                            VaultGate(heading: "Set up your vault",
-                                      blurb: "Your vault is encrypted with a key from your account password. Confirm it to create the vault — you'll get a one-time recovery code.",
-                                      action: "Create vault",
-                                      statusMsg: model.vaultStatusMsg,
-                                      password: $password) { model.vaultSetup(password); password = "" }
-                        } else if !status.unlocked {
-                            VaultUnlockGate(password: $password, recoveryCode: $recoveryCode,
-                                            statusMsg: model.vaultStatusMsg,
-                                            onUnlock: { model.vaultUnlock(password); password = "" },
-                                            onRecover: {
-                                                model.vaultRecover(code: recoveryCode, password: password)
-                                                recoveryCode = ""; password = ""
-                                            })
-                        } else {
-                            if let msg = model.vaultStatusMsg {
-                                Text(msg).appLabelSmall().foregroundStyle(Theme.textMuted)
-                            }
-                            HStack {
-                                Button { showEditor = VaultEditSeed(entry: nil) } label: { Label("Add", systemImage: "plus") }
-                                    .buttonStyle(.primary)
-                                Button("Lock") { model.vaultLock() }
-                                if model.isAdmin {
-                                    Button("Share with family") { model.vaultFamilySync() }
-                                }
-                                Spacer()
-                                Button { showAccessLog = true; model.loadVaultAccessLog() } label: {
-                                    Image(systemName: "list.bullet.rectangle")
-                                }
-                            }
-
-                            if model.vaultEntries.isEmpty {
-                                EmptyState(text: "No entries yet.", systemImage: "lock")
-                            } else {
-                                ForEach(model.vaultEntries) { entry in
-                                    AppCard(onTap: { model.openVaultEntry(entry.id) }) {
-                                        HStack {
-                                            Text(entry.title).appTitleSmall()
-                                            Spacer()
-                                            if entry.hasTotp { Image(systemName: "clock").foregroundStyle(Theme.textMuted) }
-                                            if entry.scope == "shared" { Chip(text: "Shared", color: Theme.skyWash) }
-                                        }
-                                        if let u = entry.username { Text(u).appBodySmall().foregroundStyle(Theme.textMuted) }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        Text("Loading…").appBody().foregroundStyle(Theme.textMuted)
                     }
+                } else if let status = model.vaultStatusValue {
+                    if !status.exists {
+                        VaultGate(heading: "Set up your vault",
+                                  blurb: "Your vault is encrypted with a key from your account password. Confirm it to create the vault — you'll get a one-time recovery code.",
+                                  action: "Create vault",
+                                  statusMsg: model.vaultStatusMsg,
+                                  password: $password) { model.vaultSetup(password); password = "" }
+                    } else if !status.unlocked {
+                        VaultUnlockGate(password: $password, recoveryCode: $recoveryCode,
+                                        statusMsg: model.vaultStatusMsg,
+                                        onUnlock: { model.vaultUnlock(password); password = "" },
+                                        onRecover: {
+                                            model.vaultRecover(code: recoveryCode, password: password)
+                                            recoveryCode = ""; password = ""
+                                        })
+                    } else {
+                        if let msg = model.vaultStatusMsg {
+                            Text(msg).appLabelSmall().foregroundStyle(Theme.textMuted)
+                        }
+                        HStack {
+                            Button { showEditor = VaultEditSeed(entry: nil) } label: { Label("Add", systemImage: "plus") }
+                                .buttonStyle(.primary)
+                            Button("Lock") { model.vaultLock() }
+                            if model.isAdmin {
+                                Button("Share with family") { model.vaultFamilySync() }
+                            }
+                            Spacer()
+                            Button { showAccessLog = true; model.loadVaultAccessLog() } label: {
+                                Image(systemName: "list.bullet.rectangle")
+                            }
+                        }
+
+                        if model.vaultEntries.isEmpty {
+                            EmptyState(text: "No entries yet.", systemImage: "lock")
+                        } else {
+                            ForEach(model.vaultEntries) { entry in
+                                AppCard(onTap: { model.openVaultEntry(entry.id) }) {
+                                    HStack {
+                                        Text(entry.title).appTitleSmall()
+                                        Spacer()
+                                        if entry.hasTotp { Image(systemName: "clock").foregroundStyle(Theme.textMuted) }
+                                        if entry.scope == "shared" { Chip(text: "Shared", color: Theme.skyWash) }
+                                    }
+                                    if let u = entry.username { Text(u).appBodySmall().foregroundStyle(Theme.textMuted) }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text("Loading…").appBody().foregroundStyle(Theme.textMuted)
                 }
             }
         }

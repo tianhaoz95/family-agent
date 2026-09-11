@@ -6,47 +6,45 @@ struct MessagesView: View {
     @State private var route: String?
 
     var body: some View {
-        ScrollView {
-            ScreenScaffold(title: "Messages",
-                           subtitle: "Chat with the family. Type @agent to pull in the assistant.") {
-                VStack(alignment: .leading, spacing: 12) {
-                    if composing {
-                        Button { composing = false } label: { Label("Cancel", systemImage: "xmark") }
-                            .buttonStyle(.ghost)
-                    } else {
-                        Button { composing = true } label: { Label("New conversation", systemImage: "plus") }
-                            .buttonStyle(.primary)
-                    }
+        ScreenScaffold(title: "Messages",
+                       subtitle: "Chat with the family. Type @agent to pull in the assistant.") {
+            VStack(alignment: .leading, spacing: 12) {
+                if composing {
+                    Button { composing = false } label: { Label("Cancel", systemImage: "xmark") }
+                        .buttonStyle(.ghost)
+                } else {
+                    Button { composing = true } label: { Label("New conversation", systemImage: "plus") }
+                        .buttonStyle(.primary)
+                }
 
-                    if composing {
-                        NewConversationForm(
-                            members: model.familyMembers.filter { $0.id != model.currentUser?.id },
-                            onCancel: { composing = false },
-                            onStart: { ids, name in
-                                composing = false
-                                model.startConversation(memberIds: ids, name: name) { route = $0 }
-                            }
-                        )
-                    }
+                if composing {
+                    NewConversationForm(
+                        members: model.familyMembers.filter { $0.id != model.currentUser?.id },
+                        onCancel: { composing = false },
+                        onStart: { ids, name in
+                            composing = false
+                            model.startConversation(memberIds: ids, name: name) { route = $0 }
+                        }
+                    )
+                }
 
-                    if model.channels.isEmpty {
-                        EmptyState(text: "No conversations yet. Start one above.", systemImage: "text.bubble")
-                    } else {
-                        ForEach(model.channels) { ch in
-                            AppCard(onTap: { route = ch.id }) {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(ch.title.isEmpty ? "Conversation" : ch.title).appTitleSmall()
-                                        Text(preview(ch))
-                                            .appBodySmall().foregroundStyle(Theme.textMuted).lineLimit(1)
-                                    }
-                                    Spacer()
-                                    if ch.unreadCount > 0 {
-                                        Text(ch.unreadCount > 99 ? "99+" : "\(ch.unreadCount)")
-                                            .font(.inter(11, .bold)).foregroundStyle(.white)
-                                            .padding(.horizontal, 6).padding(.vertical, 2)
-                                            .background(Theme.accent, in: Capsule())
-                                    }
+                if model.channels.isEmpty {
+                    EmptyState(text: "No conversations yet. Start one above.", systemImage: "text.bubble")
+                } else {
+                    ForEach(model.channels) { ch in
+                        AppCard(onTap: { route = ch.id }) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(ch.title.isEmpty ? "Conversation" : ch.title).appTitleSmall()
+                                    Text(preview(ch))
+                                        .appBodySmall().foregroundStyle(Theme.textMuted).lineLimit(1)
+                                }
+                                Spacer()
+                                if ch.unreadCount > 0 {
+                                    Text(ch.unreadCount > 99 ? "99+" : "\(ch.unreadCount)")
+                                        .font(.inter(11, .bold)).foregroundStyle(.white)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(Theme.accent, in: Capsule())
                                 }
                             }
                         }

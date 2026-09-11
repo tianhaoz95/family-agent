@@ -6,44 +6,42 @@ struct ConnectionsView: View {
     @State private var confirmDelete: McpServer?
 
     var body: some View {
-        ScrollView {
-            ScreenScaffold(title: "Connections", subtitle: "External services (MCP) the assistant can call. Their results are treated as information only, never as instructions.") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Button("Add connection") {
-                        editing = McpServer(name: "", transport: "http", enabled: true)
-                    }
-                    .buttonStyle(.primary)
+        ScreenScaffold(title: "Connections", subtitle: "External services (MCP) the assistant can call. Their results are treated as information only, never as instructions.") {
+            VStack(alignment: .leading, spacing: 12) {
+                Button("Add connection") {
+                    editing = McpServer(name: "", transport: "http", enabled: true)
+                }
+                .buttonStyle(.primary)
 
-                    if let s = model.mcpStatus {
-                        Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
-                    }
+                if let s = model.mcpStatus {
+                    Text(s).appLabelSmall().foregroundStyle(Theme.textMuted)
+                }
 
-                    if model.mcpServers.isEmpty {
-                        EmptyState(text: "No connections yet.", systemImage: "point.3.connected.trianglepath.dotted")
-                    } else {
-                        ForEach(model.mcpServers) { server in
-                            AppCard {
-                                HStack(spacing: 10) {
-                                    Toggle("", isOn: Binding(
-                                        get: { server.enabled },
-                                        set: { model.setMcpServerEnabled(server.name, $0) }
-                                    )).labelsHidden()
-                                    Text(server.name).appTitle().lineLimit(1)
-                                    Spacer()
-                                    Text(server.transport).appLabelSmall().foregroundStyle(Theme.textMuted)
-                                }
-                                Spacer().frame(height: 6)
-                                Text(server.transport == "http"
-                                     ? (server.url ?? "")
-                                     : ([server.command].compactMap { $0 } + (server.args ?? [])).joined(separator: " "))
-                                    .appBodySmall().foregroundStyle(Theme.textMuted).lineLimit(1)
-                                Spacer().frame(height: 8)
-                                HStack {
-                                    Button("Test") { model.probeMcpServer(server.name) }.font(.inter(13))
-                                    Button("Edit") { editing = server }.font(.inter(13))
-                                    Spacer()
-                                    Button("Remove", role: .destructive) { confirmDelete = server }.font(.inter(13))
-                                }
+                if model.mcpServers.isEmpty {
+                    EmptyState(text: "No connections yet.", systemImage: "point.3.connected.trianglepath.dotted")
+                } else {
+                    ForEach(model.mcpServers) { server in
+                        AppCard {
+                            HStack(spacing: 10) {
+                                Toggle("", isOn: Binding(
+                                    get: { server.enabled },
+                                    set: { model.setMcpServerEnabled(server.name, $0) }
+                                )).labelsHidden()
+                                Text(server.name).appTitle().lineLimit(1)
+                                Spacer()
+                                Text(server.transport).appLabelSmall().foregroundStyle(Theme.textMuted)
+                            }
+                            Spacer().frame(height: 6)
+                            Text(server.transport == "http"
+                                 ? (server.url ?? "")
+                                 : ([server.command].compactMap { $0 } + (server.args ?? [])).joined(separator: " "))
+                                .appBodySmall().foregroundStyle(Theme.textMuted).lineLimit(1)
+                            Spacer().frame(height: 8)
+                            HStack {
+                                Button("Test") { model.probeMcpServer(server.name) }.font(.inter(13))
+                                Button("Edit") { editing = server }.font(.inter(13))
+                                Spacer()
+                                Button("Remove", role: .destructive) { confirmDelete = server }.font(.inter(13))
                             }
                         }
                     }

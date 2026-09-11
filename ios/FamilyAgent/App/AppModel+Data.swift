@@ -348,6 +348,12 @@ extension AppModel {
             await refreshStatus()
         }
     }
+    func setVaultEnabled(_ enabled: Bool) {
+        Task {
+            serverSettings = await perform { try await api.setVaultEnabled(enabled) }
+            await refreshStatus()
+        }
+    }
     /// Internet access: provider "none" = off; searxng needs `url`; tavily/brave need `apiKey`.
     func setWebAccess(provider: String, url: String?, apiKey: String?) {
         Task {

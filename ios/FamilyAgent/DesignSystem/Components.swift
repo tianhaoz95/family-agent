@@ -6,6 +6,18 @@ import SwiftUI
 
 /// Standard screen frame: a title, an editorial serif subtitle, then content.
 /// Transparent — the `Atmosphere` gradient shows through.
+///
+/// The title is a **fixed** header, not part of the scrollable body: MainShell's
+/// floating menu button is a ZStack overlay at a fixed position, oblivious to
+/// any scroll offset. Older versions of this view put the title inside the
+/// same ScrollView as the content (each screen wrapped the whole thing in its
+/// own `ScrollView { ScreenScaffold(...) { ... } }`) — as soon as the screen
+/// scrolled even slightly, the title (now above the reserved top inset) moved
+/// up underneath the button and was covered by it, exactly the effect Chat/
+/// Messages' own screens never had because *their* title row lives in a plain
+/// HStack outside their ScrollView. This makes every ScreenScaffold user do
+/// the same thing by construction — the caller no longer wraps it in its own
+/// ScrollView; only `subtitle` + `content` scroll under the fixed title.
 struct ScreenScaffold<Content: View>: View {
     let title: String
     let subtitle: String
@@ -15,23 +27,31 @@ struct ScreenScaffold<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title).appHeadline().foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer().frame(height: 6)
-            // The serif voice stays, but quieter: at 16.5 it ran three lines on
-            // Routines/Vault/Skills and pushed content far down the screen while
-            // competing with the title for attention.
-            Text(subtitle)
-                .font(.serif(15))
-                .lineSpacing(1.5)
-                .foregroundStyle(Theme.textBody)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer().frame(height: 20)
-            content
+                .padding(.horizontal, 20)
+                // Room for the floating menu button (MainShell) — the Android
+                // ScreenScaffold reserves the same 58dp.
+                .padding(.top, 58)
+                .padding(.bottom, 6)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // The serif voice stays, but quieter: at 16.5 it ran three lines on
+                    // Routines/Vault/Skills and pushed content far down the screen while
+                    // competing with the title for attention.
+                    Text(subtitle)
+                        .font(.serif(15))
+                        .lineSpacing(1.5)
+                        .foregroundStyle(Theme.textBody)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer().frame(height: 20)
+                    content
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.horizontal, 20)
-        // Room for the floating menu button (MainShell) — the Android
-        // ScreenScaffold reserves the same 58dp.
-        .padding(.top, 58)
     }
 }
 

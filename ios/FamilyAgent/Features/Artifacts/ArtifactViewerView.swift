@@ -29,79 +29,22 @@ struct ArtifactViewerView: View {
     private var openCount: Int { comments.filter { $0.status == "open" }.count }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let artifact {
-                    SealedFullWebView(html: artifact.document, bridge: bridge)
-                        .ignoresSafeArea(edges: .bottom)
-                } else if let error {
-                    ContentUnavailableView {
-                        Label("Couldn't load this artifact", systemImage: "exclamationmark.triangle")
-                    } description: {
-                        Text(error)
-                    } actions: {
-                        Button("Try Again") { Task { await load() } }
-                    }
-                } else {
-                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-            .navigationTitle(artifact?.title ?? "Artifact")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if presentedAsSheet {
-                    ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showComments = true } label: {
-                        Label("\(comments.count)", systemImage: openCount > 0 ? "bubble.left.and.exclamationmark.bubble.right" : "bubble.left.and.bubble.right")
-                    }
-                    .disabled(artifact == nil)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button { showSource = true } label: { Label("View source", systemImage: "chevron.left.forwardslash.chevron.right") }
-                        if artifact?.canRevert == true {
-                            Button { Task { await revert() } } label: { Label("Undo last edit", systemImage: "arrow.uturn.backward") }
-                        }
-                        if let a = artifact {
-                            Button(role: .destructive) { model.deleteArtifact(a.id); dismiss() } label: { Label("Delete", systemImage: "trash") }
-                        }
-                    } label: { Image(systemName: "ellipsis.circle") }
-                    .disabled(artifact == nil)
-                }
-            }
-            .overlay(alignment: .top) {
-                if working {
-                    Text("The assistant is working through the comments…")
-                        .font(.inter(13)).padding(10)
-                        .background(Theme.accentSoft, in: Capsule())
-                        .foregroundStyle(Theme.accentInk)
-                        .padding(.top, 6)
-                }
-            }
-            .sheet(isPresented: $showSource) {
-                if let a = artifact {
-                    NavigationStack {
-                        ScrollView { Text(a.html).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding() }
-                            .navigationTitle("Source").navigationBarTitleDisplayMode(.inline)
-                            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showSource = false } } }
-                    }
-                }
-            }
-            .sheet(isPresented: $showComments) {
-                ArtifactCommentsSheet(
-                    comments: comments,
-                    canRevert: artifact?.canRevert == true,
-                    working: working,
-                    pendingAnchor: $pendingAnchor,
-                    onAdd: { req in await addComment(req) },
-                    onAskAI: { ids in await resolve(ids) },
-                    onDelete: { cid in await deleteComment(cid) },
-                    onReopen: { cid in await reopen(cid) },
-                    onRevert: { await revert() }
-                )
-                .presentationDetents([.medium, .large])
+        // A sheet (the artifact-chip flow, from `fullScreenCover(item:)`) needs
+        // its own NavigationStack — it's a fresh modal presentation with no
+        // ambient one. Pushed from the Artifacts list, one already exists
+        // (MainShell's per-destination NavigationStack); wrapping in a second,
+        // inner one there used to render a second nav bar on top of the outer
+        // push's automatic back button — the reported "back button overlaps
+        // the floating menu button" bug, since the outer back button then sat
+        // in the same top-left corner as MainShell's floating hamburger. Here
+        // the content participates directly in the caller's own NavigationStack
+        // instead, and `artifactViewerPushed` (below) tells MainShell to hide
+        // its floating button while this screen's own back button is showing.
+        Group {
+            if presentedAsSheet {
+                NavigationStack { viewerContent }
+            } else {
+                viewerContent
             }
         }
         .task(id: artifactId) { await load() }
@@ -112,6 +55,87 @@ struct ArtifactViewerView: View {
                 showComments = true
             }
             bridge.onReady = { pushComments() }
+            if !presentedAsSheet { model.artifactViewerPushed = true }
+        }
+        .onDisappear {
+            if !presentedAsSheet { model.artifactViewerPushed = false }
+        }
+    }
+
+    @ViewBuilder
+    private var viewerContent: some View {
+        Group {
+            if let artifact {
+                SealedFullWebView(html: artifact.document, bridge: bridge)
+                    .ignoresSafeArea(edges: .bottom)
+            } else if let error {
+                ContentUnavailableView {
+                    Label("Couldn't load this artifact", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Try Again") { Task { await load() } }
+                }
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .navigationTitle(artifact?.title ?? "Artifact")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if presentedAsSheet {
+                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showComments = true } label: {
+                    Label("\(comments.count)", systemImage: openCount > 0 ? "bubble.left.and.exclamationmark.bubble.right" : "bubble.left.and.bubble.right")
+                }
+                .disabled(artifact == nil)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { showSource = true } label: { Label("View source", systemImage: "chevron.left.forwardslash.chevron.right") }
+                    if artifact?.canRevert == true {
+                        Button { Task { await revert() } } label: { Label("Undo last edit", systemImage: "arrow.uturn.backward") }
+                    }
+                    if let a = artifact {
+                        Button(role: .destructive) { model.deleteArtifact(a.id); dismiss() } label: { Label("Delete", systemImage: "trash") }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .disabled(artifact == nil)
+            }
+        }
+        .overlay(alignment: .top) {
+            if working {
+                Text("The assistant is working through the comments…")
+                    .font(.inter(13)).padding(10)
+                    .background(Theme.accentSoft, in: Capsule())
+                    .foregroundStyle(Theme.accentInk)
+                    .padding(.top, 6)
+            }
+        }
+        .sheet(isPresented: $showSource) {
+            if let a = artifact {
+                NavigationStack {
+                    ScrollView { Text(a.html).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding() }
+                        .navigationTitle("Source").navigationBarTitleDisplayMode(.inline)
+                        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showSource = false } } }
+                }
+            }
+        }
+        .sheet(isPresented: $showComments) {
+            ArtifactCommentsSheet(
+                comments: comments,
+                canRevert: artifact?.canRevert == true,
+                working: working,
+                pendingAnchor: $pendingAnchor,
+                onAdd: { req in await addComment(req) },
+                onAskAI: { ids in await resolve(ids) },
+                onDelete: { cid in await deleteComment(cid) },
+                onReopen: { cid in await reopen(cid) },
+                onRevert: { await revert() }
+            )
+            .presentationDetents([.medium, .large])
         }
     }
 

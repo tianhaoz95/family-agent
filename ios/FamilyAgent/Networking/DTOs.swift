@@ -261,6 +261,7 @@ struct ChatResponse: Codable, Sendable {
 struct ServerSettings: Codable, Sendable {
     var serverName: String = ""
     var cardsEnabled: Bool = true
+    var vaultEnabled: Bool = false
     // Internet access (research agent). webSearchApiKey is never sent back.
     var webEnabled: Bool = false
     var webSearchProvider: String = "none"
@@ -271,10 +272,12 @@ struct ServerSettings: Codable, Sendable {
 }
 struct EnvLocked: Codable, Sendable {
     var cardsEnabled: Bool = false
+    var vaultEnabled: Bool = false
     var webSearchProvider: Bool = false
 }
 struct UpdateSettingsRequest: Codable, Sendable {
     var cardsEnabled: Bool? = nil
+    var vaultEnabled: Bool? = nil
     var webSearchProvider: String? = nil
     var webSearchUrl: String? = nil
     var webSearchApiKey: String? = nil

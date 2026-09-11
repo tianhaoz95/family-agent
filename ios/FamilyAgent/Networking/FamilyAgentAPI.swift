@@ -178,6 +178,9 @@ struct FamilyAgentAPI: Sendable {
     func setCardsEnabled(_ enabled: Bool) async throws -> ServerSettings {
         try await send("PUT", "/settings", body: UpdateSettingsRequest(cardsEnabled: enabled))
     }
+    func setVaultEnabled(_ enabled: Bool) async throws -> ServerSettings {
+        try await send("PUT", "/settings", body: UpdateSettingsRequest(vaultEnabled: enabled))
+    }
     /// Set the internet-access provider (`"none"` = off) plus its companion URL / API key.
     func setWebAccess(provider: String, url: String? = nil, apiKey: String? = nil) async throws -> ServerSettings {
         try await send("PUT", "/settings", body: UpdateSettingsRequest(
