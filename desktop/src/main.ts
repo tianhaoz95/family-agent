@@ -5463,6 +5463,9 @@ const NOTE_COLORS = ["butter", "mint", "sky", "blush", "lilac"] as const;
 const NOTE_W = 176; // keep in sync with .note-card width in style.css
 const NOTE_H = 176;
 const noteBoard = document.getElementById("note-board")!;
+// The board's own size never changes with zoom (that's the fixed "canvas");
+// this inner layer, holding the actual notes, is what scales — see the CSS.
+const noteCanvas = document.getElementById("note-canvas")!;
 const noteAddBtn = document.getElementById("note-add") as HTMLButtonElement;
 const noteStatus = document.getElementById("note-status")!;
 const boardZoomOutBtn = document.getElementById("board-zoom-out") as HTMLButtonElement;
@@ -5471,19 +5474,27 @@ const boardZoomResetBtn = document.getElementById("board-zoom-reset") as HTMLBut
 const BOARD_ZOOM_KEY = "familyAgent.boardZoom";
 const BOARD_ZOOM_MIN = 0.5;
 const BOARD_ZOOM_MAX = 1.5;
-// Zooming shrinks/grows the whole board+notes visually within the same
-// viewport (see .board-viewport / .note-board in style.css) — zoom out to fit
-// more notes on screen without them overlapping, zoom in to read one clearly.
-// note-board's own layout box (clientWidth/clientHeight) never changes with
-// zoom, so clampToBoard's bounds — and every note's saved x/y — stay valid at
-// any zoom level; only the pointer-drag math below needs to account for it.
+// The board (.note-board) is a fixed-size frame — it never changes size at
+// any zoom. Zooming only affects .note-canvas, the inner layer holding the
+// actual notes: zoom out and it's resized *larger* than the frame (more
+// coordinate space for notes to sit in without overlapping) then scaled back
+// down by the same factor, so it still exactly fills the fixed frame — net
+// effect, more of a bigger board, rendered smaller, fits in the same frame.
+// Zoom in does the reverse (a smaller slice of the board, rendered bigger).
+// clampToBoard reads noteCanvas's own (pre-transform) size, which changes
+// with zoom by construction; the pointer-drag math below accounts for the
+// scale the same way the old single-layer version did.
 let boardZoom = (() => {
   const saved = Number(localStorage.getItem(BOARD_ZOOM_KEY));
   return Number.isFinite(saved) && saved >= BOARD_ZOOM_MIN && saved <= BOARD_ZOOM_MAX ? saved : 1;
 })();
 
 function applyBoardZoom(): void {
-  noteBoard.style.transform = `scale(${boardZoom})`;
+  // noteBoard.clientWidth/Height is the fixed frame size; noteCanvas is
+  // sized to exactly fill it once scaled back down by the same factor.
+  noteCanvas.style.width = `${noteBoard.clientWidth / boardZoom}px`;
+  noteCanvas.style.height = `${noteBoard.clientHeight / boardZoom}px`;
+  noteCanvas.style.transform = `scale(${boardZoom})`;
   boardZoomResetBtn.textContent = `${Math.round(boardZoom * 100)}%`;
   boardZoomOutBtn.disabled = boardZoom <= BOARD_ZOOM_MIN;
   boardZoomInBtn.disabled = boardZoom >= BOARD_ZOOM_MAX;
@@ -5530,8 +5541,11 @@ function noteTilt(id: string): number {
 }
 
 function clampToBoard(x: number, y: number): { x: number; y: number } {
-  const maxX = Math.max(0, noteBoard.clientWidth - NOTE_W);
-  const maxY = Math.max(0, noteBoard.clientHeight - NOTE_H);
+  // noteCanvas's own (pre-transform) size *is* the current coordinate space
+  // — it grows as you zoom out, giving notes more room, and shrinks as you
+  // zoom in, matching what applyBoardZoom() sizes it to.
+  const maxX = Math.max(0, noteCanvas.clientWidth - NOTE_W);
+  const maxY = Math.max(0, noteCanvas.clientHeight - NOTE_H);
   return { x: Math.min(Math.max(0, x), maxX), y: Math.min(Math.max(0, y), maxY) };
 }
 
@@ -6051,15 +6065,15 @@ function openVaultEditor(existing: VaultEntryDetail | null) {
 
 function renderBoard() {
   if (boardBusy) return;
-  noteBoard.innerHTML = "";
+  noteCanvas.innerHTML = "";
   if (notes.length === 0) {
     const hint = document.createElement("p");
     hint.className = "note-board-empty";
     hint.textContent = 'Nothing pinned up yet. Hit "+ Add note".';
-    noteBoard.appendChild(hint);
+    noteCanvas.appendChild(hint);
     return;
   }
-  for (const n of notes) noteBoard.appendChild(makeNoteEl(n));
+  for (const n of notes) noteCanvas.appendChild(makeNoteEl(n));
 }
 
 function makeNoteEl(n: StickyNote): HTMLElement {
@@ -6130,8 +6144,10 @@ function wireNoteDrag(card: HTMLElement, n: StickyNote, body: HTMLElement) {
     const t = e.target as HTMLElement;
     if (t.closest(".note-card-del, .note-card-palette, textarea")) return;
 
-    // getBoundingClientRect() reflects note-board's CSS transform scale, but
-    // n.x/n.y live in the board's own unscaled coordinate space — divide out
+    // note-board's own rect is the fixed on-screen frame — note-canvas
+    // (scaled + resized to compensate, see applyBoardZoom) always renders to
+    // exactly the same rect, so this is the right reference either way.
+    // n.x/n.y live in note-canvas's unscaled coordinate space — divide out
     // the current zoom so a drag lands where the pointer visually is,
     // regardless of zoom level.
     const boardRect = noteBoard.getBoundingClientRect();
@@ -6255,11 +6271,21 @@ function stopBoardPolling() {
 }
 
 async function enterBoard() {
+  // Re-measure now that the section is actually laid out — applyBoardZoom()
+  // may have run once already while this view was hidden (clientWidth 0),
+  // which would have sized note-canvas to nothing.
+  applyBoardZoom();
   await refreshNotes();
   if (boardPollTimer === null) {
     boardPollTimer = window.setInterval(() => void refreshNotes(), 5000);
   }
 }
+// The board frame's own size can change (window resize) while zoomed;
+// note-canvas's size is derived from it, so keep it in sync. A 0 width means
+// the Board view isn't currently visible/laid out — entering it re-applies.
+window.addEventListener("resize", () => {
+  if (noteBoard.clientWidth > 0) applyBoardZoom();
+});
 
 // ---------- side panel (document preview + chat references) ----------
 const sidePanel = document.getElementById("side-panel") as HTMLElement;
