@@ -233,6 +233,32 @@ maybe("family agent (live model: " + config.model + ")", () => {
   );
 
   it(
+    "'/task' with a relative day + bare time sets both dueDate and dueTime",
+    async () => {
+      // Regression test for the exact reported phrasing: task-agent had no
+      // current_datetime tool and no prompt guidance to use one, so it left
+      // dueDate/dueTime blank rather than resolve "tomorrow"/"7pm" itself —
+      // which also meant the task never showed up in the calendar view
+      // (bucketByDay treats a missing dueDate as "unscheduled").
+      const res = await inject({
+        method: "POST",
+        url: "/chat",
+        payload: { message: "/task go to doctor appointment 7pm tomorrow" },
+      });
+      expect(res.statusCode).toBe(200);
+      const task = store.listTasks().find((t) => t.title.toLowerCase().includes("doctor"));
+      expect(task, `expected a doctor task, got ${JSON.stringify(store.listTasks())}`).toBeDefined();
+      expect(task!.dueDate, `expected dueDate to be set, got ${JSON.stringify(task)}`).toBeTruthy();
+      expect(task!.dueTime, `expected dueTime to be set, got ${JSON.stringify(task)}`).toBeTruthy();
+      // Tomorrow relative to whenever the test runs, and 7pm in 24h time.
+      const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+      expect(task!.dueDate).toBe(tomorrow);
+      expect(task!.dueTime).toBe("19:00");
+    },
+    240000
+  );
+
+  it(
     "'/find' forces the document-agent path",
     async () => {
       await inject({
