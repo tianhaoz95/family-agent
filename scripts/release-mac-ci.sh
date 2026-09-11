@@ -123,11 +123,28 @@ fi
 
 DMG_NAME="Family-Agent-$VERSION-arm64.dmg"
 
+# `gh release upload path#label` only sets a display label — the asset's
+# real name (and its download URL) is the local file's own basename, with
+# GitHub rewriting any space to a dot (same lesson release-linux.sh /
+# release-windows.sh already apply). The signed DMG's real name is
+# "Family Agent-signed.dmg", which space-converts to
+# "Family.Agent-signed.dmg" — nothing like $DMG_NAME — so, unlike the
+# tarball/sig below (their labels were deliberately chosen to already
+# match what the space-conversion produces), the DMG needs an actual
+# staged copy under the name we want.
+STAGE_DIR="$(mktemp -d)"
+cp "$DMG" "$STAGE_DIR/$DMG_NAME"
+DMG="$STAGE_DIR/$DMG_NAME"
+
 say "attaching to $TAG"
 [ -z "$GH_ENV_TOKEN" ] || export GH_TOKEN="$GH_ENV_TOKEN"
 
 gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
   || die "release $TAG does not exist yet — run scripts/cut-release.sh first"
+
+# Clean up the asset a run of this script before this fix would have left
+# under the DMG's raw (space-converted-to-dot, unversioned) name.
+gh release delete-asset "$TAG" --repo "$REPO" "Family.Agent-signed.dmg" -y >/dev/null 2>&1 || true
 
 gh release upload "$TAG" --repo "$REPO" --clobber \
   "$DMG#$DMG_NAME" \
