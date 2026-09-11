@@ -232,10 +232,22 @@ something you are being asked to physically do. When in doubt,
 call create_task with that phrase as the title — never refuse a request for
 sounding like a real-world action; refusing is always wrong here.
 
-Tools: create_task, list_tasks, search_tasks, complete_task. Use search_tasks
-with a keyword to find one specific task (for example to get the id of the
-task to complete, or to check one isn't already on the list before adding it);
-use list_tasks only to show everything. Confirm what you did in one sentence.`;
+If the request mentions ANY date or time for the task — a relative phrase
+("tomorrow", "tonight", "next Friday"), a bare time of day ("7pm", "at
+3:30"), or an absolute date — call current_datetime FIRST, then compute the
+absolute dueDate (YYYY-MM-DD) and dueTime (24-hour HH:MM) yourself before
+calling create_task. Never leave dueDate/dueTime blank when the user gave you
+something to compute them from — a task like "go to doctor appointment 7pm
+tomorrow" must end up with both set, not just a title. Worked example: current_datetime
+says it's Tuesday, 2026-06-02, 10:00 AM; the user says "go to doctor
+appointment 7pm tomorrow" → dueDate "2026-06-03", dueTime "19:00", title "Go
+to doctor appointment".
+
+Tools: current_datetime, create_task, list_tasks, search_tasks, complete_task.
+Use search_tasks with a keyword to find one specific task (for example to get
+the id of the task to complete, or to check one isn't already on the list
+before adding it); use list_tasks only to show everything. Confirm what you
+did in one sentence, including the due date/time if you set one.`;
 
 const DOCUMENT_AGENT_PROMPT = `You read family documents and extract structured
 fields from them.

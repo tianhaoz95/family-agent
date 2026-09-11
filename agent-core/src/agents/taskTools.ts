@@ -6,8 +6,32 @@ import type { OnReference } from "./references.js";
 // Bound to one user's ScopedStore — the planner builds a fresh agent per
 // authenticated user (see agents/index.ts), so these tools only ever touch
 // that user's tasks. `onReference` (when given) is notified of each task this
-// turn touched, so /chat can return clickable references.
-export function makeTaskTools(store: ScopedStore, onReference?: OnReference) {
+// turn touched, so /chat can return clickable references. `now` is injectable
+// for deterministic tests, like routineTools.ts's own current_datetime.
+export function makeTaskTools(store: ScopedStore, onReference?: OnReference, now: () => Date = () => new Date()) {
+  const currentDatetime = tool(
+    async () => {
+      const d = now();
+      return (
+        `Right now it is ${d.toLocaleString(undefined, {
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })}.\nISO: ${d.toISOString()}\n` +
+        `Use this to work out dueDate/dueTime for phrases like "tomorrow", "tonight", or "7pm Friday".`
+      );
+    },
+    {
+      name: "current_datetime",
+      description:
+        "Get the current date and time. Call this first whenever a task's deadline is relative or a bare time of day ('tomorrow', 'tonight', '7pm', 'next Monday') so you can compute an absolute dueDate/dueTime instead of leaving them blank.",
+      schema: z.object({}),
+    }
+  );
+
   const createTask = tool(
     async ({ title, notes, dueDate, dueTime }) => {
       const rec = store.createTask({ title, notes, dueDate, dueTime });
@@ -99,5 +123,5 @@ export function makeTaskTools(store: ScopedStore, onReference?: OnReference) {
     }
   );
 
-  return [createTask, listTasks, searchTasks, completeTask];
+  return [currentDatetime, createTask, listTasks, searchTasks, completeTask];
 }

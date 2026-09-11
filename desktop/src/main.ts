@@ -4484,8 +4484,17 @@ async function checkForUpdate({ quiet = false } = {}): Promise<void> {
     pendingUpdate = null;
     settingsUpdateInstallBtn.hidden = true;
     if (!quiet) {
-      settingsUpdateStatusEl.textContent =
-        `Couldn't check for updates: ${err instanceof Error ? err.message : String(err)}`;
+      const message = err instanceof Error ? err.message : String(err);
+      // mac/linux/windows each attach to a release independently (see
+      // docs/DECISIONS.md) — for a few minutes after a new version is cut,
+      // releases/latest/download/latest.json can exist with some platforms
+      // already merged in and this one not yet. The updater plugin's own
+      // wording for that ("None of the fallback platforms `[...]` were
+      // found...") is an internal Rust error string, not something to show
+      // a user checking by hand — treat it the same as "no update yet".
+      settingsUpdateStatusEl.textContent = /fallback platform/i.test(message)
+        ? "No update found for this platform yet — if one was just announced, try again in a few minutes."
+        : `Couldn't check for updates: ${message}`;
     }
   } finally {
     settingsUpdateCheckBtn.disabled = false;
