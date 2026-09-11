@@ -42,9 +42,13 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Attaching Linux bundles to $TAG"
 
+      # Check out the commit this workflow runs against, NOT the release tag: an
+      # older tag predates scripts/release-linux.sh. For `release: published`
+      # that commit *is* the release's target; for a manual re-run it's the
+      # branch you dispatched from. The Linux app code is the same either way as
+      # long as tauri.conf.json's version still matches the tag (the script
+      # checks and warns).
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.tag.outputs.tag }}
 
       - uses: actions/setup-node@v4
         with:
