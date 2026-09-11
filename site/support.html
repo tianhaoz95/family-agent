@@ -108,9 +108,16 @@
     <p>
       On the
       <a href="https://github.com/tianhaoz95/family-agent/releases/latest">releases
-      page</a>. Download the <code>.dmg</code>, drag Family Agent to Applications,
-      and open it. After that the app updates itself — it checks on launch and
-      from Settings &rarr; Updates, and always asks before installing.
+      page</a> — pick the file for your machine:
+    </p>
+    <ul>
+      <li><strong>macOS</strong> (Apple Silicon): the <code>.dmg</code> — drag Family Agent to Applications and open it.</li>
+      <li><strong>Windows</strong> (x64 or Arm): the <code>-setup.exe</code> — run it and follow the installer.</li>
+      <li><strong>Linux</strong> (amd64 or arm64): the <code>.deb</code> on Debian/Ubuntu, or the <code>.AppImage</code> anywhere else (make it executable and run it).</li>
+    </ul>
+    <p>
+      After that the app updates itself — it checks on launch and from Settings
+      &rarr; Updates, and always asks before installing.
     </p>
 
     <h2>macOS says the app can't be opened</h2>
@@ -119,6 +126,14 @@
       Apple, so this shouldn't happen. If it does, you're most likely running a
       build you compiled yourself — those aren't signed by Apple. Right-click the
       app, choose <strong>Open</strong>, and confirm; once per build.
+    </p>
+
+    <h2>Windows says the app is from an unknown publisher</h2>
+    <p>
+      Windows builds aren't code-signed with a paid certificate yet, so
+      SmartScreen shows this once per version. Click <strong>More info</strong>,
+      then <strong>Run anyway</strong>. This is a first-run prompt, not a sign
+      anything is wrong with the download.
     </p>
 
     <h2>Reporting something</h2>
