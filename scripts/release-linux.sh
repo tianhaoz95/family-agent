@@ -40,6 +40,19 @@ done
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { echo "!! $*" >&2; exit 1; }
 
+# Built natively on whatever architecture this runs on (an arm64 GitHub
+# runner, e.g. ubuntu-24.04-arm, produces an arm64 build — no cross-
+# compilation). $ARCH follows Rust/Tauri's own naming (x86_64/aarch64,
+# matching the updater platform keys darwin-aarch64 etc. already use);
+# $DEB_ARCH is Debian's own architecture name for package/asset filenames
+# (amd64/arm64 — what dpkg and everyone downloading a .deb actually expects).
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64)  DEB_ARCH="amd64" ;;
+  aarch64) DEB_ARCH="arm64" ;;
+  *) die "unsupported architecture: $ARCH" ;;
+esac
+
 command -v node  >/dev/null 2>&1 || die "node not found"
 command -v cargo >/dev/null 2>&1 || { [ -s "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"; }
 command -v cargo >/dev/null 2>&1 || die "cargo not found — install Rust"
@@ -128,8 +141,8 @@ if [ "$HAVE_KEY" -eq 1 ]; then
   [ -n "$UPDATER_SIG" ] || die "TAURI_SIGNING_PRIVATE_KEY was set but no .AppImage(.tar.gz).sig was produced"
 fi
 
-DEB_NAME="Family-Agent-$VERSION-amd64.deb"
-APPIMAGE_NAME="Family-Agent-$VERSION-amd64.AppImage"
+DEB_NAME="Family-Agent-$VERSION-$DEB_ARCH.deb"
+APPIMAGE_NAME="Family-Agent-$VERSION-$DEB_ARCH.AppImage"
 
 # `gh release upload path#label` only sets a display label — the asset's real
 # name (and its download URL) is the local file's own basename, with GitHub
@@ -160,7 +173,7 @@ gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
 
 # Clean up any asset from a previous run that landed under Tauri's raw
 # (space-in-name) filename before this script started renaming first.
-for stale in "Family.Agent_${VERSION}_amd64.deb" "Family.Agent_${VERSION}_amd64.AppImage"; do
+for stale in "Family.Agent_${VERSION}_${DEB_ARCH}.deb" "Family.Agent_${VERSION}_${DEB_ARCH}.AppImage"; do
   gh release delete-asset "$TAG" --repo "$REPO" "$stale" -y >/dev/null 2>&1 || true
 done
 
@@ -182,7 +195,8 @@ gh release upload "$TAG" --repo "$REPO" --clobber "$DEB" "$APPIMAGE"
 # plus the *latest* queued one — a third simultaneous arrival is cancelled
 # outright, not queued. Confirmed happening in practice.)
 if [ "$HAVE_KEY" -eq 1 ]; then
-  say "adding linux-x86_64 to latest.json"
+  PLATFORM_KEY="linux-$ARCH"
+  say "adding $PLATFORM_KEY to latest.json"
   SIG="$(cat "$UPDATER_SIG")"
   URL="https://github.com/$REPO/releases/download/$TAG/$APPIMAGE_NAME"
   ATTEMPT=0
@@ -202,12 +216,12 @@ json.dump({
 "
     }
 
-    SIG="$SIG" URL="$URL" python3 - "$TMP/latest.json" <<'PY'
+    SIG="$SIG" URL="$URL" PLATFORM_KEY="$PLATFORM_KEY" python3 - "$TMP/latest.json" <<'PY'
 import json, os, sys
 p = sys.argv[1]
 m = json.load(open(p))
 m.setdefault("platforms", {})
-m["platforms"]["linux-x86_64"] = {"signature": os.environ["SIG"].strip(), "url": os.environ["URL"]}
+m["platforms"][os.environ["PLATFORM_KEY"]] = {"signature": os.environ["SIG"].strip(), "url": os.environ["URL"]}
 json.dump(m, open(p, "w"), indent=2)
 open(p, "a").write("\n")
 print("    platforms now:", ", ".join(m["platforms"]))
@@ -217,16 +231,16 @@ PY
 
     VERIFY="$(mktemp -d)"
     gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$VERIFY" --clobber 2>/dev/null
-    OURS_STUCK="$(SIG="$SIG" python3 -c "
+    OURS_STUCK="$(SIG="$SIG" PLATFORM_KEY="$PLATFORM_KEY" python3 -c "
 import json, os
 m = json.load(open('$VERIFY/latest.json'))
-p = m.get('platforms', {}).get('linux-x86_64')
+p = m.get('platforms', {}).get(os.environ['PLATFORM_KEY'])
 print('yes' if p and p.get('signature') == os.environ['SIG'].strip() else 'no')
 " 2>/dev/null || echo no)"
     rm -rf "$TMP" "$VERIFY"
     [ "$OURS_STUCK" = "yes" ] && break
     if [ "$ATTEMPT" -ge 5 ]; then
-      echo "    !! linux-x86_64 didn't stick in latest.json after $ATTEMPT attempts (a concurrent writer keeps winning) — the .AppImage/.deb are uploaded fine, but check latest.json by hand" >&2
+      echo "    !! $PLATFORM_KEY didn't stick in latest.json after $ATTEMPT attempts (a concurrent writer keeps winning) — the .AppImage/.deb are uploaded fine, but check latest.json by hand" >&2
       break
     fi
     echo "    a concurrent platform build overwrote latest.json first — retrying (attempt $ATTEMPT)"
@@ -257,7 +271,13 @@ for asset in "$APPIMAGE_NAME" "$DEB_NAME"; do
 done
 if [ "$HAVE_KEY" -eq 1 ]; then
   curl -s -L "https://github.com/$REPO/releases/latest/download/latest.json" \
-    | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'linux-x86_64' in d['platforms'], d['platforms']; print('    latest.json carries linux-x86_64 ✓')"
+    | PLATFORM_KEY="linux-$ARCH" python3 -c "
+import json, os, sys
+d = json.load(sys.stdin)
+key = os.environ['PLATFORM_KEY']
+assert key in d['platforms'], d['platforms']
+print(f'    latest.json carries {key} ✓')
+"
 fi
 
 cat <<EOF

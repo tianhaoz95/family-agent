@@ -62,6 +62,20 @@ to_native_path() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
 }
 
+# Built natively on whatever architecture this runs on (an arm64 GitHub
+# runner, e.g. windows-11-arm, produces an arm64 build — no cross-
+# compilation). Normalized to Rust/Tauri's own naming (x86_64/aarch64,
+# matching the updater platform keys darwin-aarch64 etc. already use) —
+# `uname -m` under Git Bash on Windows has been seen to report either
+# style depending on the Git for Windows build, so accept both.
+# $WIN_ARCH is the installer filename's own convention (x64/arm64, what
+# Windows users actually expect to see, not Rust's x86_64/aarch64).
+case "$(uname -m)" in
+  x86_64|amd64|AMD64)   ARCH="x86_64";  WIN_ARCH="x64" ;;
+  aarch64|arm64|ARM64)  ARCH="aarch64"; WIN_ARCH="arm64" ;;
+  *) die "unsupported architecture: $(uname -m)" ;;
+esac
+
 command -v node  >/dev/null 2>&1 || die "node not found"
 command -v cargo >/dev/null 2>&1 || { [ -s "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"; }
 command -v cargo >/dev/null 2>&1 || die "cargo not found — install Rust"
@@ -138,7 +152,7 @@ if [ "$HAVE_KEY" -eq 1 ]; then
   UPDATER="$INSTALLER"
 fi
 
-INSTALLER_NAME="Family-Agent-$VERSION-x64-setup.exe"
+INSTALLER_NAME="Family-Agent-$VERSION-$WIN_ARCH-setup.exe"
 
 # Tauri's built filename has spaces ("Family Agent_1.3.0_x64-setup.exe") and
 # GitHub rewrites spaces in an uploaded asset's name to dots — copy to the
@@ -164,7 +178,7 @@ gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
 
 # Clean up any asset from a previous run that landed under Tauri's raw
 # (space-in-name) filename before this script started renaming first.
-gh release delete-asset "$TAG" --repo "$REPO" "Family.Agent_${VERSION}_x64-setup.exe" -y >/dev/null 2>&1 || true
+gh release delete-asset "$TAG" --repo "$REPO" "Family.Agent_${VERSION}_${WIN_ARCH}-setup.exe" -y >/dev/null 2>&1 || true
 
 gh release upload "$TAG" --repo "$REPO" --clobber "$INSTALLER"
 
@@ -184,7 +198,8 @@ gh release upload "$TAG" --repo "$REPO" --clobber "$INSTALLER"
 # plus the *latest* queued one — a third simultaneous arrival is cancelled
 # outright, not queued. Confirmed happening in practice.)
 if [ "$HAVE_KEY" -eq 1 ]; then
-  say "adding windows-x86_64 to latest.json"
+  PLATFORM_KEY="windows-$ARCH"
+  say "adding $PLATFORM_KEY to latest.json"
   FA_SIG="$(cat "$UPDATER_SIG")"
   FA_URL="https://github.com/$REPO/releases/download/$TAG/$INSTALLER_NAME"
   ATTEMPT=0
@@ -204,12 +219,12 @@ if [ "$HAVE_KEY" -eq 1 ]; then
       '
     }
 
-    FA_SIG="$FA_SIG" FA_URL="$FA_URL" FA_LATEST_JSON="$TMP/latest.json" node -e '
+    FA_SIG="$FA_SIG" FA_URL="$FA_URL" FA_LATEST_JSON="$TMP/latest.json" FA_PLATFORM_KEY="$PLATFORM_KEY" node -e '
       const fs = require("fs");
       const p = process.env.FA_LATEST_JSON;
       const m = JSON.parse(fs.readFileSync(p, "utf8"));
       m.platforms ??= {};
-      m.platforms["windows-x86_64"] = { signature: process.env.FA_SIG.trim(), url: process.env.FA_URL };
+      m.platforms[process.env.FA_PLATFORM_KEY] = { signature: process.env.FA_SIG.trim(), url: process.env.FA_URL };
       fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
       console.log("    platforms now:", Object.keys(m.platforms).join(", "));
     '
@@ -218,18 +233,18 @@ if [ "$HAVE_KEY" -eq 1 ]; then
 
     VERIFY="$(to_native_path "$(mktemp -d)")"
     gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$VERIFY" --clobber 2>/dev/null
-    OURS_STUCK="$(FA_SIG="$FA_SIG" FA_LATEST_JSON="$VERIFY/latest.json" node -e '
+    OURS_STUCK="$(FA_SIG="$FA_SIG" FA_LATEST_JSON="$VERIFY/latest.json" FA_PLATFORM_KEY="$PLATFORM_KEY" node -e '
       const fs = require("fs");
       try {
         const m = JSON.parse(fs.readFileSync(process.env.FA_LATEST_JSON, "utf8"));
-        const p = m.platforms?.["windows-x86_64"];
+        const p = m.platforms?.[process.env.FA_PLATFORM_KEY];
         console.log(p && p.signature === process.env.FA_SIG.trim() ? "yes" : "no");
       } catch { console.log("no"); }
     ' 2>/dev/null || echo no)"
     rm -rf "$TMP" "$VERIFY"
     [ "$OURS_STUCK" = "yes" ] && break
     if [ "$ATTEMPT" -ge 5 ]; then
-      echo "    !! windows-x86_64 didn't stick in latest.json after $ATTEMPT attempts (a concurrent writer keeps winning) — the installer is uploaded fine, but check latest.json by hand" >&2
+      echo "    !! $PLATFORM_KEY didn't stick in latest.json after $ATTEMPT attempts (a concurrent writer keeps winning) — the installer is uploaded fine, but check latest.json by hand" >&2
       break
     fi
     echo "    a concurrent platform build overwrote latest.json first — retrying (attempt $ATTEMPT)"
@@ -258,7 +273,12 @@ code="$(fetchable "https://github.com/$REPO/releases/download/$TAG/$INSTALLER_NA
 printf '    %s  %s\n' "$code" "$INSTALLER_NAME"
 if [ "$HAVE_KEY" -eq 1 ]; then
   curl -s -L "https://github.com/$REPO/releases/latest/download/latest.json" \
-    | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); if(!d.platforms["windows-x86_64"]) throw new Error(JSON.stringify(d.platforms)); console.log("    latest.json carries windows-x86_64 ✓")'
+    | FA_PLATFORM_KEY="windows-$ARCH" node -e '
+      const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      const key = process.env.FA_PLATFORM_KEY;
+      if (!d.platforms[key]) throw new Error(JSON.stringify(d.platforms));
+      console.log(`    latest.json carries ${key} ✓`);
+    '
 fi
 
 cat <<EOF

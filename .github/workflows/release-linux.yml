@@ -2,8 +2,11 @@ name: Release (Linux)
 
 # The macOS release is a local, notarized build (scripts/release-mac.sh). Linux
 # has no notarization step, so it runs here: when a release is published, build
-# the .deb + .AppImage on a clean Ubuntu runner and attach them to that same
-# release. `workflow_dispatch` re-runs it against any existing tag.
+# the .deb + .AppImage on a clean Ubuntu runner (amd64 and arm64, natively —
+# see the matrix below) and attach them to that same release.
+# `workflow_dispatch` re-runs it against any existing tag, or (with
+# `no_upload`) just builds to validate the pipeline without touching a real
+# release.
 #
 # Auto-updates for Linux need the Tauri updater signing key as a secret:
 #   gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/family-agent-updater.key
@@ -18,27 +21,44 @@ on:
       tag:
         description: "Release tag to attach the Linux build to (blank = latest)"
         required: false
+      no_upload:
+        description: "Build only — don't attach to a release (pipeline validation)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
-# NOT shared with release-{windows,mac}.yml: a group shared across all
-# three was tried and reverted — when a single `release: published` event
-# fires all three simultaneously, GitHub Actions concurrency only keeps
-# the currently-running run plus the *latest* queued one for a group;
-# an extra simultaneous arrival is cancelled outright, not queued behind.
-# Confirmed happening in practice (v1.3.1's linux run got cancelled this
-# way). The actual race this was guarding against — mac/linux/windows
-# each merging their own key into the release's shared latest.json — is
-# instead handled with a download/merge/upload/verify retry loop in each
-# release-*.sh script, which works regardless of scheduling.
-concurrency:
-  group: release-linux-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
-  cancel-in-progress: false
-
 jobs:
   linux:
-    runs-on: ubuntu-24.04
+    strategy:
+      # One arch failing (most likely arm64 — the newer, less-trodden path)
+      # shouldn't cancel the other; each attaches its own independent asset.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    # Job-level (not workflow-level) so each matrix arch gets its own
+    # independent group — amd64 and arm64 attach different assets and should
+    # run in parallel, not serialize against each other. NOT shared with
+    # release-{windows,mac}.yml either: a group shared across all release
+    # workflows was tried and reverted — when a single `release: published`
+    # event fires several simultaneously, GitHub Actions concurrency only
+    # keeps the currently-running run plus the *latest* queued one for a
+    # group; an extra simultaneous arrival is cancelled outright, not queued
+    # behind. Confirmed happening in practice (v1.3.1's linux run got
+    # cancelled this way). The actual race this was guarding against —
+    # mac/linux/windows each merging their own key into the release's shared
+    # latest.json — is instead handled with a download/merge/upload/verify
+    # retry loop in each release-*.sh script, which works regardless of
+    # scheduling.
+    concurrency:
+      group: ${{ inputs.no_upload == true && format('release-linux-{0}-validate-{1}', matrix.arch, github.run_id) || format('release-linux-{0}-{1}', matrix.arch, github.event.release.tag_name || inputs.tag || 'latest') }}
+      cancel-in-progress: false
     steps:
       - name: Resolve the tag
         id: tag
@@ -46,11 +66,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          if [ -z "$TAG" ]; then
+          if [ -z "$TAG" ] && [ "${{ inputs.no_upload }}" != "true" ]; then
             TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Attaching Linux bundles to $TAG"
+          echo "Attaching Linux ${{ matrix.arch }} bundles to ${TAG:-<none, --no-upload>}"
 
       # Check out the commit this workflow runs against, NOT the release tag: an
       # older tag predates scripts/release-linux.sh. For `release: published`
@@ -70,6 +90,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri -> target
+          # Separate cache per arch — an amd64 target/ directory is useless
+          # (and would just be evicted) on an arm64 runner and vice versa.
+          key: ${{ matrix.arch }}
 
       - name: Tauri Linux dependencies
         run: |
@@ -90,4 +113,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: ./scripts/release-linux.sh --tag "${{ steps.tag.outputs.tag }}"
+        run: |
+          ARGS=()
+          [ -n "${{ steps.tag.outputs.tag }}" ] && ARGS+=(--tag "${{ steps.tag.outputs.tag }}")
+          [ "${{ inputs.no_upload }}" = "true" ] && ARGS+=(--no-upload)
+          ./scripts/release-linux.sh "${ARGS[@]}"
+
+      - name: Upload the bundles as workflow artifacts
+        if: ${{ inputs.no_upload == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}-bundles
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
