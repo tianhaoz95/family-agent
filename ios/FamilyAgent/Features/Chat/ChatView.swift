@@ -108,7 +108,10 @@ struct ChatView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            Text("Chat").appTitle().foregroundStyle(Theme.text)
+            // .appHeadline(), not .appTitle() — matches ScreenScaffold's title
+            // size on every other tab (Events, Messages, etc.); this was the
+            // one hand-rolled header that drifted to a smaller style.
+            Text("Chat").appHeadline().foregroundStyle(Theme.text)
             Spacer()
             headerIcon("square.and.pencil") { model.startNewChatSession() }
             headerIcon("clock.arrow.circlepath") { showHistory = true }
