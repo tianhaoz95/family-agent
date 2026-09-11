@@ -61,16 +61,19 @@ struct ChatBubble: View {
     private var bubble: some View {
         Group {
             if isUser {
+                // Claude-app style: a neutral grey bubble, not the accent
+                // color — the accent stays reserved for actual actions
+                // (buttons, links), not for "this is what you typed".
                 HStack(spacing: 5) {
                     if isForced {
                         Image(systemName: "hammer.fill")
                             .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.75))
+                            .foregroundStyle(Theme.textMuted)
                     }
-                    Text(message.text).appBody().foregroundStyle(.white)
+                    Text(message.text).appBody().foregroundStyle(Theme.text)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(Theme.accent)
+                .background(Theme.surfaceHigh)
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 22, bottomTrailingRadius: 6, topTrailingRadius: 22))
             } else if isError {
                 Text(message.text).appBody().foregroundStyle(Theme.dangerInk)
@@ -78,11 +81,9 @@ struct ChatBubble: View {
                     .background(Theme.dangerSoft)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
             } else {
-                // Assistant bubble: sunk warm-gray, no border (matches Android's surfaceVariant).
+                // Plain text, no bubble — Claude-app style. Only the user's
+                // own messages get a bubble now; the reply just reads as text.
                 AgentMarkdown(text: message.text)
-                    .padding(.horizontal, 14).padding(.vertical, 11)
-                    .background(Theme.surfaceSunk)
-                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 6, bottomTrailingRadius: 22, topTrailingRadius: 22))
             }
         }
     }

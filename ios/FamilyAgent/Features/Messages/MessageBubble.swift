@@ -26,16 +26,15 @@ struct MessageBubble: View {
                     let theirs = UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 6, bottomTrailingRadius: 20, topTrailingRadius: 20)
                     if message.pending {
                         Text("Assistant is typing…").appBody().foregroundStyle(Theme.textMuted)
-                            .padding(.horizontal, 14).padding(.vertical, 10)
-                            .background(Theme.accentSoft).clipShape(theirs)
                     } else if isMe {
-                        Text(message.body).appBody().foregroundStyle(.white)
+                        // Claude-app style: a neutral grey bubble, not the
+                        // accent color — matches ChatBubble's user bubble.
+                        Text(message.body).appBody().foregroundStyle(Theme.text)
                             .padding(.horizontal, 14).padding(.vertical, 10)
-                            .background(Theme.accent).clipShape(mine)
+                            .background(Theme.surfaceHigh).clipShape(mine)
                     } else if isAgent {
+                        // Plain text, no bubble — matches ChatBubble's assistant reply.
                         AgentMarkdown(text: message.body)
-                            .padding(.horizontal, 14).padding(.vertical, 10)
-                            .background(Theme.accentSoft).clipShape(theirs)
                     } else {
                         Text(message.body).appBody()
                             .padding(.horizontal, 14).padding(.vertical, 10)

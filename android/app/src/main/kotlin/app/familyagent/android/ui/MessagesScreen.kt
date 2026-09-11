@@ -525,7 +525,10 @@ private fun MessageBubble(
         horizontalArrangement = if (own) Arrangement.End else Arrangement.Start,
     ) {
         Column(
-            Modifier.widthIn(max = 300.dp),
+            // The assistant's reply is plain text (below), not a bubble, so
+            // it gets more room — a 300dp cap on it would just wrap text
+            // that has no visual container to justify staying narrow.
+            Modifier.widthIn(max = if (agent) 480.dp else 300.dp),
             horizontalAlignment = if (own) Alignment.End else Alignment.Start,
         ) {
             if (!own) {
@@ -554,30 +557,37 @@ private fun MessageBubble(
                 }
                 if (msg.body.isNotBlank()) Spacer(Modifier.height(4.dp))
             }
+            // Claude-app style: only your own message gets a bubble — a
+            // neutral grey, not the accent color. The assistant's reply is
+            // just text, no bubble; another member's message keeps a bubble
+            // too (still needed to read as "someone else's message", with
+            // their name label above).
             val shape = if (own) RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
             else RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)
-            val bg = when {
-                own -> MaterialTheme.colorScheme.primary
-                agent -> AppAccents.cyanTint
-                else -> MaterialTheme.colorScheme.surfaceVariant
-            }
-            Box(Modifier.background(bg, shape).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                when {
-                    msg.pending -> Text(
-                        "Assistant is typing…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = AppAccents.textSecondary,
-                    )
-                    agent -> Markdown(
-                        content = msg.body,
-                        colors = markdownColor(text = MaterialTheme.colorScheme.onSurface),
-                        typography = markdownTypography(),
-                    )
-                    else -> Text(
-                        msg.body,
-                        color = if (own) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
+            when {
+                msg.pending -> Text(
+                    "Assistant is typing…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AppAccents.textSecondary,
+                )
+                agent -> Markdown(
+                    content = msg.body,
+                    colors = markdownColor(text = MaterialTheme.colorScheme.onSurface),
+                    typography = markdownTypography(),
+                )
+                own -> Box(
+                    Modifier
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest, shape)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                ) {
+                    Text(msg.body, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
+                }
+                else -> Box(
+                    Modifier
+                        .background(MaterialTheme.colorScheme.surfaceVariant, shape)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                ) {
+                    Text(msg.body, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
                 }
             }
             if (agent && msg.steps.isNotEmpty()) {

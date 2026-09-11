@@ -475,21 +475,19 @@ private fun ChatBubble(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
-        val shape = if (isUser) {
-            RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
+        // Claude-app style: only the user's own message gets a bubble — a
+        // neutral grey, not the accent color, which stays reserved for
+        // actual actions. The assistant's reply is just text, no bubble.
+        val innerModifier = if (isUser) {
+            Modifier
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
+                .widthIn(max = 300.dp)
+                .padding(horizontal = 14.dp, vertical = 11.dp)
         } else {
-            RoundedCornerShape(22.dp, 22.dp, 22.dp, 6.dp)
-        }
-        val bubbleColor = if (isUser) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
+            Modifier.widthIn(max = 480.dp)
         }
         Column(
-            modifier = Modifier
-                .background(bubbleColor, shape)
-                .widthIn(max = 300.dp)
-                .padding(horizontal = 14.dp, vertical = 11.dp),
+            modifier = innerModifier,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (msg.images.isNotEmpty()) {
@@ -508,8 +506,7 @@ private fun ChatBubble(
                 }
             }
             if (msg.text.isNotBlank()) {
-                val textColor =
-                    if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                val textColor = MaterialTheme.colorScheme.onSurface
                 if (isUser) {
                     // The user types plain text — no need to parse it as Markdown.
                     // A "/" turn forced a specific specialist agent instead of
