@@ -4322,8 +4322,9 @@ async function saveSetting(patch: SettingsPatch, statusEl: HTMLElement, okMsg: (
   }
 }
 
-settingsModelForm.addEventListener("submit", (e) => {
-  e.preventDefault();
+// A dropdown, not free text — picking a value is the whole action, so save
+// on change instead of making the admin also find and click a Save button.
+settingsModelSelect.addEventListener("change", () => {
   const model = settingsModelSelect.value;
   if (model) void saveSetting({ model }, settingsModelStatusEl, (s) => `Saved — assistant now uses ${s.model}`);
 });
@@ -4340,8 +4341,8 @@ settingsForm.addEventListener("submit", (e) => {
   if (inboxDir) void saveSetting({ inboxDir }, settingsStatusEl, (s) => `Saved — now watching ${s.inboxDir}`);
 });
 
-settingsOcrForm.addEventListener("submit", (e) => {
-  e.preventDefault();
+// A dropdown, not free text — see settingsModelSelect above.
+settingsOcrModelSelect.addEventListener("change", () => {
   // "" is valid here — it means "use the built-in engine".
   const ocrModel = settingsOcrModelSelect.value;
   void saveSetting({ ocrModel }, settingsOcrStatusEl, (s) =>
@@ -4356,8 +4357,8 @@ settingsAsrForm.addEventListener("submit", (e) => {
   void saveSetting({ asrModel }, settingsAsrStatusEl, (s) => `Saved — voice input now uses ${s.asrModel}`);
 });
 
-settingsTtsForm.addEventListener("submit", (e) => {
-  e.preventDefault();
+// A dropdown, not free text — see settingsModelSelect above.
+settingsTtsVoiceSelect.addEventListener("change", () => {
   const ttsVoice = settingsTtsVoiceSelect.value;
   if (ttsVoice) {
     void saveSetting({ ttsVoice }, settingsTtsStatusEl, (s) => `Saved — replies read in ${TTS_VOICE_LABELS[s.ttsVoice] ?? s.ttsVoice}`);
