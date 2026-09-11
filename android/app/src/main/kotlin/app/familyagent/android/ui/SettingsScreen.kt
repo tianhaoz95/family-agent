@@ -1,14 +1,19 @@
 package app.familyagent.android.ui
 
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.ConnectionStatus
+import app.familyagent.android.ReplyNotifications
 import app.familyagent.android.data.ServerSettings
 import app.familyagent.android.ui.theme.AppAccents
 
@@ -24,6 +29,8 @@ fun SettingsScreen(
     voiceEnabled: Boolean = false,
     micOnLeft: Boolean = false,
     onSetMicOnLeft: (Boolean) -> Unit = {},
+    notifyOnReply: Boolean = true,
+    onSetNotifyOnReply: (Boolean) -> Unit = {},
     serverSettings: ServerSettings? = null,
     onSetCardsEnabled: (Boolean) -> Unit = {},
     onSetVaultEnabled: (Boolean) -> Unit = {},
@@ -80,6 +87,52 @@ fun SettingsScreen(
                         )
                     }
                 }
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+        SectionLabel("Notifications")
+        Spacer(Modifier.height(4.dp))
+        val notifyContext = LocalContext.current
+        var notifyBlockedHint by remember { mutableStateOf(false) }
+        val notifyPermissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) { granted ->
+            notifyBlockedHint = !granted
+            onSetNotifyOnReply(granted)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(
+                checked = notifyOnReply,
+                onCheckedChange = { want ->
+                    if (want && !ReplyNotifications.hasPermission(notifyContext)) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notifyPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            notifyBlockedHint = true
+                        }
+                    } else {
+                        notifyBlockedHint = false
+                        onSetNotifyOnReply(want)
+                    }
+                },
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Notify when a reply is ready",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    if (notifyBlockedHint)
+                        "Notifications are blocked — allow them for Family Agent in system settings."
+                    else
+                        "A system notification when the assistant finishes replying in Chat, or an " +
+                            "@agent reply in a family channel, while you're not looking at it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (notifyBlockedHint) MaterialTheme.colorScheme.error else AppAccents.textSecondary,
+                )
             }
         }
 

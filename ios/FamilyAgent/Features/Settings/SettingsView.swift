@@ -5,6 +5,7 @@ struct SettingsView: View {
     @State private var serverURLDraft = ""
     @State private var showAdvanced = false
     @State private var showUpdateConfirm = false
+    @State private var notifyBlockedHint = false
 
     var body: some View {
         ScreenScaffold(title: "Settings",
@@ -42,6 +43,38 @@ struct SettingsView: View {
                         .padding(.vertical, 4)
                     }
                 }
+
+                section("Notifications")
+                Toggle(isOn: Binding(
+                    get: { model.notifyOnReply },
+                    set: { want in
+                        guard want else {
+                            notifyBlockedHint = false
+                            model.notifyOnReply = false
+                            return
+                        }
+                        ReplyNotifications.hasPermission { granted in
+                            if granted {
+                                notifyBlockedHint = false
+                                model.notifyOnReply = true
+                            } else {
+                                ReplyNotifications.requestPermission { granted2 in
+                                    notifyBlockedHint = !granted2
+                                    model.notifyOnReply = granted2
+                                }
+                            }
+                        }
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Notify when a reply is ready").appBody()
+                        Text(notifyBlockedHint
+                            ? "Notifications are blocked — allow them for Family Agent in Settings."
+                            : "A system notification when the assistant finishes replying in Chat, or an @agent reply in a family channel, while you're not looking at it.")
+                            .appLabelSmall().foregroundStyle(notifyBlockedHint ? Theme.dangerInk : Theme.textMuted)
+                    }
+                }
+                .padding(.vertical, 4)
 
                 if let s = model.serverSettings {
                     section("Assistant")

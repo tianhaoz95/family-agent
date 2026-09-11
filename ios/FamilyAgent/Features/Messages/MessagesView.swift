@@ -4,6 +4,10 @@ struct MessagesView: View {
     @Environment(AppModel.self) private var model
     @State private var composing = false
     @State private var route: String?
+    /// A channel id from a tapped notification — opened once, the first time
+    /// this view appears, via `onConsumedInitialRoute` (see MainShell.swift).
+    var initialChannelId: String? = nil
+    var onConsumedInitialRoute: () -> Void = {}
 
     var body: some View {
         ScreenScaffold(title: "Messages",
@@ -52,7 +56,13 @@ struct MessagesView: View {
                 }
             }
         }
-        .task { await model.refreshChannels() }
+        .task {
+            await model.refreshChannels()
+            if let id = initialChannelId {
+                route = id
+                onConsumedInitialRoute()
+            }
+        }
         .navigationDestination(item: $route) { id in
             ConversationView(channelId: id) { route = nil }
         }

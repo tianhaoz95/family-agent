@@ -118,6 +118,23 @@ final class AppModel {
     var micOnLeft: Bool = SettingsStore().micOnLeft {
         didSet { settings.micOnLeft = micOnLeft }
     }
+    /// Notify when a reply is ready and you're not looking at it. Device-local.
+    var notifyOnReply: Bool = SettingsStore().notifyOnReply {
+        didSet { settings.notifyOnReply = notifyOnReply }
+    }
+
+    // ---- "reply is ready" notifications: not persisted, just point-in-time
+    // state read at the moment a reply lands, to skip a redundant
+    // notification for whatever's already on screen. Set from MainShell. ----
+    var isAppForeground = true
+    var isChatScreenActive = false
+    /// A tapped notification's target, relayed from AppDelegate by
+    /// FamilyAgentApp; MainShell consumes and clears it.
+    var pendingNotificationNav: PendingNotificationNav?
+    /// Signature (createdAt) of the last resolved agent reply already
+    /// notified about, per channel — see `notifyOfResolvedAgentReplies`.
+    var lastNotifiedAgentReply: [String: String] = [:]
+    var channelNotifySeeded = false
 
     // ---- tasks / documents / activity ----
     var tasks: [TaskItem] = []

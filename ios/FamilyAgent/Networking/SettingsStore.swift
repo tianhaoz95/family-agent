@@ -14,6 +14,7 @@ struct SettingsStore {
         static let taskView = "task_view"
         static let autoRead = "auto_read_replies"
         static let micOnLeft = "mic_button_on_left"
+        static let notifyOnReply = "notify_on_reply"
         static let recentServers = "recent_servers"
     }
 
@@ -100,5 +101,16 @@ struct SettingsStore {
     var micOnLeft: Bool {
         get { defaults.bool(forKey: K.micOnLeft) }
         nonmutating set { defaults.set(newValue, forKey: K.micOnLeft) }
+    }
+
+    /// Notify when a reply is ready and you're not looking at it — Chat, or
+    /// a family channel's @agent reply. Default true (unlike autoRead/
+    /// micOnLeft, which default off): the actual OS notification permission
+    /// is requested separately (once at app start, and again from this
+    /// toggle if it's still missing), so this alone can't surprise anyone
+    /// with a system prompt. Device-local, survives sign-out.
+    var notifyOnReply: Bool {
+        get { defaults.object(forKey: K.notifyOnReply) == nil ? true : defaults.bool(forKey: K.notifyOnReply) }
+        nonmutating set { defaults.set(newValue, forKey: K.notifyOnReply) }
     }
 }

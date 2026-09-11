@@ -102,6 +102,13 @@ extension AppModel {
                 if speakReply || autoRead {
                     speak(resp.reply)
                 }
+                // Skip the notification if the user is right here watching it arrive.
+                if notifyOnReply, !(isAppForeground && isChatScreenActive) {
+                    let sessionId = resp.sessionId
+                    ReplyNotifications.hasPermission { granted in
+                        if granted { ReplyNotifications.postChatReply(sessionId: sessionId, body: resp.reply) }
+                    }
+                }
                 await refreshChatSessions()
             } catch APIError.unauthorized {
                 settings.clearSession()

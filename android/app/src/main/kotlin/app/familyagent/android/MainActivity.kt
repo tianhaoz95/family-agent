@@ -1,9 +1,15 @@
 package app.familyagent.android
 
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -46,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -113,6 +120,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // A cold start from tapping a "reply is ready" notification — a warm
+        // one (app already running) comes through onNewIntent below instead,
+        // since the activity is launchMode="singleTop".
+        AppForegroundTracker.pendingNav = ReplyNotifications.pendingNavFrom(intent)
 
         val settingsStore = SettingsStore(applicationContext)
         val discovery = ServerDiscovery(applicationContext)
@@ -152,6 +163,28 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    // A tapped notification while the activity is already running (singleTop
+    // reuses it instead of starting a new instance).
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        ReplyNotifications.pendingNavFrom(intent)?.let { AppForegroundTracker.pendingNav = it }
+    }
+
+    // Coarser than "is the Chat screen visible" (that's tracked separately,
+    // per-destination, in FamilyAgentApp below) — this is just "is the app
+    // in front of the user at all right now", read by the view model when
+    // deciding whether a notification would be redundant.
+    override fun onResume() {
+        super.onResume()
+        AppForegroundTracker.isForeground = true
+    }
+
+    override fun onPause() {
+        super.onPause()
+        AppForegroundTracker.isForeground = false
+    }
 }
 
 class AppViewModelFactory(
@@ -182,6 +215,31 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
         if (drawerState.isOpen) viewModel.refreshStatus()
     }
 
+    // Feeds AppForegroundTracker so the view model can tell, at the moment a
+    // reply lands, whether the user is already looking at that exact
+    // conversation (Chat, or this specific channel) and skip a redundant
+    // notification.
+    LaunchedEffect(currentDestination?.route, backStackEntry) {
+        AppForegroundTracker.isChatScreenActive = currentDestination?.route == Destination.Chat.route
+        AppForegroundTracker.activeConversationChannelId =
+            if (currentDestination?.route == CONVERSATION_ROUTE) backStackEntry?.arguments?.getString("id") else null
+    }
+
+    // Request the OS notification permission once at app start if it hasn't
+    // been decided yet (a no-op below API 33, where it isn't a runtime
+    // permission at all). The Settings toggle re-requests it if the user
+    // turns notifications on after having said no here.
+    val context = LocalContext.current
+    val notifyPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notifyPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     fun navigateTo(dest: Destination) {
         viewModel.stopSpeech()
         navController.navigate(dest.route) {
@@ -202,6 +260,23 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
             Destination.Vault -> viewModel.refreshVault()
             Destination.Activity -> viewModel.refreshActivity()
             else -> {}
+        }
+    }
+
+    // A tapped "reply is ready" notification (cold start via MainActivity's
+    // onCreate, or already-running via onNewIntent) — jump straight there.
+    LaunchedEffect(AppForegroundTracker.pendingNav) {
+        when (val nav = AppForegroundTracker.pendingNav) {
+            is PendingNotificationNav.Chat -> {
+                viewModel.openChatSession(nav.sessionId)
+                navigateTo(Destination.Chat)
+                AppForegroundTracker.pendingNav = null
+            }
+            is PendingNotificationNav.Channel -> {
+                navController.navigate("conversation/${nav.channelId}") { launchSingleTop = true }
+                AppForegroundTracker.pendingNav = null
+            }
+            null -> {}
         }
     }
 
@@ -500,6 +575,8 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         voiceEnabled = state.voiceEnabled,
                         micOnLeft = state.micOnLeft,
                         onSetMicOnLeft = viewModel::setMicOnLeft,
+                        notifyOnReply = state.notifyOnReply,
+                        onSetNotifyOnReply = viewModel::setNotifyOnReply,
                         serverSettings = state.serverSettings,
                         onSetCardsEnabled = viewModel::setCardsEnabled,
                         onSetVaultEnabled = viewModel::setVaultEnabled,

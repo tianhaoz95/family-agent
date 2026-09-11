@@ -38,6 +38,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
 /// an edge swipe does too.
 struct MainShell: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selection: Destination = {
         #if DEBUG
         if let s = ProcessInfo.processInfo.environment["FA_START"],
@@ -47,6 +48,10 @@ struct MainShell: View {
     }()
     @State private var drawerOpen = false
     @State private var dragOffset: CGFloat = 0
+    /// A channel id from a tapped notification, latched here (not just read
+    /// off `model.pendingNotificationNav`, which gets cleared as soon as
+    /// it's consumed) so MessagesView can seed its own navigation with it.
+    @State private var pendingChannelId: String?
 
     private let drawerWidth: CGFloat = 300
 
@@ -125,6 +130,25 @@ struct MainShell: View {
             }
         }
         .overlay(alignment: .bottom) { errorBanner }
+        // Feeds AppModel so it can tell, at the moment a reply lands,
+        // whether the user is already looking at that exact conversation
+        // (Chat — a specific channel is tracked via `model.activeChannel`
+        // already) and skip a redundant notification.
+        .onChange(of: scenePhase, initial: true) { _, phase in model.isAppForeground = phase == .active }
+        .onChange(of: selection, initial: true) { _, d in model.isChatScreenActive = d == .chat }
+        // A tapped "reply is ready" notification — jump straight there.
+        .onChange(of: model.pendingNotificationNav) { _, nav in
+            guard let nav else { return }
+            switch nav {
+            case .chat(let sessionId):
+                model.openChatSession(sessionId)
+                selection = .chat
+            case .channel(let channelId):
+                pendingChannelId = channelId
+                selection = .messages
+            }
+            model.pendingNotificationNav = nil
+        }
     }
 
     // MARK: pieces
@@ -187,7 +211,7 @@ struct MainShell: View {
     private func destinationView(_ d: Destination) -> some View {
         switch d {
         case .chat:        ChatView()
-        case .messages:    MessagesView()
+        case .messages:    MessagesView(initialChannelId: pendingChannelId, onConsumedInitialRoute: { pendingChannelId = nil })
         case .events:      TasksView()
         case .board:       BoardView()
         case .documents:   DocumentsView()

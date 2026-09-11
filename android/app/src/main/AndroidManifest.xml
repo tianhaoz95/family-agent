@@ -20,6 +20,10 @@
          its own permissions and capture just works. uses-feature stays so
          Play doesn't hard-filter camera-less devices. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- "Reply is ready" notifications (Chat, or @agent in a family channel).
+         Only meaningful on API 33+ (runtime-requested at app start and from
+         the Settings toggle); a no-op permission below that. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -30,6 +34,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.FamilyAgent">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

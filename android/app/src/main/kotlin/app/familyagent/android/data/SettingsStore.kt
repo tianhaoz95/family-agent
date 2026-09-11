@@ -18,6 +18,7 @@ private val SERVER_NAME_KEY = stringPreferencesKey("server_name")
 private val TASK_VIEW_KEY = stringPreferencesKey("task_view")
 private val AUTO_READ_KEY = booleanPreferencesKey("auto_read_replies")
 private val MIC_ON_LEFT_KEY = booleanPreferencesKey("mic_button_on_left")
+private val NOTIFY_ON_REPLY_KEY = booleanPreferencesKey("notify_on_reply")
 // "Remember me" on the login screen — keyed by server URL (below the plain
 // "current session" keys above) so switching servers doesn't leak one home's
 // saved login into another's fields. Plaintext at rest, same as AUTH_TOKEN_KEY
@@ -92,6 +93,19 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setMicOnLeft(on: Boolean) {
         context.dataStore.edit { it[MIC_ON_LEFT_KEY] = on }
+    }
+
+    /**
+     * Show a system notification when the assistant finishes a reply while
+     * you're not looking at that conversation — Chat, or a family channel's
+     * @agent reply. Default on; the actual OS notification permission is
+     * requested separately (once at app start, and again from this toggle
+     * if it's still missing). Device-local, survives sign-out.
+     */
+    val notifyOnReply = context.dataStore.data.map { it[NOTIFY_ON_REPLY_KEY] ?: true }
+
+    suspend fun setNotifyOnReply(on: Boolean) {
+        context.dataStore.edit { it[NOTIFY_ON_REPLY_KEY] = on }
     }
 
     suspend fun saveSession(serverUrl: String, token: String, displayName: String, serverName: String) {

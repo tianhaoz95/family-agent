@@ -110,6 +110,8 @@ data class AppUiState(
     val autoRead: Boolean = false,
     /** Composer mic button side — true = left of the input field (persisted in DataStore). */
     val micOnLeft: Boolean = false,
+    /** Notify when a reply is ready and you're not looking at it (persisted in DataStore). */
+    val notifyOnReply: Boolean = true,
     /** The reply text currently being synthesized (null = none). */
     val speakLoadingText: String? = null,
     /** The reply text currently playing aloud (null = none). */
@@ -226,6 +228,11 @@ class AppViewModel(
         viewModelScope.launch {
             settings.micOnLeft.collect { on ->
                 _state.value = _state.value.copy(micOnLeft = on)
+            }
+        }
+        viewModelScope.launch {
+            settings.notifyOnReply.collect { on ->
+                _state.value = _state.value.copy(notifyOnReply = on)
             }
         }
         viewModelScope.launch {
@@ -500,12 +507,18 @@ class AppViewModel(
                 chatSending = false,
                 chatLiveSteps = emptyList(),
             )
+            val isGoodReply = assistant.role == "assistant" && !assistant.text.startsWith("Error:")
             // Speak the reply when auto-read is on, or when this turn came in by
             // voice (push-to-talk) — the user chose to talk, so talk back.
-            if (assistant.role == "assistant" && !assistant.text.startsWith("Error:") &&
-                _state.value.ttsEnabled && (speakReply || _state.value.autoRead)
-            ) {
+            if (isGoodReply && _state.value.ttsEnabled && (speakReply || _state.value.autoRead)) {
                 speak(assistant.text)
+            }
+            // Skip the notification if the user is right here watching it arrive.
+            if (isGoodReply) {
+                val alreadyOpen = AppForegroundTracker.isForeground && AppForegroundTracker.isChatScreenActive
+                if (_state.value.notifyOnReply && !alreadyOpen && ReplyNotifications.hasPermission(appContext)) {
+                    ReplyNotifications.postChatReply(appContext, _state.value.activeChatSessionId ?: "", assistant.text)
+                }
             }
             refreshActivity()
             refreshChatSessions()
@@ -612,6 +625,10 @@ class AppViewModel(
 
     fun setMicOnLeft(on: Boolean) {
         viewModelScope.launch { settings.setMicOnLeft(on) }
+    }
+
+    fun setNotifyOnReply(on: Boolean) {
+        viewModelScope.launch { settings.setNotifyOnReply(on) }
     }
 
     override fun onCleared() {
@@ -955,6 +972,14 @@ class AppViewModel(
     private var channelListJob: Job? = null
     private var conversationJob: Job? = null
 
+    // Signature of the last resolved agent reply already notified about, per
+    // channel — so this 8s poll doesn't re-notify for the same reply every
+    // time it comes back around. Seeded (not notified) on the very first
+    // call so existing history at app start doesn't fire a wall of
+    // notifications.
+    private val lastNotifiedAgentReply = mutableMapOf<String, String>()
+    private var channelNotifySeeded = false
+
     /** Poll the channel list (for previews + the unread badge) while signed in. */
     private fun startChannelListPolling() {
         if (channelListJob?.isActive == true) return
@@ -962,6 +987,19 @@ class AppViewModel(
             while (true) {
                 apiCall { api.listChannels() }.onSuccess { list ->
                     _state.value = _state.value.copy(channels = list)
+                    for (c in list) {
+                        val lm = c.lastMessage ?: continue
+                        if (lm.senderId != AGENT_SENDER_ID || lm.pending) continue
+                        val prev = lastNotifiedAgentReply[c.id]
+                        lastNotifiedAgentReply[c.id] = lm.createdAt
+                        if (!channelNotifySeeded || prev == lm.createdAt) continue
+                        val alreadyOpen = AppForegroundTracker.isForeground &&
+                            AppForegroundTracker.activeConversationChannelId == c.id
+                        if (_state.value.notifyOnReply && !alreadyOpen && ReplyNotifications.hasPermission(appContext)) {
+                            ReplyNotifications.postChannelReply(appContext, c.id, c.title, lm.body)
+                        }
+                    }
+                    channelNotifySeeded = true
                 }
                 delay(8000)
             }

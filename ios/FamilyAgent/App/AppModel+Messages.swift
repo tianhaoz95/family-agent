@@ -5,10 +5,34 @@ extension AppModel {
     // MARK: Channel list
 
     func refreshChannels() async {
-        if let c = await perform({ try await api.listChannels() }) { channels = c }
+        if let c = await perform({ try await api.listChannels() }) {
+            channels = c
+            notifyOfResolvedAgentReplies(in: c)
+        }
         if familyMembers.isEmpty {
             familyMembers = (await perform { try await api.listFamilyMembers() }) ?? []
         }
+    }
+
+    /// Diffs each poll's `lastMessage` against what was last notified about,
+    /// per channel — so this repeating 8s poll (MainShell) doesn't re-notify
+    /// for the same reply every time it comes back around. Seeded (not
+    /// notified) on the very first call so existing history at app start
+    /// doesn't fire a wall of notifications. Mirrors `refreshChannels()` in
+    /// desktop's main.ts and `startChannelListPolling()` in AppViewModel.kt.
+    private func notifyOfResolvedAgentReplies(in list: [Channel]) {
+        for c in list {
+            guard let lm = c.lastMessage, lm.senderId == AGENT_SENDER_ID, !lm.pending else { continue }
+            let prev = lastNotifiedAgentReply[c.id]
+            lastNotifiedAgentReply[c.id] = lm.createdAt
+            guard channelNotifySeeded, prev != lm.createdAt else { continue }
+            let alreadyOpen = isAppForeground && activeChannel?.id == c.id
+            guard notifyOnReply, !alreadyOpen else { continue }
+            ReplyNotifications.hasPermission { granted in
+                if granted { ReplyNotifications.postChannelReply(channelId: c.id, channelTitle: c.title, body: lm.body) }
+            }
+        }
+        channelNotifySeeded = true
     }
 
     func startConversation(memberIds: [String], name: String?, then open: @escaping (String) -> Void) {
