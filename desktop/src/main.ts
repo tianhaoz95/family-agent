@@ -6818,6 +6818,13 @@ function renderArtifactList(): void {
 // ---- full-screen viewer ----
 
 const artifactViewer = document.getElementById("artifact-viewer") as HTMLElement;
+// The artifact list underneath the viewer — a normal-flow sibling, not an
+// overlay, so it always fills the full content width regardless of
+// --comments-space. When the comments panel is open, .artifact-viewer's
+// right edge shrinks to sit beside it, but the list behind it doesn't know
+// to shrink too — without hiding it, that newly-exposed strip shows a slice
+// of the list peeking out between the shrunk card and the panel.
+const viewArtifactsSection = document.getElementById("view-artifacts") as HTMLElement;
 const artifactViewerClose = document.getElementById("artifact-viewer-close") as HTMLButtonElement;
 const artifactViewerTitle = document.getElementById("artifact-viewer-title")!;
 const artifactFrame = document.getElementById("artifact-frame") as HTMLIFrameElement;
@@ -6892,6 +6899,7 @@ function closeArtifactViewer(): void {
   if (artView) window.removeEventListener("message", artView.onMsg);
   artView = null;
   artifactViewer.hidden = true;
+  viewArtifactsSection.style.visibility = "";
   artifactFrame.removeAttribute("srcdoc");
   artifactViewerTitle.textContent = "";
   closeArtifactCommentsPanel();
@@ -7166,6 +7174,7 @@ async function openArtifactViewer(id: string): Promise<void> {
   artifactViewerTitle.textContent = "";
   artifactFrame.removeAttribute("srcdoc");
   artifactViewer.hidden = false;
+  viewArtifactsSection.style.visibility = "hidden";
 
   let artifact: Artifact;
   let comments: ArtifactComment[];
