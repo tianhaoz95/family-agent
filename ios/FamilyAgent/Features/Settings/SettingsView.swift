@@ -54,13 +54,17 @@ struct SettingsView: View {
                             return
                         }
                         ReplyNotifications.hasPermission { granted in
-                            if granted {
-                                notifyBlockedHint = false
-                                model.notifyOnReply = true
-                            } else {
-                                ReplyNotifications.requestPermission { granted2 in
-                                    notifyBlockedHint = !granted2
-                                    model.notifyOnReply = granted2
+                            Task { @MainActor in
+                                if granted {
+                                    notifyBlockedHint = false
+                                    model.notifyOnReply = true
+                                } else {
+                                    ReplyNotifications.requestPermission { granted2 in
+                                        Task { @MainActor in
+                                            notifyBlockedHint = !granted2
+                                            model.notifyOnReply = granted2
+                                        }
+                                    }
                                 }
                             }
                         }
