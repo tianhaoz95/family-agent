@@ -410,6 +410,18 @@ of the device's own /24 plus `10.0.2.2` (the emulator forwards no multicast, and
 blocks client-to-client mDNS — the probe is what makes discovery actually work in those
 cases); `DiscoveryScreen` lists whatever either method finds, plus a manual-address fallback, `LoginScreen` signs in, `SettingsStore` persists the session
 (`serverUrl` + `token` + names) in DataStore. From an emulator, `10.0.2.2` is the
+alias for the host machine running agent-core. **Neither discovery method crosses Tailscale**
+(mDNS is link-local multicast, which a tailnet's point-to-point mesh doesn't relay; the /24
+probe only ever covers a real local subnet — `Inet4Address.isSiteLocalAddress`/the iOS
+equivalent don't even see Tailscale's 100.64.0.0/10 CGNAT range, so it's correctly never
+scanned as if it were a LAN). `ServerDiscovery.tailscaleLikelyActive()` detects a
+Tailscale-shaped address on any interface and, when true, swaps the "no server found" hint
+for one that says so plainly instead of implying the scan just needs more time. The actual
+fix for reconnecting over Tailscale (or any off-LAN address) is `SettingsStore.recentServers`
+(`RecentServer`, JSON in DataStore/UserDefaults, most-recent-first, capped at 5): every
+successful sign-in records itself there (`AppViewModel.login`/iOS `AppModel.finishSignIn`),
+and `DiscoveryScreen`/`DiscoveryView` show it as a one-tap "Recent" section above the live
+scan — once an address has worked once, the phone never needs to rediscover it again.
 alias for the host machine running agent-core. `DocumentsScreen` uploads files via a system
 picker (`GetContent`) or camera capture (`TakePicture` + a `FileProvider` — see
 `res/xml/file_paths.xml` and the `<provider>` entry in `AndroidManifest.xml`); both paths funnel
@@ -460,6 +472,11 @@ wire types are hand-mirrored in `ios/FamilyAgent/Networking/DTOs.swift` (the cou
   (default), a single-use pairing token so the scan needs no password (see "QR phone
   pairing" above; `PairingPayload` parses the `{url,name,t}` envelope).
   Token in the Keychain (`Keychain.swift`), rest in `UserDefaults` (`SettingsStore.swift`).
+  `ServerDiscovery.tailscaleLikelyActive()` + `SettingsStore.recentServers` mirror Android's
+  same-named pieces exactly (see that section above) — neither scan method crosses Tailscale,
+  so `DiscoveryView` shows a "Recent" one-tap-reconnect section (every successful sign-in
+  records itself via `AppModel.finishSignIn`) and swaps in an accurate hint when Tailscale
+  looks active instead of implying the scan just needs more time.
 - **Design** (`ios/FamilyAgent/DesignSystem/`): `Theme.swift` ports the Kotlin `Pal`/`AppAccents`/
   shape/type tokens (warm `#F6F5F4`, one `#0075DE` accent, Inter, light only). `Glass.swift` is
   the single `#available(iOS 26, *)` shim — `.glass(_:in:)` / `.glassButton()` →
@@ -1018,6 +1035,54 @@ tool list, so there's nothing stale to invalidate.
   /vault/access-log`. Desktop `#view-vault` (`renderVault` in `main.ts`);
   Android `Destination.Vault` / `VaultScreen.kt`. Tests: `test/vault.test.ts`,
   `test/vault.routes.test.ts`. See `docs/DECISIONS.md` → "Password vault".
+
+## Remote update-and-restart of the host desktop app
+
+The desktop app auto-updates itself (`tauri-plugin-updater`, minisign-signed,
+checks `GET .../releases/latest/download/latest.json`): on launch it checks
+quietly, and Settings → Updates has a manual "Check" / "Install & restart"
+pair (`initUpdates`/`checkForUpdate`/`performUpdateInstall` in
+`desktop/src/main.ts`) — never auto-installs, since restarting also restarts
+the shared server everyone on the LAN is talking to. iOS and Android added a
+way to trigger that same install-and-restart **from a phone**, for when
+nobody's at the laptop.
+
+Only the desktop's own webview has the Tauri updater plugin — agent-core is a
+plain Node sidecar with no handle on it — so this can't be a normal "do the
+thing" endpoint. It's a poll-based hand-off instead
+(`agent-core/src/desktopUpdate.ts`, in-memory + process-wide, nothing
+persisted: a restart is the point, and a fresh process naturally comes back
+up `"idle"`):
+
+1. A phone calls `POST /system/update-request` (**admin-only** — this
+   restarts the shared server for the whole household). Sets state to
+   `"requested"`.
+2. The desktop frontend polls `GET /system/update-status` every 5s
+   (`pollRemoteUpdateRequest` in `main.ts`, started alongside the other
+   recurring polls in `enterApp()`); on seeing `"requested"` it runs the
+   *exact same* `performUpdateInstall()` the manual button uses — **skipping
+   the `confirm()` dialog**, since the phone-side admin already confirmed and
+   nobody's there to click a local prompt — reporting progress back via
+   `POST /system/update-report` as it goes (`"checking"` →
+   `"downloading"`/`percent` → `"installing"` → `"restarting"` → the process
+   exits into the new version on `relaunch()`).
+3. Every client (including the one that triggered it) polls the same status
+   endpoint to show progress, until a terminal state (`"no-update"` /
+   `"error"`) or the connection drops mid-restart — at that point the normal
+   "reconnecting" UI takes over, same as any other server restart.
+
+**Only the trigger route is admin-gated** — reading/reporting status is open
+to any signed-in user. This is deliberate, not an oversight: the desktop's
+own webview might currently be signed in as a non-admin family member, and it
+still needs to report its own progress back. Nothing sensitive leaks either
+way (just ephemeral progress text). Desktop UI lives in Settings → Updates
+(reuses the existing status line); iOS/Android add an admin-only "Host
+machine" section in Settings with an "Update & restart" button (its own
+confirmation dialog, since this affects everyone) and a live status line
+(`AppModel.triggerDesktopUpdate()` / `AppViewModel.triggerDesktopUpdate()`,
+each polling client-side for up to ~90s, giving up after 3 consecutive
+failures — almost certainly mid-relaunch, not actually broken). Tests:
+`agent-core/test/desktopUpdate.test.ts`.
 
 ## Scope notes
 
