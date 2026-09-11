@@ -36,6 +36,25 @@ describe("Store (scoped to one user)", () => {
     expect(store.updateTaskStatus("nope", "done")).toBeUndefined();
   });
 
+  it("deletes a task", () => {
+    const t = store.createTask({ title: "Return the package" });
+    expect(store.deleteTask(t.id)?.id).toBe(t.id);
+    expect(store.getTask(t.id)).toBeUndefined();
+    expect(store.deleteTask(t.id)).toBeUndefined(); // already gone
+  });
+
+  it("deletes only completed tasks in bulk", () => {
+    const open = store.createTask({ title: "Still open" });
+    const done1 = store.createTask({ title: "Done one" });
+    const done2 = store.createTask({ title: "Done two" });
+    store.updateTaskStatus(done1.id, "done");
+    store.updateTaskStatus(done2.id, "done");
+
+    expect(store.deleteCompletedTasks()).toBe(2);
+    expect(store.listTasks().map((t) => t.id)).toEqual([open.id]);
+    expect(store.deleteCompletedTasks()).toBe(0); // nothing left to delete
+  });
+
   it("updateTask reschedules and clears a due date", () => {
     const t = store.createTask({ title: "Dentist" });
     expect(t.dueDate).toBeNull();

@@ -1931,6 +1931,25 @@ export class ScopedStore {
     return updated;
   }
 
+  deleteTask(id: string): TaskRecord | undefined {
+    const task = this.getTask(id);
+    if (!task) return undefined;
+    this.db.prepare("DELETE FROM tasks WHERE id = ? AND user_id = ?").run(id, this.userId);
+    this.logActivity("user", "task.deleted", `Deleted task "${task.title}"`);
+    return task;
+  }
+
+  /** Delete every completed task at once — the "Delete completed" bulk action. */
+  deleteCompletedTasks(): number {
+    const rows = this.db
+      .prepare("SELECT id FROM tasks WHERE user_id = ? AND status = 'done'")
+      .all(this.userId) as { id: string }[];
+    if (rows.length === 0) return 0;
+    this.db.prepare("DELETE FROM tasks WHERE user_id = ? AND status = 'done'").run(this.userId);
+    this.logActivity("user", "task.deleted", `Deleted ${rows.length} completed task${rows.length === 1 ? "" : "s"}`);
+    return rows.length;
+  }
+
   // ---- documents ----
   createDocument(input: {
     filename: string;

@@ -828,6 +828,9 @@ export const api = {
     request<{ task: Task }>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify({ status: "done" }) }),
   rescheduleTask: (id: string, patch: { dueDate?: string | null; dueTime?: string | null }) =>
     request<{ task: Task }>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteTask: (id: string) => request<{ deleted: boolean }>(`/tasks/${id}`, { method: "DELETE" }),
+  /** Bulk-deletes every completed task; returns how many were removed. */
+  deleteCompletedTasks: () => request<{ deleted: number }>("/tasks/delete-completed", { method: "POST" }),
   listDocuments: () => request<{ documents: Document[] }>("/documents"),
   /**
    * Search documents (filename + full text + summary), ranked, with optional

@@ -1371,6 +1371,18 @@ export function buildServer(
     return { task: updated };
   });
 
+  // A dedicated action route, not a filtered DELETE /tasks — a bare bulk
+  // delete on the collection is one missing query param away from wiping
+  // every task, open or done.
+  app.post("/tasks/delete-completed", async (req) => ({ deleted: req.userStore.deleteCompletedTasks() }));
+
+  app.delete("/tasks/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const deleted = req.userStore.deleteTask(id);
+    if (!deleted) return reply.code(404).send({ error: "task not found" });
+    return { deleted: true };
+  });
+
   // ---- documents ----
   app.get("/documents", async (req) => ({ documents: req.userStore.listDocuments() }));
 

@@ -1640,6 +1640,7 @@ const taskTitleInput = document.getElementById("task-title") as HTMLInputElement
 const taskDueInput = document.getElementById("task-due") as HTMLInputElement;
 const taskTimeInput = document.getElementById("task-time") as HTMLInputElement;
 const taskList = document.getElementById("task-list")!;
+const taskDeleteCompletedBtn = document.getElementById("task-delete-completed-btn") as HTMLButtonElement;
 const taskCalendar = document.getElementById("task-calendar") as HTMLElement;
 const calGrid = document.getElementById("cal-grid")!;
 const calLabel = document.getElementById("cal-label")!;
@@ -1766,6 +1767,19 @@ function renderTasks(tasks: Task[]) {
       due.textContent = friendlyDateTime(task.dueDate, task.dueTime);
       li.appendChild(due);
     }
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "doc-delete";
+    del.title = "Delete this event";
+    del.setAttribute("aria-label", "Delete this event");
+    del.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+    del.addEventListener("click", async () => {
+      await api.deleteTask(task.id);
+      void refreshTasks();
+      void refreshActivity();
+    });
+    li.appendChild(del);
     taskList.appendChild(li);
   }
 }
@@ -2071,6 +2085,15 @@ taskForm.addEventListener("submit", async (e) => {
   taskTitleInput.value = "";
   taskDueInput.value = "";
   taskTimeInput.value = "";
+  void refreshTasks();
+  void refreshActivity();
+});
+
+taskDeleteCompletedBtn.addEventListener("click", async () => {
+  const doneCount = lastTasks.filter((t) => t.status === "done").length;
+  if (doneCount === 0) return;
+  if (!confirm(`Delete ${doneCount} completed event${doneCount === 1 ? "" : "s"}? This can't be undone.`)) return;
+  await api.deleteCompletedTasks();
   void refreshTasks();
   void refreshActivity();
 });

@@ -1509,6 +1509,12 @@ summary:focus-visible {
   align-items: center;
   gap: 12px;
 }
+.task-row .doc-delete {
+  opacity: 0.45;
+}
+.task-row:hover .doc-delete {
+  opacity: 1;
+}
 
 /* Custom checkbox */
 .task-row input[type="checkbox"] {

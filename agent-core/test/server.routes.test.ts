@@ -115,6 +115,34 @@ describe("HTTP API", () => {
     expect(empty.statusCode).toBe(400);
   });
 
+  it("DELETE /tasks/:id removes a task, 404s for unknown id", async () => {
+    const create = await inject({ method: "POST", url: "/tasks", payload: { title: "Renew library card" } });
+    const id = create.json().task.id;
+
+    const ok = await inject({ method: "DELETE", url: `/tasks/${id}` });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().deleted).toBe(true);
+
+    const gone = await inject({ method: "GET", url: `/tasks/${id}` });
+    expect(gone.statusCode).toBe(404);
+
+    const missing = await inject({ method: "DELETE", url: "/tasks/nope" });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it("POST /tasks/delete-completed removes only done tasks and reports the count", async () => {
+    const a = await inject({ method: "POST", url: "/tasks", payload: { title: "Stays open" } });
+    const b = await inject({ method: "POST", url: "/tasks", payload: { title: "Finish this" } });
+    await inject({ method: "PATCH", url: `/tasks/${b.json().task.id}`, payload: { status: "done" } });
+
+    const res = await inject({ method: "POST", url: "/tasks/delete-completed" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deleted).toBe(1);
+
+    const remaining = await inject({ method: "GET", url: "/tasks" });
+    expect(remaining.json().tasks.map((t: { id: string }) => t.id)).toEqual([a.json().task.id]);
+  });
+
   it("POST /tasks accepts a dueTime, PATCH can change and clear it", async () => {
     const create = await inject({
       method: "POST",
