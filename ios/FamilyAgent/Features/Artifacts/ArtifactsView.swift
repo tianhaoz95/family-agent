@@ -20,7 +20,7 @@ struct ArtifactsView: View {
                         )
                     } else {
                         ForEach(model.artifacts) { a in
-                            NavigationLink(value: a.id) {
+                            NavigationLink(value: ArtifactPresentation(artifactId: a.id)) {
                                 AppCard {
                                     HStack(spacing: 8) {
                                         VStack(alignment: .leading, spacing: 3) {
@@ -46,8 +46,8 @@ struct ArtifactsView: View {
                 }
             }
         }
-        .navigationDestination(for: String.self) { id in
-            ArtifactViewerView(artifactId: id, presentedAsSheet: false)
+        .navigationDestination(for: ArtifactPresentation.self) { presentation in
+            ArtifactViewerView(artifactId: presentation.artifactId, presentedAsSheet: false)
         }
         .task { await model.refreshArtifacts() }
         .refreshable { await model.refreshArtifacts() }

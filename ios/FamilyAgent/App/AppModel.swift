@@ -18,10 +18,16 @@ enum AuthState: Equatable {
 
 /// A request to open the full-screen artifact viewer. Carries its own UUID
 /// (not just the artifact id) specifically so re-opening the *same* artifact
-/// — e.g. retrying after a failed load — is always a distinct `Identifiable`
-/// value to `fullScreenCover(item:)`, which otherwise treats an unchanged
-/// item as nothing to do. See `AppModel.viewingArtifact`.
-struct ArtifactPresentation: Identifiable, Equatable {
+/// — e.g. retrying after a failed load — is always a distinct value: to
+/// `fullScreenCover(item:)` (see `AppModel.viewingArtifact`), an unchanged
+/// item is nothing to do; to `navigationDestination(for:)` (see
+/// `ArtifactsView`), a bare artifact-id `String` pushed again after being
+/// popped can resolve to the *same* view identity SwiftUI already created
+/// for that value, reusing its stale `@State` (including a prior error)
+/// instead of mounting a fresh view that would actually reload. Hashable
+/// for the second use — NavigationPath needs it, `fullScreenCover(item:)`
+/// only needs Identifiable.
+struct ArtifactPresentation: Identifiable, Hashable {
     let id = UUID()
     let artifactId: String
 }
