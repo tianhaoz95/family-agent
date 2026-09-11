@@ -401,6 +401,10 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_dialog::init())
+        // "Reply is ready" notifications (Settings > Notifications). Permission
+        // is requested from the frontend (isPermissionGranted/requestPermission),
+        // not here — this just registers the native plugin.
+        .plugin(tauri_plugin_notification::init())
         // Updater. The frontend drives it (Settings > "Check for updates"), so
         // there is nothing to configure here beyond registering the plugin;
         // endpoint and public key live in tauri.conf.json. `process` is what

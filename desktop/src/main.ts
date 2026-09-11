@@ -398,6 +398,77 @@ try {
   /* private mode */
 }
 
+// ---------- "reply is ready" notifications ----------
+// Tauri-only (isPermissionGranted/requestPermission/sendNotification are
+// dynamically imported and no-op outside a packaged build — same guarded
+// pattern as the autostart toggle above). Client-local preference, default
+// on — the actual permission is asked once at app start (initNotifications)
+// and again if the user flips this on after having said no.
+const NOTIFY_KEY = "familyAgent.notifyOnReply";
+let notifyOnReply = true;
+try {
+  const stored = localStorage.getItem(NOTIFY_KEY);
+  if (stored !== null) notifyOnReply = stored === "1";
+} catch {
+  /* private mode */
+}
+
+// Where a tapped/focused-back-to notification should take the user. Clicking
+// an OS notification reliably focuses this window on every platform Tauri
+// targets even without a dedicated click handler, so "window regains focus
+// while a target is pending" stands in for "the notification was tapped" —
+// also correctly catching an alt-tab back to the app after ignoring it.
+type NotificationNavTarget = { kind: "chat"; sessionId: string } | { kind: "channel"; channelId: string };
+let pendingNotificationNav: NotificationNavTarget | null = null;
+
+async function ensureNotificationPermission(): Promise<boolean> {
+  try {
+    const { isPermissionGranted, requestPermission } = await import("@tauri-apps/plugin-notification");
+    if (await isPermissionGranted()) return true;
+    return (await requestPermission()) === "granted";
+  } catch {
+    return false; // not running under Tauri, or the platform has no notification center
+  }
+}
+
+// Ask once at app start, matching the "request upon app start if no access"
+// behavior — never re-prompts once the OS has recorded an answer either way.
+async function initNotifications() {
+  try {
+    const { isPermissionGranted, requestPermission } = await import("@tauri-apps/plugin-notification");
+    if (!(await isPermissionGranted())) await requestPermission();
+  } catch {
+    /* not running under Tauri */
+  }
+}
+
+async function notifyReplyReady(opts: { title: string; body: string; nav: NotificationNavTarget }) {
+  if (!notifyOnReply) return;
+  try {
+    const { isPermissionGranted, sendNotification } = await import("@tauri-apps/plugin-notification");
+    if (!(await isPermissionGranted())) return; // don't prompt opportunistically — only at start / toggle-on
+    pendingNotificationNav = opts.nav;
+    await sendNotification({ title: opts.title, body: opts.body.slice(0, 200) || "New reply ready." });
+  } catch {
+    /* not running under Tauri */
+  }
+}
+
+// Clicking the notification (or just alt-tabbing back) focuses the window —
+// jump to whatever it was about, once.
+window.addEventListener("focus", () => {
+  if (!pendingNotificationNav) return;
+  const target = pendingNotificationNav;
+  pendingNotificationNav = null;
+  if (target.kind === "chat") {
+    showView("chat");
+    void openChatSession(target.sessionId);
+  } else {
+    showView("messages");
+    void openChannel(target.channelId);
+  }
+});
+
 function stopSpeech() {
   if (currentSpeech) {
     currentSpeech.pause();
@@ -1373,6 +1444,51 @@ async function openChatSession(id: string) {
   }
   renderChatSessionList();
   chatInput.focus();
+  // The session's own last word is the user's, with no reply after it — a
+  // turn may still be running server-side (this tab was closed, or lost its
+  // connection, mid-turn; /chat persists the user's message before it even
+  // calls the model, so the reply can land long after the request that
+  // started it is gone). Poll quietly for it instead of leaving the
+  // conversation looking abandoned.
+  if (messages.length && messages[messages.length - 1].role === "user") {
+    void watchForPendingReply(id);
+  }
+}
+
+/** Re-poll a session's own message list until the pending reply resolves (or
+ *  a generous timeout passes) — see openChatSession. No live tool-call steps
+ *  here; the turnId that would carry those died with whatever launched the
+ *  original request. */
+async function watchForPendingReply(sessionId: string) {
+  const pending = appendTypingIndicator();
+  const deadline = Date.now() + 210_000; // worst-case turn (~110s) plus margin
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    if (activeChatSessionId !== sessionId) {
+      pending.remove();
+      return; // navigated elsewhere
+    }
+    let messages: ChatSessionMessage[];
+    try {
+      messages = (await api.getChatSessionMessages(sessionId)).messages;
+    } catch {
+      continue;
+    }
+    const last = messages[messages.length - 1];
+    if (last && last.role !== "user") {
+      pending.remove();
+      const bubble = appendBubble("assistant", last.body);
+      if (last.steps?.length) attachStepsStrip(bubble, last.steps);
+      attachCards(bubble, last.cards);
+      if (last.refs.length) appendReferences(bubble, last.refs);
+      appendBubbleActions(bubble, last.body);
+      return;
+    }
+  }
+  pending.remove();
+  if (activeChatSessionId === sessionId) {
+    appendBubble("system", "No reply came back for that message. You can try sending it again.");
+  }
 }
 
 async function deleteChatSessionRow(id: string) {
@@ -1497,6 +1613,11 @@ chatForm.addEventListener("submit", async (e) => {
     if ((autoRead || speakReply) && speakBtn) speakBtn.click();
     activeChatSessionId = sessionId;
     void refreshChatSessions();
+    // Skip the notification if the user is right here watching it arrive.
+    const chatAlreadyOpen = document.getElementById("view-chat")!.classList.contains("is-active") && document.hasFocus();
+    if (!chatAlreadyOpen) {
+      void notifyReplyReady({ title: "Family Agent", body: reply, nav: { kind: "chat", sessionId } });
+    }
   } catch (err) {
     stopPoll = true;
     strip.remove();
@@ -3785,6 +3906,8 @@ const settingsTtsVoiceSelect = document.getElementById("settings-tts-voice-selec
 const settingsTtsForm = document.getElementById("settings-tts-form") as HTMLFormElement;
 const settingsTtsStatusEl = document.getElementById("settings-tts-status")!;
 const settingsAutoReadCheckbox = document.getElementById("settings-auto-read") as HTMLInputElement;
+const settingsNotifyCheckbox = document.getElementById("settings-notify-checkbox") as HTMLInputElement;
+const settingsNotifyStatusEl = document.getElementById("settings-notify-status")!;
 const settingsCardsCheckbox = document.getElementById("settings-cards-checkbox") as HTMLInputElement;
 const settingsCardsStatusEl = document.getElementById("settings-cards-status")!;
 const settingsVaultCheckbox = document.getElementById("settings-vault-checkbox") as HTMLInputElement;
@@ -4037,6 +4160,9 @@ async function refreshSettings() {
       fillVoiceSelect(settingsTtsVoiceSelect, settings.ttsVoice);
     }
     settingsAutoReadCheckbox.checked = autoRead;
+    if (document.activeElement !== settingsNotifyCheckbox) {
+      settingsNotifyCheckbox.checked = notifyOnReply;
+    }
     if (document.activeElement !== settingsCardsCheckbox) {
       settingsCardsCheckbox.checked = settings.cardsEnabled;
     }
@@ -4222,6 +4348,28 @@ settingsAutoReadCheckbox.addEventListener("change", () => {
   } catch {
     /* private mode */
   }
+});
+
+settingsNotifyCheckbox.addEventListener("change", () => {
+  void (async () => {
+    const wantOn = settingsNotifyCheckbox.checked;
+    if (wantOn && !(await ensureNotificationPermission())) {
+      settingsNotifyCheckbox.checked = false;
+      settingsNotifyStatusEl.textContent = isTauri()
+        ? "Notifications are blocked — allow them for Family Agent in your system settings."
+        : "Notifications need the packaged desktop app, not this browser preview.";
+      return;
+    }
+    notifyOnReply = wantOn;
+    try {
+      localStorage.setItem(NOTIFY_KEY, notifyOnReply ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
+    settingsNotifyStatusEl.textContent = notifyOnReply
+      ? "Saved — you'll be notified when a reply is ready."
+      : "Saved — notifications are off.";
+  })();
 });
 
 settingsCardsCheckbox.addEventListener("change", () => {
@@ -4787,6 +4935,7 @@ function enterApp(user: User) {
   setInterval(() => void refreshStatus(), 5000);
   startChannelBadgePolling();
   showView("chat");
+  if (isTauri()) void initNotifications();
   void initUpdates();
   setInterval(() => void pollRemoteUpdateRequest(), 5000);
   setInterval(() => void checkForUpdate({ quiet: true }), AUTO_UPDATE_INTERVAL_MS);
@@ -4992,6 +5141,13 @@ function escapeHtml(s: string): string {
   return d.innerHTML;
 }
 
+// Signature of the last resolved agent reply we've already notified about,
+// per channel — so the 2.5s/8s polls firing repeatedly don't re-notify for
+// the same reply. Seeded (not notified) on the very first call so existing
+// history at app start doesn't fire a wall of notifications.
+const lastNotifiedAgentReply = new Map<string, string>();
+let channelNotifySeeded = false;
+
 async function refreshChannels() {
   try {
     channels = (await api.listChannels()).channels;
@@ -4999,7 +5155,20 @@ async function refreshChannels() {
     return;
   }
   updateMessagesBadge();
-  if (document.getElementById("view-messages")!.classList.contains("is-active")) renderChannelList();
+  const messagesViewActive = document.getElementById("view-messages")!.classList.contains("is-active");
+  if (messagesViewActive) renderChannelList();
+  for (const c of channels) {
+    const lm = c.lastMessage;
+    if (!lm || lm.senderId !== AGENT_SENDER_ID || lm.pending) continue;
+    const prev = lastNotifiedAgentReply.get(c.id);
+    lastNotifiedAgentReply.set(c.id, lm.createdAt);
+    if (!channelNotifySeeded || prev === lm.createdAt) continue;
+    const alreadyOpen = messagesViewActive && activeChannelId === c.id && document.hasFocus();
+    if (!alreadyOpen) {
+      void notifyReplyReady({ title: c.title || "Family chat", body: lm.body, nav: { kind: "channel", channelId: c.id } });
+    }
+  }
+  channelNotifySeeded = true;
 }
 
 // After a push-to-talk send in a channel, speak the agent's reply back once.
