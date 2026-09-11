@@ -4,9 +4,11 @@
 
 <p align="center">
   <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/ci.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-mac.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/release-mac.yml/badge.svg" alt="Release (macOS)"></a>
-  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-linux.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/release-linux.yml/badge.svg" alt="Release (Linux)"></a>
-  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-windows.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/release-windows.yml/badge.svg" alt="Release (Windows)"></a>
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-mac.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/release-mac.yml/badge.svg" alt="Release (macOS, arm64)"></a>
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-linux.yml"><img src="https://img.shields.io/github/actions/workflow/status/tianhaoz95/family-agent/release-linux.yml?job=linux%20%28ubuntu-24.04%2C%20amd64%29&label=Linux%20x86_64" alt="Release (Linux, x86_64)"></a>
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-linux.yml"><img src="https://img.shields.io/github/actions/workflow/status/tianhaoz95/family-agent/release-linux.yml?job=linux%20%28ubuntu-24.04-arm%2C%20arm64%29&label=Linux%20arm64" alt="Release (Linux, arm64)"></a>
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/tianhaoz95/family-agent/release-windows.yml?job=windows%20%28windows-latest%2C%20x64%29&label=Windows%20x86_64" alt="Release (Windows, x86_64)"></a>
+  <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/tianhaoz95/family-agent/release-windows.yml?job=windows%20%28windows-11-arm%2C%20arm64%29&label=Windows%20arm64" alt="Release (Windows, arm64)"></a>
   <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/release-ios.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/release-ios.yml/badge.svg?branch=main" alt="Release (iOS)"></a>
   <a href="https://github.com/tianhaoz95/family-agent/actions/workflows/pages.yml"><img src="https://github.com/tianhaoz95/family-agent/actions/workflows/pages.yml/badge.svg?branch=main" alt="Deploy site"></a>
 </p>
