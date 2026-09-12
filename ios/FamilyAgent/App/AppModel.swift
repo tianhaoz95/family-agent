@@ -187,6 +187,13 @@ final class AppModel {
     var mcpServers: [McpServer] = []
     var mcpStatus: String?
 
+    // ---- family member management (admin) ----
+    // Named distinctly from `familyMembers` above (the lightweight chat
+    // mention-picker directory, [FamilyMember]) — this is the full admin
+    // account list ([User], with role), used by FamilyView.
+    var familyAccounts: [User] = []
+    var familyAccountsStatus: String?
+
     // ---- vault ----
     var vaultStatusValue: VaultStatus?
     var vaultEntries: [VaultEntry] = []

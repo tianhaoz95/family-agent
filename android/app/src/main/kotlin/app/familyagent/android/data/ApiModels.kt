@@ -120,6 +120,18 @@ data class User(
     val role: String,
 )
 
+// ---- family member management (admin, /users — mirrors desktop's #view-family) ----
+@Serializable
+data class ListUsersResponse(val users: List<User>)
+@Serializable
+data class CreateUserRequest(val username: String, val displayName: String, val password: String, val role: String)
+@Serializable
+data class CreateUserResponse(val user: User)
+@Serializable
+data class UpdateUserRequest(val displayName: String? = null, val password: String? = null, val role: String? = null)
+@Serializable
+data class UpdateUserResponse(val user: User)
+
 @Serializable
 data class AuthStatusResponse(val needsSetup: Boolean, val serverName: String = "Family Agent")
 

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Lock
@@ -82,6 +83,7 @@ import app.familyagent.android.ui.DetailSheet
 import app.familyagent.android.ui.ConversationScreen
 import app.familyagent.android.ui.DiscoveryScreen
 import app.familyagent.android.ui.DocumentsScreen
+import app.familyagent.android.ui.FamilyScreen
 import app.familyagent.android.ui.LoginScreen
 import app.familyagent.android.ui.MessagesScreen
 import app.familyagent.android.ui.RoutinesScreen
@@ -106,6 +108,7 @@ private enum class Destination(val route: String, val label: String, val icon: a
     Routines("routines", "Routines", Icons.Rounded.Schedule),
     Skills("skills", "Skills", Icons.Rounded.School),
     Connections("connections", "Connections", Icons.Rounded.Hub),
+    Family("family", "Family", Icons.Rounded.Group),
     Vault("vault", "Vault", Icons.Rounded.Lock),
     Activity("activity", "Activity", Icons.Rounded.History),
     Settings("settings", "Settings", Icons.Rounded.Settings),
@@ -257,6 +260,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
             Destination.Routines -> viewModel.refreshRoutines()
             Destination.Skills -> viewModel.refreshSkills()
             Destination.Connections -> viewModel.refreshConnections()
+            Destination.Family -> viewModel.refreshFamilyAccounts()
             Destination.Vault -> viewModel.refreshVault()
             Destination.Activity -> viewModel.refreshActivity()
             else -> {}
@@ -293,6 +297,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                 skillsEnabled = state.skillsMode != "off",
                 connectionsEnabled = state.mcpMode != "off" &&
                     (state.auth as? AuthState.Authenticated)?.user?.role == "admin",
+                familyEnabled = (state.auth as? AuthState.Authenticated)?.user?.role == "admin",
                 vaultEnabled = state.vaultMode == "on",
                 artifactsEnabled = state.artifactsMode == "on",
                 onSelect = { dest ->
@@ -534,6 +539,17 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onDelete = viewModel::deleteMcpServer,
                     )
                 }
+                composable(Destination.Family.route) {
+                    FamilyScreen(
+                        accounts = state.familyAccounts,
+                        status = state.familyAccountsStatus,
+                        selfId = (state.auth as? AuthState.Authenticated)?.user?.id,
+                        onRefresh = viewModel::refreshFamilyAccounts,
+                        onAdd = viewModel::addFamilyMember,
+                        onResetPassword = viewModel::resetFamilyMemberPassword,
+                        onRemove = viewModel::removeFamilyMember,
+                    )
+                }
                 composable(Destination.Vault.route) {
                     VaultScreen(
                         enabled = state.vaultMode == "on",
@@ -644,6 +660,7 @@ private fun AppDrawer(
     routinesEnabled: Boolean,
     skillsEnabled: Boolean,
     connectionsEnabled: Boolean,
+    familyEnabled: Boolean,
     vaultEnabled: Boolean,
     artifactsEnabled: Boolean,
     onSelect: (Destination) -> Unit,
@@ -680,6 +697,7 @@ private fun AppDrawer(
                 if (dest == Destination.Routines && !routinesEnabled) return@forEach
                 if (dest == Destination.Skills && !skillsEnabled) return@forEach
                 if (dest == Destination.Connections && !connectionsEnabled) return@forEach
+                if (dest == Destination.Family && !familyEnabled) return@forEach
                 if (dest == Destination.Vault && !vaultEnabled) return@forEach
                 val selected = current?.hierarchy?.any { it.route == dest.route } == true
                 NavigationDrawerItem(

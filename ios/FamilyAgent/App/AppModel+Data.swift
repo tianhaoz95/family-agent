@@ -244,6 +244,36 @@ extension AppModel {
         await perform { try await api.draftSkill(name, description: description) }
     }
 
+    // MARK: Family member management (admin — mirrors desktop's #view-family)
+
+    func refreshFamilyAccounts() async {
+        if let u = await perform({ try await api.listUsers() }) { familyAccounts = u }
+    }
+    func addFamilyMember(username: String, displayName: String, password: String, role: String) {
+        Task {
+            familyAccountsStatus = "Creating…"
+            if let user = await perform({ try await api.createUser(username: username, displayName: displayName, password: password, role: role) }) {
+                familyAccountsStatus = "Added \(user.displayName)."
+                await refreshFamilyAccounts()
+            }
+        }
+    }
+    func resetFamilyMemberPassword(_ id: String, displayName: String, password: String) {
+        Task {
+            if await perform({ try await api.updateUser(id, password: password) }) != nil {
+                familyAccountsStatus = "Reset \(displayName)'s password."
+            }
+        }
+    }
+    func removeFamilyMember(_ id: String, displayName: String) {
+        Task {
+            if await perform({ try await api.deleteUser(id) }) != nil {
+                familyAccountsStatus = "Removed \(displayName)."
+                await refreshFamilyAccounts()
+            }
+        }
+    }
+
     // MARK: Connections (MCP)
 
     func refreshConnections() async {

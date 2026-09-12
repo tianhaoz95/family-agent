@@ -300,6 +300,17 @@ struct FamilyAgentAPI: Sendable {
         try await send("POST", "/routines/\(id)/run")
     }
 
+    // MARK: - Family member management (admin, /users — mirrors desktop's #view-family)
+
+    func listUsers() async throws -> [User] { try await get("/users", as: ListUsersResponse.self).users }
+    func createUser(username: String, displayName: String, password: String, role: String) async throws -> User {
+        try await send("POST", "/users", body: CreateUserRequest(username: username, displayName: displayName, password: password, role: role), as: CreateUserResponse.self).user
+    }
+    func updateUser(_ id: String, displayName: String? = nil, password: String? = nil, role: String? = nil) async throws -> User {
+        try await send("PATCH", "/users/\(id.pathEscaped)", body: UpdateUserRequest(displayName: displayName, password: password, role: role), as: UpdateUserResponse.self).user
+    }
+    func deleteUser(_ id: String) async throws { try await sendVoid("DELETE", "/users/\(id.pathEscaped)") }
+
     // MARK: - Skills
 
     func listSkills() async throws -> SkillsResponse { try await get("/skills") }

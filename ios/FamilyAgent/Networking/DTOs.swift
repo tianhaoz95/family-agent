@@ -191,6 +191,25 @@ struct PairRedeemRequest: Codable, Sendable {
 
 struct MeResponse: Codable, Sendable { let user: User }
 
+// MARK: - Family member management (admin, /users — mirrors desktop's #view-family)
+
+struct ListUsersResponse: Codable, Sendable { let users: [User] }
+struct CreateUserRequest: Codable, Sendable {
+    let username: String
+    let displayName: String
+    let password: String
+    let role: String
+}
+struct CreateUserResponse: Codable, Sendable { let user: User }
+/// All fields optional — JSONEncoder omits a nil Optional automatically, so
+/// only the fields actually being changed are sent.
+struct UpdateUserRequest: Codable, Sendable {
+    var displayName: String? = nil
+    var password: String? = nil
+    var role: String? = nil
+}
+struct UpdateUserResponse: Codable, Sendable { let user: User }
+
 struct BootstrapRequest: Codable, Sendable {
     var serverName: String?
     let username: String

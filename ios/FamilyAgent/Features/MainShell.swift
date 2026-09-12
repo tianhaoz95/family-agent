@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum Destination: String, CaseIterable, Identifiable, Hashable {
-    case chat, messages, events, board, documents, tools, artifacts, routines, skills, connections, vault, activity, settings
+    case chat, messages, events, board, documents, tools, artifacts, routines, skills, connections, vault, family, activity, settings
     var id: String { rawValue }
 
     var label: String {
@@ -10,7 +10,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .board: "Board"; case .documents: "Documents"; case .tools: "Tools"
         case .artifacts: "Artifacts"
         case .routines: "Routines"; case .skills: "Skills"; case .connections: "Connections"
-        case .vault: "Vault"; case .activity: "Activity"; case .settings: "Settings"
+        case .vault: "Vault"; case .family: "Family"; case .activity: "Activity"; case .settings: "Settings"
         }
     }
     var systemImage: String {
@@ -26,6 +26,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .skills: "graduationcap"
         case .connections: "point.3.connected.trianglepath.dotted"
         case .vault: "lock"
+        case .family: "person.2"
         case .activity: "clock"
         case .settings: "gearshape"
         }
@@ -63,6 +64,7 @@ struct MainShell: View {
             case .skills: return model.skillsMode != "off"
             case .connections: return model.mcpMode != "off" && model.isAdmin
             case .vault: return model.vaultMode == "on"
+            case .family: return model.isAdmin
             default: return true
             }
         }
@@ -221,6 +223,7 @@ struct MainShell: View {
         case .skills:      SkillsView()
         case .connections: ConnectionsView()
         case .vault:       VaultView()
+        case .family:      FamilyView()
         case .activity:    ActivityView()
         case .settings:    SettingsView()
         }

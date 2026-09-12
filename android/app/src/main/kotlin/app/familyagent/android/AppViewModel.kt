@@ -172,6 +172,12 @@ data class AppUiState(
     val mcpMode: String = "off",
     val mcpServers: List<McpServer> = emptyList(),
     val mcpStatus: String? = null,
+    // ---- family member management (admin) ----
+    // Named distinctly from `familyMembers` above (the lightweight chat
+    // mention-picker directory) — this is the full admin account list
+    // (with role), used by FamilyScreen. Mirrors desktop's #view-family.
+    val familyAccounts: List<User> = emptyList(),
+    val familyAccountsStatus: String? = null,
     // ---- generated HTML cards ----
     /** /health.cards: "on" when the assistant may attach generated cards. */
     val cardsMode: String = "off",
@@ -1490,6 +1496,44 @@ class AppViewModel(
             apiCall { api.probeMcpServer(name) }
                 .onSuccess { onResult(if (it.ok) "${it.toolCount ?: 0} tool(s) available" else "Failed: ${it.error ?: "unknown"}") }
                 .onFailure { onResult(it.message ?: "Test failed.") }
+        }
+    }
+
+    // ---- family member management (admin) ----
+    // Mirrors desktop's #view-family: list/add/reset-password/remove accounts
+    // on this home server. Admin-only (server enforces via requireAdmin; the
+    // Family drawer destination is also gated on isAdmin, see MainShell-equivalent).
+
+    fun refreshFamilyAccounts() {
+        viewModelScope.launch {
+            apiCall { api.listUsers() }
+                .onSuccess { _state.value = _state.value.copy(familyAccounts = it, familyAccountsStatus = null) }
+                .onFailure { _state.value = _state.value.copy(familyAccountsStatus = it.message) }
+        }
+    }
+
+    fun addFamilyMember(username: String, displayName: String, password: String, role: String) {
+        viewModelScope.launch {
+            apiCall { api.createUser(username, displayName, password, role) }
+                .onSuccess { refreshFamilyAccounts() }
+                .onFailure { _state.value = _state.value.copy(familyAccountsStatus = it.message ?: "Could not add that family member.") }
+        }
+    }
+
+    fun resetFamilyMemberPassword(id: String, password: String) {
+        viewModelScope.launch {
+            apiCall { api.updateUser(id, password = password) }
+                .onSuccess { refreshFamilyAccounts() }
+                .onFailure { _state.value = _state.value.copy(familyAccountsStatus = it.message ?: "Could not reset that password.") }
+        }
+    }
+
+    fun removeFamilyMember(id: String) {
+        _state.value = _state.value.copy(familyAccounts = _state.value.familyAccounts.filterNot { it.id == id })
+        viewModelScope.launch {
+            apiCall { api.deleteUser(id) }
+                .onSuccess { refreshFamilyAccounts() }
+                .onFailure { _state.value = _state.value.copy(familyAccountsStatus = it.message ?: "Could not remove that family member."); refreshFamilyAccounts() }
         }
     }
 

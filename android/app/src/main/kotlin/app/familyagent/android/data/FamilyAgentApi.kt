@@ -393,6 +393,24 @@ class FamilyAgentApi(
         json.decodeFromString(sendNoBody("POST", "/routines/$id/run"))
 
     // ---- skills ----
+    // ---- family member management (admin, mirrors desktop's #view-family) ----
+
+    suspend fun listUsers(): List<User> = json.decodeFromString<ListUsersResponse>(get("/users")).users
+
+    suspend fun createUser(username: String, displayName: String, password: String, role: String): User =
+        json.decodeFromString<CreateUserResponse>(
+            send("POST", "/users", json.encodeToString(CreateUserRequest(username, displayName, password, role)))
+        ).user
+
+    suspend fun updateUser(id: String, displayName: String? = null, password: String? = null, role: String? = null): User =
+        json.decodeFromString<UpdateUserResponse>(
+            send("PATCH", "/users/${id.encodeQuery()}", json.encodeToString(UpdateUserRequest(displayName, password, role)))
+        ).user
+
+    suspend fun deleteUser(id: String) {
+        sendNoBody("DELETE", "/users/${id.encodeQuery()}")
+    }
+
     suspend fun listSkills(): SkillsResponse = json.decodeFromString(get("/skills"))
 
     suspend fun getSkill(name: String): Skill =
