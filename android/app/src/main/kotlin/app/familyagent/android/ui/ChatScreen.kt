@@ -190,30 +190,28 @@ fun ChatScreen(
                 },
             )
         } else {
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(vertical = 4.dp),
-                ) {
-                    items(messages) { msg ->
-                        ChatBubble(msg, onReferenceClick, ttsEnabled, speakingText, speakLoadingText, onSpeak, onStepsClick, onViewCardSource)
-                    }
-                    if (sending) {
-                        item {
-                            Column(horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                StepsStrip(liveSteps, live = true) { onStepsClick(liveSteps) }
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                                    TypingDots()
-                                }
+            // The screen's own title bar (ScreenScaffold) is what dissolves
+            // scrolled content into blur/occlusion now — no separate fade
+            // needed here at the top of the message list itself.
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(vertical = 4.dp),
+            ) {
+                items(messages) { msg ->
+                    ChatBubble(msg, onReferenceClick, ttsEnabled, speakingText, speakLoadingText, onSpeak, onStepsClick, onViewCardSource)
+                }
+                if (sending) {
+                    item {
+                        Column(horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            StepsStrip(liveSteps, live = true) { onStepsClick(liveSteps) }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                                TypingDots()
                             }
                         }
                     }
                 }
-                // Content dissolves into the header as it scrolls up
-                // underneath — Claude-app style.
-                TopScrollFade(Modifier.align(Alignment.TopCenter))
             }
         }
 

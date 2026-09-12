@@ -39,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -52,33 +51,31 @@ import app.familyagent.android.ui.theme.SourceSerif
 import kotlinx.coroutines.delay
 
 /**
- * A soft fade strip pinned to the top of a scrolling transcript — content
- * dissolves into the header as it scrolls up underneath, the same idea as
- * the Claude app's chat view (the iOS counterpart, `TopScrollFade` in
- * DesignSystem/Components.swift, gets a real `.ultraThinMaterial` blur under
- * the gradient; Compose has no cheap backdrop blur across this app's
- * minSdk 26, so this is the gradient-only half of that effect). Place inside
- * a `Box` as the last child, aligned `TopCenter`, above the scrolling list.
+ * Height reserved for [ScreenScaffold]'s floating title bar, so scrolling
+ * content below it can start right at its bottom edge at rest. Mirrors the
+ * iOS counterpart's `headerHeight` (`ios/.../Components.swift`) exactly —
+ * same title style and paddings on both platforms.
  */
-@Composable
-fun TopScrollFade(modifier: Modifier = Modifier, height: androidx.compose.ui.unit.Dp = 22.dp) {
-    val base = MaterialTheme.colorScheme.background
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(height)
-            .background(
-                Brush.verticalGradient(
-                    listOf(base.copy(alpha = 0.85f), base.copy(alpha = 0.35f), Color.Transparent)
-                )
-            )
-    )
-}
+val SCREEN_SCAFFOLD_HEADER_HEIGHT = 58.dp
+private val SCREEN_SCAFFOLD_HEADER_HEIGHT_NO_MENU = 104.dp
 
 /**
  * Standard screen frame: safe-area padding, a title and an editorial serif
  * subtitle, then section content with generous spacing. Transparent — the
  * animated gradient canvas (AtmosphereBackground) shows through.
+ *
+ * The title bar **floats in front of** the content (a `Box` overlay, not a
+ * row above it in a `Column`) with a background, so content dissolves
+ * *behind* it as it scrolls up underneath — the same idea as a real nav bar
+ * (and the iOS counterpart's `.ultraThinMaterial` bar). Content gets top
+ * padding equal to the bar's height so it starts right below it at rest. An
+ * earlier version instead drew a separate translucent fade strip
+ * (`TopScrollFade`) pinned to the top of the whole screen, floating apart
+ * from the actual title row rather than merged into it — this replaces
+ * that. No true blur-through here (Compose has no cheap backdrop blur
+ * across this app's minSdk 26, same constraint that shaped the old
+ * gradient-only `TopScrollFade`); the bar's background is opaque enough
+ * that content is occluded, not blurred, behind it.
  *
  * The title sits on the **same row** as MainActivity's floating menu button
  * (a 66dp leading inset — 20dp base + 46dp clearance — instead of a full
@@ -101,37 +98,32 @@ fun ScreenScaffold(
     hasMenuButton: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val headerHeight = if (hasMenuButton) SCREEN_SCAFFOLD_HEADER_HEIGHT else SCREEN_SCAFFOLD_HEADER_HEIGHT_NO_MENU
     Box(Modifier.fillMaxSize()) {
-        Column(modifier.fillMaxSize()) {
+        Column(
+            modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp)
+                .padding(top = headerHeight, bottom = 8.dp),
+        ) {
             Text(
-                title,
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier
-                    .padding(start = if (hasMenuButton) 66.dp else 20.dp, end = 20.dp)
-                    .padding(top = if (hasMenuButton) 12.dp else 58.dp, bottom = 6.dp),
+                subtitle,
+                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = SourceSerif),
+                color = AppAccents.textBody,
             )
-            Column(
-                Modifier
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 8.dp),
-            ) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = SourceSerif),
-                    color = AppAccents.textBody,
-                )
-                Spacer(Modifier.height(22.dp))
-                content()
-            }
+            Spacer(Modifier.height(22.dp))
+            content()
         }
-        // Content dissolves into the header as it scrolls up underneath —
-        // the same trick Chat/Messages introduced, standardized here so
-        // every screen gets it. Sits outside the scrolling Column above (a
-        // fixed sibling in this Box), whether that scrolling comes from a
-        // `verticalScroll` modifier the caller passed in or an inner
-        // LazyColumn in `content()`.
-        TopScrollFade(Modifier.align(Alignment.TopCenter))
+        Text(
+            title,
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.background.copy(alpha = 0.94f))
+                .padding(start = if (hasMenuButton) 66.dp else 20.dp, end = 20.dp)
+                .padding(top = if (hasMenuButton) 12.dp else 58.dp, bottom = 6.dp),
+        )
     }
 }
 

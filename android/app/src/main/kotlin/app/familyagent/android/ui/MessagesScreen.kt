@@ -292,7 +292,12 @@ fun ConversationScreen(
             .padding(horizontal = 16.dp)
             .padding(top = 8.dp, bottom = 8.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.background.copy(alpha = 0.94f)),
+        ) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
             }
@@ -326,23 +331,20 @@ fun ConversationScreen(
             )
         }
 
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 10.dp),
-            ) {
-                items(messages, key = { it.id }) { m ->
-                    MessageBubble(
-                        m, own = m.senderId == currentUserId, channel,
-                        ttsEnabled, speakingText, speakLoadingText, onSpeak, onStepsClick, onViewCardSource,
-                    )
-                }
+        // The header row above now carries its own background — no separate
+        // fade strip needed at the top of the message list itself.
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 10.dp),
+        ) {
+            items(messages, key = { it.id }) { m ->
+                MessageBubble(
+                    m, own = m.senderId == currentUserId, channel,
+                    ttsEnabled, speakingText, speakLoadingText, onSpeak, onStepsClick, onViewCardSource,
+                )
             }
-            // Content dissolves into the header as it scrolls up underneath —
-            // Claude-app style.
-            TopScrollFade(Modifier.align(Alignment.TopCenter))
         }
 
         if (attached.isNotEmpty()) {
