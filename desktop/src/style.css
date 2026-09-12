@@ -3309,8 +3309,6 @@ input[type="file"]::file-selector-button:hover {
   justify-content: space-between;
   gap: 12px;
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 4px;
 }
 .conversation-head-main {
   min-width: 0;

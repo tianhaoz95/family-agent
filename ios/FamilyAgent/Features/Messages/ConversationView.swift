@@ -26,8 +26,8 @@ struct ConversationView: View {
             // not a row above it) with a translucent background, so messages
             // dissolve into blur as they scroll up underneath it — real bar
             // chrome the content passes behind, not a fade drawn inside the
-            // scrollport. The bottom hairline from .topBarMaterial() replaces
-            // the old plain Divider().
+            // scrollport. No divider/hairline below it — the material
+            // background is enough separation on its own.
             ZStack(alignment: .top) {
                 ScrollViewReader { proxy in
                     ScrollView {

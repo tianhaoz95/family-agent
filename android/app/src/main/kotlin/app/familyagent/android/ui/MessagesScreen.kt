@@ -312,7 +312,6 @@ fun ConversationScreen(
                 Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete conversation")
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
         if (confirmDelete) {
             AlertDialog(
