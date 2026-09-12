@@ -1,0 +1,31 @@
+[package]
+name = "mistralrs-node"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Embeds mistral.rs as a Rust library directly into this native Node addon —
+# deliberately NOT shelling out to the `mistralrs-server`/`mistralrs serve`
+# CLI as a child process. agent-core loads this addon in-process (same shape
+# as onnxruntime-node for ASR/TTS) and calls straight into mistral.rs's own
+# Rust API (GgufModelBuilder / ModelBuilder / RequestBuilder — see
+# src/lib.rs), so there's no extra HTTP hop, no sidecar process to supervise,
+# and no separate binary to install or download.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", default-features = false, features = ["napi4", "tokio_rt", "async"] }
+napi-derive = "2"
+mistralrs = { version = "0.8", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = false
+opt-level = 2

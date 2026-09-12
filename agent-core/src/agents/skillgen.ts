@@ -1,5 +1,5 @@
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import type { ChatOllama } from "@langchain/ollama";
+import type { LocalChatModel } from "../model.js";
 
 // Draft a SKILL.md from a plain-language description. Like agents/rename.ts and
 // agents/extraction.ts this bypasses the deepagents planner — one mechanical
@@ -26,7 +26,7 @@ Keep it under ~250 words. Be concrete and imperative. Refer to the assistant's o
 
 /** Returns the markdown body (no front-matter). Null on failure. */
 export async function generateSkillMarkdown(
-  model: ChatOllama,
+  model: LocalChatModel,
   input: { name: string; description: string }
 ): Promise<string | null> {
   for (let attempt = 1; attempt <= 2; attempt++) {

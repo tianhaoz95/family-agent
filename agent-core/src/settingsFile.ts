@@ -38,11 +38,31 @@ export interface PersistedSettings {
   webSearchUrl?: string;
   /** API key for the tavily / brave providers. Stored as-is; redacted on API responses. */
   webSearchApiKey?: string;
+  /**
+   * Which backend answers the chat/planner model: "ollama" | "openai" |
+   * "mistralrs". Additive, not exclusive — OCR/embeddings keep their own
+   * Ollama-only settings above regardless of this. See config.ts.
+   */
+  modelProvider?: string;
+  /** Base URL of a generic OpenAI-API-compatible server (modelProvider === "openai"). */
+  openaiBaseUrl?: string;
+  /** API key for that server. Stored as-is; redacted on API responses. */
+  openaiApiKey?: string;
+  /** Model name to request from that server. */
+  openaiModel?: string;
+  /** HF repo id or local path for the embedded mistral.rs model. */
+  mistralrsModelId?: string;
+  /** GGUF filename within that repo; empty = full-precision + in-situ quant. */
+  mistralrsGgufFile?: string;
+  /** In-situ quantization width in bits (as a string, e.g. "4"), non-GGUF path only. */
+  mistralrsIsqBits?: string;
 }
 
 const STRING_KEYS: (keyof PersistedSettings)[] = [
   "ocrModel", "asrModel", "ttsVoice", "embedModel", "model", "ollamaBaseUrl", "serverName",
   "webSearchProvider", "webSearchUrl", "webSearchApiKey",
+  "modelProvider", "openaiBaseUrl", "openaiApiKey", "openaiModel",
+  "mistralrsModelId", "mistralrsGgufFile", "mistralrsIsqBits",
 ];
 const BOOL_KEYS: (keyof PersistedSettings)[] = ["cardsEnabled", "vaultEnabled", "autoUpdateEnabled"];
 

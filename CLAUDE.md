@@ -289,6 +289,11 @@ re-mints the token when Settings opens and every ~3.5 min it stays open. Tests:
   rebuilds the agent + extraction model clients in `server.ts` and, via the `onModelChange`
   callback, restarts the inbox watcher with a fresh client — a langchain `ChatOllama` binds its
   URL and model at construction, so hot-patching isn't possible.
+- `model.ts` — `createLocalModel()` is the **one** choke point every chat/planner model
+  consumer (the planner, every subagent, extraction/rename/skillgen/tool-builder/artifact-resolve)
+  calls through, so a provider switch fans out everywhere without touching those call sites —
+  they're all typed `LocalChatModel` (`ChatOllama | ChatOpenAI | ChatMistralRs`), not a concrete
+  class. See "Chat model providers" below.
 - `agents/index.ts` — the deepagents planner (`buildFamilyAgent`) plus its subagents
   `task-agent`, `document-agent`, `builder-agent`, `notes-agent`, `tools-agent`, `routine-agent`,
   and the `askFamilyAgent` / `askFamilyAgentInChannel` / `mentionsAgent` helpers. Notable
@@ -1051,6 +1056,112 @@ tool list, so there's nothing stale to invalidate.
   Android `Destination.Vault` / `VaultScreen.kt`. Tests: `test/vault.test.ts`,
   `test/vault.routes.test.ts`. See `docs/DECISIONS.md` → "Password vault".
 
+## Chat model providers (model.ts, mistralrs/*)
+
+`config.modelProvider` (`"ollama"` | `"openai"` | `"mistralrs"`, admin-only,
+`PUT /settings`, env `FAMILY_AGENT_MODEL_PROVIDER` to pin/lock it) picks which
+backend answers the **chat/planner** model — `createLocalModel()` in
+`model.ts` is the only place that decision is made; every consumer (the
+planner, every subagent, `agents/extraction.ts` / `rename.ts` / `skillgen.ts`
+/ `tools/builder.ts` / `artifacts/resolve.ts`) is typed against the
+`LocalChatModel` union (`ChatOllama | ChatOpenAI | ChatMistralRs`), not a
+concrete class, so a provider switch needs no changes anywhere else.
+
+**ADDITIVE, not a replacement.** This only ever governs the chat/planner
+model. OCR (`config.ocrModel`) and semantic search (`config.embedModel`) keep
+their own, independent Ollama-only settings regardless of what's picked here
+— "mistral.rs for chat, Ollama for embeddings" is just two separate client
+constructions that were always independent, not a special mode.
+
+- **`ollama`** (default) — unchanged: `ChatOllama` against `config.ollamaBaseUrl`/`config.model`.
+- **`openai`** — any OpenAI-API-compatible HTTP endpoint: a hosted API, a
+  self-hosted vLLM/LM Studio/llama.cpp server, or even Ollama's own `/v1`
+  compat route. `config.openaiBaseUrl` / `openaiApiKey` (redacted on API
+  responses, same as `webSearchApiKey`) / `openaiModel`, one env-lock group
+  (`FAMILY_AGENT_OPENAI_BASE_URL`/`_API_KEY`/`_MODEL`) like `webSearchProvider`.
+- **`mistralrs`** — [mistral.rs](https://github.com/EricLBuehler/mistral.rs)
+  embedded as a **Rust library, in-process** — deliberately NOT a spawned
+  `mistralrs-server`/`mistralrs serve` CLI/child-process. The point is
+  removing Ollama as a separate install-and-run step for a user who wants
+  the simplest possible setup; running it as a subprocess agent-core has to
+  supervise would have brought most of that complexity back.
+  - `native/mistralrs-node/` — a small Rust crate (`napi`/`napi-derive`,
+    cdylib) linking the `mistralrs` crate directly and exposing
+    `loadModel`/`isLoaded`/`unloadModel`/`chatCompletion` to Node via N-API
+    (`src/lib.rs`). Tool specs and tool-call arguments cross the boundary as
+    JSON-encoded strings rather than mapping `serde_json::Value`, to keep
+    the addon's surface small. Built with `scripts/build-mistralrs-node.sh`
+    (plain `cargo build --release`, no cross-compilation — one run per OS/CI
+    runner) into `native/mistralrs-node/prebuilds/<platform>-<arch>/
+    mistralrs-node.node` (gitignored, node-gyp-build's own directory
+    convention, hand-rolled here to avoid the extra dependency).
+  - `mistralrs/nativeAddon.ts` loads that addon lazily via `require()` and
+    **never throws** — a platform it hasn't been built for just reports
+    itself unavailable (`/health.mistralrs.status: "unavailable"`), same
+    graceful-degradation shape as onnxruntime-node for ASR/TTS elsewhere in
+    this codebase.
+  - `mistralrs/manager.ts` — process-wide load/status singleton (`"idle" |
+    "loading" | "ready" | "error"`, one per process like `ToolSupervisor` /
+    `McpManager` / `RoutineScheduler`). Loading means downloading + reading
+    multi-GB weights into *this* process's memory, so it's tracked as
+    explicit async status rather than blocking a request — `ensureMistralRsLoaded()`
+    is idempotent per model config, started at server boot (when this
+    provider is active) and again on a `PUT /settings` change to the model
+    id/GGUF file/ISQ bits. `GET /health` and `GET /settings` both surface it
+    (`mistralrs: { status, modelId?, error? }`).
+  - `mistralrs/chatModel.ts` — `ChatMistralRs extends BaseChatModel`, the
+    LangChain-side adapter (mirrors `@langchain/ollama`'s `ChatOllama`
+    contract closely enough to be a drop-in `LocalChatModel`): `bindTools()`
+    converts LangChain tools via `convertToOpenAITool` into the addon's
+    `{name, description, parametersJson}` shape and stores them via
+    `withConfig`; `_generate()` maps `BaseMessage[]` (including a `ToolMessage`'s
+    `tool_call_id` and an `AIMessage`'s own prior `tool_calls`) to the addon's
+    wire shape, calls `chatCompletion()`, and reconstructs an `AIMessage`
+    with real `tool_calls` (parsed from the addon's per-call
+    `argumentsJson`). When the model made tool calls, mistral.rs's own
+    `content` field still carries the model's raw tool-call markup (e.g.
+    Qwen's `<tool_call>...</tool_call>` text) redundantly alongside the
+    already-parsed `tool_calls` — confirmed against a real model — so it's
+    dropped (empty `content`) rather than shown twice.
+  - **Known, worked-around bug**: mistral.rs's automatic device-mapper
+    probes available device memory to decide how to split model layers
+    across devices, and that probe read **0 available bytes** on a real Mac
+    during development (confirmed not a sandboxing artifact — plain
+    `sysctl`/`vm_stat`/Node's `os.freemem()` all read normal values in the
+    same process), which made it refuse to load any model at all regardless
+    of actual free RAM. Worked around with a manual "dummy" device map
+    (`DeviceMapSetting::dummy()`, single device, no capacity math) on the
+    GGUF load path in `lib.rs` — this app targets a home laptop, not a
+    multi-GPU rig, so skipping the cross-device-splitting heuristic entirely
+    is a reasonable default outright, not just a workaround. Runs on CPU as
+    a result; Metal/CUDA acceleration (the crate has `metal`/`cuda`/
+    `accelerate` Cargo features) is a follow-up.
+  - Default model (`config.mistralrsModelId`/`mistralrsGgufFile`):
+    `unsloth/Qwen3-0.6B-GGUF` / `Qwen3-0.6B-Q4_K_M.gguf` — small on purpose
+    (same reasoning as Ollama's `gemma4:e2b` default) and real
+    end-to-end-verified (load, plain chat, and a bound-tool call all
+    confirmed against the actual compiled addon) rather than assumed, so
+    switching the provider with no further configuration works out of the
+    box. `mistralrsIsqBits` only applies to the non-GGUF path (a plain HF
+    repo, in-situ-quantized on load) — slower to load, no dependence on a
+    repo publishing a matching GGUF file, and not covered by the device-map
+    workaround above.
+  - Desktop Settings → "Model provider": a picker plus per-provider
+    conditional fields, same shape as "Internet access"'s provider picker.
+    iOS/Android have no model-provider UI yet (same as `model`/`ollamaBaseUrl`
+    already being desktop-only) — agent-core's behavior is provider-agnostic
+    either way, so phones work against whichever provider is active without
+    any client change.
+  - Tests: `test/modelProvider.settings.test.ts` (routes/validation/
+    envLocked, provider-agnostic). `test/mistralrs.test.ts` runs real
+    end-to-end assertions (load, plain chat, a bound-tool call, status
+    reporting) against the actual native addon and **skips itself
+    automatically** when the addon hasn't been built for the current
+    platform (`loadNativeAddon() === null`) — same self-skip shape as
+    `agents.integration.test.ts`'s live-Ollama tests, so the fast suite
+    still passes on a machine/CI runner that hasn't run
+    `scripts/build-mistralrs-node.sh`.
+
 ## Desktop update: manual, fully-automatic, or remote-triggered
 
 The desktop app auto-updates itself (`tauri-plugin-updater`, minisign-signed,
@@ -1151,6 +1262,8 @@ version goes to `<toolDir>/prev/` for a one-step `revertTool`. `data/tool.db` is
 by an improve; schema changes must be additive. `tools` table carries `revision_count` /
 `revision_state` / `updated_at`. See `docs/DECISIONS.md` → "Improvable tools".
 
-Still not implemented from the brainstormed architecture: the compute mesh, Tailscale
-transport, and the bundled managed-model runtime. Full reasoning for every scope cut is in
-`docs/DECISIONS.md`.
+Still not implemented from the brainstormed architecture: the compute mesh and Tailscale
+transport. The bundled managed-model runtime landed as the `mistralrs` chat model provider
+(mistral.rs embedded as a Rust library — see "Chat model providers" above) — CPU-only so far,
+Metal/CUDA acceleration and a curated model picker (today it's any HF repo/GGUF file the admin
+types in) are still open. Full reasoning for every other scope cut is in `docs/DECISIONS.md`.

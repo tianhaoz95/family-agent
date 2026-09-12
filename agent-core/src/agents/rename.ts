@@ -1,5 +1,5 @@
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import type { ChatOllama } from "@langchain/ollama";
+import type { LocalChatModel } from "../model.js";
 
 // Suggest a human-friendly filename for a document from its content. Like
 // agents/extraction.ts this deliberately bypasses the deepagents planner: it is
@@ -43,7 +43,7 @@ export interface RenameSuggestion {
  * usable after one retry — the caller should then just leave the name alone.
  */
 export async function suggestDocumentName(
-  model: ChatOllama,
+  model: LocalChatModel,
   doc: { filename: string; rawText: string; extracted?: Record<string, unknown> | null }
 ): Promise<RenameSuggestion | null> {
   const ext = extensionOf(doc.filename);

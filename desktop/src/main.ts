@@ -3939,6 +3939,19 @@ const settingsAutoUpdateRow = document.getElementById("settings-auto-update-row"
 const settingsAutoUpdateHintEl = document.getElementById("settings-auto-update-hint")!;
 const settingsAutoUpdateCheckbox = document.getElementById("settings-auto-update-checkbox") as HTMLInputElement;
 const settingsAutoUpdateStatusEl = document.getElementById("settings-auto-update-status")!;
+const settingsProviderForm = document.getElementById("settings-provider-form") as HTMLFormElement;
+const settingsProviderSelect = document.getElementById("settings-provider-select") as HTMLSelectElement;
+const settingsProviderOpenaiUrlRow = document.getElementById("settings-provider-openai-url-row") as HTMLElement;
+const settingsProviderOpenaiUrlInput = document.getElementById("settings-provider-openai-url") as HTMLInputElement;
+const settingsProviderOpenaiModelRow = document.getElementById("settings-provider-openai-model-row") as HTMLElement;
+const settingsProviderOpenaiModelInput = document.getElementById("settings-provider-openai-model") as HTMLInputElement;
+const settingsProviderOpenaiKeyRow = document.getElementById("settings-provider-openai-key-row") as HTMLElement;
+const settingsProviderOpenaiKeyInput = document.getElementById("settings-provider-openai-key") as HTMLInputElement;
+const settingsProviderMistralrsRows = document.getElementById("settings-provider-mistralrs-rows") as HTMLElement;
+const settingsProviderMistralrsModelInput = document.getElementById("settings-provider-mistralrs-model") as HTMLInputElement;
+const settingsProviderMistralrsGgufInput = document.getElementById("settings-provider-mistralrs-gguf") as HTMLInputElement;
+const settingsProviderMistralrsIsqInput = document.getElementById("settings-provider-mistralrs-isq") as HTMLInputElement;
+const settingsProviderStatusEl = document.getElementById("settings-provider-status")!;
 const settingsWebForm = document.getElementById("settings-web-form") as HTMLFormElement;
 const settingsWebProviderSelect = document.getElementById("settings-web-provider") as HTMLSelectElement;
 const settingsWebUrlRow = document.getElementById("settings-web-url-row") as HTMLElement;
@@ -4249,6 +4262,57 @@ async function refreshSettings() {
         : settings.webEnabled
           ? `On — searching with ${settings.webSearchProvider}.`
           : "Off — the assistant has no internet access.";
+
+    // Model provider — additive picker + conditional per-provider fields.
+    if (document.activeElement !== settingsProviderSelect) {
+      settingsProviderSelect.value = settings.modelProvider;
+    }
+    if (document.activeElement !== settingsProviderOpenaiUrlInput) {
+      settingsProviderOpenaiUrlInput.value = settings.openaiBaseUrl;
+    }
+    if (document.activeElement !== settingsProviderOpenaiModelInput) {
+      settingsProviderOpenaiModelInput.value = settings.openaiModel;
+    }
+    if (document.activeElement !== settingsProviderOpenaiKeyInput) {
+      settingsProviderOpenaiKeyInput.value = "";
+      settingsProviderOpenaiKeyInput.placeholder = settings.openaiApiKeySet
+        ? "A key is saved — type a new one to replace it"
+        : "Paste the server's API key (often unused)";
+    }
+    if (document.activeElement !== settingsProviderMistralrsModelInput) {
+      settingsProviderMistralrsModelInput.value = settings.mistralrsModelId;
+    }
+    if (document.activeElement !== settingsProviderMistralrsGgufInput) {
+      settingsProviderMistralrsGgufInput.value = settings.mistralrsGgufFile;
+    }
+    if (document.activeElement !== settingsProviderMistralrsIsqInput) {
+      settingsProviderMistralrsIsqInput.value = String(settings.mistralrsIsqBits);
+    }
+    syncProviderRows();
+    const providerLock =
+      settings.envLocked.modelProvider ||
+      (settings.modelProvider === "openai" && settings.envLocked.openaiProvider) ||
+      (settings.modelProvider === "mistralrs" && settings.envLocked.mistralrsProvider) ||
+      !settings.isAdmin;
+    for (const el of [
+      settingsProviderSelect,
+      settingsProviderOpenaiUrlInput,
+      settingsProviderOpenaiModelInput,
+      settingsProviderOpenaiKeyInput,
+      settingsProviderMistralrsModelInput,
+      settingsProviderMistralrsGgufInput,
+      settingsProviderMistralrsIsqInput,
+    ]) el.disabled = providerLock;
+    for (const btn of settingsProviderForm.querySelectorAll("button")) (btn as HTMLButtonElement).disabled = providerLock;
+    settingsProviderStatusEl.textContent = settings.envLocked.modelProvider
+      ? "Pinned by FAMILY_AGENT_MODEL_PROVIDER on the server."
+      : !settings.isAdmin
+        ? "Only an admin can change this."
+        : settings.modelProvider === "mistralrs"
+          ? `Embedded mistral.rs — ${settings.mistralrsStatus?.status ?? "idle"}${settings.mistralrsStatus?.error ? `: ${settings.mistralrsStatus.error}` : ""}`
+          : settings.modelProvider === "openai"
+            ? `OpenAI-compatible server at ${settings.openaiBaseUrl || "(no URL set)"}`
+            : "Using Ollama.";
     if (document.activeElement !== settingsOllamaUrlInput) {
       settingsOllamaUrlInput.value = settings.ollamaBaseUrl;
     }
@@ -4446,6 +4510,44 @@ settingsWebForm.addEventListener("submit", (e) => {
   void saveSetting(patch, settingsWebStatusEl, (s) =>
     s.webEnabled ? `Saved — internet access on (${s.webSearchProvider}).` : "Saved — internet access off."
   );
+});
+
+// Model provider — additive, not exclusive (see the HTML hint). Same
+// picker-plus-conditional-fields shape as Internet access above.
+function syncProviderRows() {
+  const p = settingsProviderSelect.value;
+  settingsProviderOpenaiUrlRow.hidden = p !== "openai";
+  settingsProviderOpenaiModelRow.hidden = p !== "openai";
+  settingsProviderOpenaiKeyRow.hidden = p !== "openai";
+  settingsProviderMistralrsRows.hidden = p !== "mistralrs";
+}
+settingsProviderSelect.addEventListener("change", syncProviderRows);
+
+settingsProviderForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const provider = settingsProviderSelect.value as SettingsPatch["modelProvider"];
+  const patch: SettingsPatch = { modelProvider: provider };
+  if (provider === "openai") {
+    patch.openaiBaseUrl = settingsProviderOpenaiUrlInput.value.trim();
+    patch.openaiModel = settingsProviderOpenaiModelInput.value.trim();
+    // Only send a key when the admin actually typed one (blank = keep the stored key).
+    if (settingsProviderOpenaiKeyInput.value.trim()) patch.openaiApiKey = settingsProviderOpenaiKeyInput.value.trim();
+  } else if (provider === "mistralrs") {
+    if (settingsProviderMistralrsModelInput.value.trim()) patch.mistralrsModelId = settingsProviderMistralrsModelInput.value.trim();
+    patch.mistralrsGgufFile = settingsProviderMistralrsGgufInput.value.trim();
+    const isq = Number(settingsProviderMistralrsIsqInput.value);
+    if (Number.isFinite(isq) && isq > 0) patch.mistralrsIsqBits = isq;
+  }
+  void saveSetting(patch, settingsProviderStatusEl, (s) => {
+    if (s.modelProvider === "mistralrs") {
+      const status = s.mistralrsStatus?.status ?? "idle";
+      if (status === "loading") return "Saved — loading the mistral.rs model (this can take a while on first use)…";
+      if (status === "error") return `Saved, but the model failed to load: ${s.mistralrsStatus?.error ?? "unknown error"}`;
+      if (status === "unavailable") return "Saved, but the mistral.rs native addon isn't built for this platform yet.";
+      return "Saved — mistral.rs model ready.";
+    }
+    return `Saved — chat model provider is ${s.modelProvider}.`;
+  });
 });
 
 settingsServerNameForm.addEventListener("submit", (e) => {

@@ -67,6 +67,7 @@ import {
 import { extractDocument } from "./agents/extraction.js";
 import { suggestDocumentName } from "./agents/rename.js";
 import { createLocalModel } from "./model.js";
+import { ensureMistralRsLoaded, getMistralRsStatus, invalidateMistralRsModel } from "./mistralrs/manager.js";
 import {
   createEmbedder,
   embedDocumentSafely,
@@ -868,6 +869,12 @@ export function buildServer(
     // AI-generated full-page artifacts (render_artifact + the Artifacts tab).
     // Clients hide the tab and the open-artifact chip when "off".
     artifacts: config.artifactsEnabled ? "on" : "off",
+    // Which backend answers the chat/planner model — additive, see
+    // config.ts. "mistralrs" additionally reports load status/error, since
+    // that backend loads a model into this process rather than talking to
+    // an always-on external server.
+    modelProvider: config.modelProvider,
+    mistralrs: config.modelProvider === "mistralrs" ? getMistralRsStatus() : undefined,
     };
   });
 
@@ -2635,6 +2642,17 @@ export function buildServer(
     webSearchProvider: config.webSearchProvider,
     webSearchUrl: config.webSearchUrl,
     webSearchApiKeySet: config.webSearchApiKey.length > 0,
+    // Chat/planner model provider — additive, see config.ts's "Chat/planner
+    // model provider" section. The API key is never sent back, same as
+    // webSearchApiKey above.
+    modelProvider: config.modelProvider,
+    openaiBaseUrl: config.openaiBaseUrl,
+    openaiApiKeySet: config.openaiApiKey.length > 0,
+    openaiModel: config.openaiModel,
+    mistralrsModelId: config.mistralrsModelId,
+    mistralrsGgufFile: config.mistralrsGgufFile,
+    mistralrsIsqBits: config.mistralrsIsqBits,
+    mistralrsStatus: config.modelProvider === "mistralrs" ? getMistralRsStatus() : undefined,
     isAdmin: user.role === "admin",
     envLocked,
   });
@@ -2660,6 +2678,13 @@ export function buildServer(
     webSearchProvider: z.enum(["searxng", "tavily", "brave", "ddg", "none"]).optional(),
     webSearchUrl: z.string().trim().max(300).optional(),
     webSearchApiKey: z.string().trim().max(400).optional(),
+    modelProvider: z.enum(["ollama", "openai", "mistralrs"]).optional(),
+    openaiBaseUrl: z.string().trim().max(300).optional(),
+    openaiApiKey: z.string().trim().max(400).optional(),
+    openaiModel: z.string().trim().max(200).optional(),
+    mistralrsModelId: z.string().trim().min(1).max(300).optional(),
+    mistralrsGgufFile: z.string().trim().max(300).optional(),
+    mistralrsIsqBits: z.number().int().min(1).max(8).optional(),
   });
   app.put("/settings", async (req, reply) => {
     const parsed = UpdateSettingsBody.safeParse(req.body);
@@ -2669,7 +2694,7 @@ export function buildServer(
       return reply.code(400).send({ error: "Nothing to update." });
     }
 
-    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "vaultEnabled", "autoUpdateEnabled", "webSearchProvider", "webSearchUrl", "webSearchApiKey"] as const;
+    const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "vaultEnabled", "autoUpdateEnabled", "webSearchProvider", "webSearchUrl", "webSearchApiKey", "modelProvider", "openaiBaseUrl", "openaiApiKey", "openaiModel", "mistralrsModelId", "mistralrsGgufFile", "mistralrsIsqBits"] as const;
     if (req.authUser.role !== "admin" && adminFields.some((f) => patch[f] !== undefined)) {
       return reply.code(403).send({ error: "Only an admin can change machine settings." });
     }
@@ -2685,6 +2710,33 @@ export function buildServer(
       return reply.code(400).send({
         error: "Internet access is pinned by a FAMILY_AGENT_WEB_SEARCH_* environment variable and can't be changed here.",
       });
+    }
+    if (patch.modelProvider !== undefined && envLocked.modelProvider) {
+      return reply.code(400).send({
+        error: "The model provider is pinned by FAMILY_AGENT_MODEL_PROVIDER and can't be changed here.",
+      });
+    }
+    if (
+      (patch.openaiBaseUrl !== undefined || patch.openaiApiKey !== undefined || patch.openaiModel !== undefined) &&
+      envLocked.openaiProvider
+    ) {
+      return reply.code(400).send({
+        error: "The OpenAI-compatible provider is pinned by a FAMILY_AGENT_OPENAI_* environment variable and can't be changed here.",
+      });
+    }
+    if (
+      (patch.mistralrsModelId !== undefined ||
+        patch.mistralrsGgufFile !== undefined ||
+        patch.mistralrsIsqBits !== undefined) &&
+      envLocked.mistralrsProvider
+    ) {
+      return reply.code(400).send({
+        error: "The embedded mistral.rs model is pinned by a FAMILY_AGENT_MISTRALRS_* environment variable and can't be changed here.",
+      });
+    }
+    const nextModelProvider = patch.modelProvider ?? config.modelProvider;
+    if (nextModelProvider === "openai" && !(patch.openaiBaseUrl ?? config.openaiBaseUrl)) {
+      return reply.code(400).send({ error: "The OpenAI-compatible provider needs a base URL." });
     }
 
     // A provider needs its companion setting to actually work — validate against
@@ -2733,17 +2785,48 @@ export function buildServer(
       webSearchProvider: patch.webSearchProvider,
       webSearchUrl: patch.webSearchUrl,
       webSearchApiKey: patch.webSearchApiKey,
+      modelProvider: patch.modelProvider,
+      openaiBaseUrl: patch.openaiBaseUrl,
+      openaiApiKey: patch.openaiApiKey,
+      openaiModel: patch.openaiModel,
+      mistralrsModelId: patch.mistralrsModelId,
+      mistralrsGgufFile: patch.mistralrsGgufFile,
+      mistralrsIsqBits: patch.mistralrsIsqBits !== undefined ? String(patch.mistralrsIsqBits) : undefined,
     };
     if (Object.values(machinePatch).some((v) => v !== undefined)) {
       persistSettings(config.dataDir, machinePatch);
     }
 
     // The chat/planner + extraction + inbox-watcher clients only care about
-    // model / ollamaBaseUrl. The embedder additionally cares about embedModel.
-    const chatModelChanged = patch.model !== undefined || patch.ollamaBaseUrl !== undefined;
+    // model / ollamaBaseUrl (plus, additively, whichever provider fields are
+    // relevant). The embedder additionally cares about embedModel — it stays
+    // on its own Ollama-only settings regardless of modelProvider.
+    const mistralrsModelFieldsChanged =
+      patch.mistralrsModelId !== undefined ||
+      patch.mistralrsGgufFile !== undefined ||
+      patch.mistralrsIsqBits !== undefined;
+    const chatModelChanged =
+      patch.model !== undefined ||
+      patch.ollamaBaseUrl !== undefined ||
+      patch.modelProvider !== undefined ||
+      patch.openaiBaseUrl !== undefined ||
+      patch.openaiApiKey !== undefined ||
+      patch.openaiModel !== undefined ||
+      mistralrsModelFieldsChanged;
     const semanticIndexChanged = patch.embedModel !== undefined || patch.ollamaBaseUrl !== undefined;
     if (patch.ollamaBaseUrl !== undefined) config.ollamaBaseUrl = patch.ollamaBaseUrl;
     if (patch.model !== undefined) config.model = patch.model;
+    if (patch.modelProvider !== undefined) config.modelProvider = patch.modelProvider;
+    if (patch.openaiBaseUrl !== undefined) config.openaiBaseUrl = patch.openaiBaseUrl;
+    if (patch.openaiApiKey !== undefined) config.openaiApiKey = patch.openaiApiKey;
+    if (patch.openaiModel !== undefined) config.openaiModel = patch.openaiModel;
+    if (patch.mistralrsModelId !== undefined) config.mistralrsModelId = patch.mistralrsModelId;
+    if (patch.mistralrsGgufFile !== undefined) config.mistralrsGgufFile = patch.mistralrsGgufFile;
+    if (patch.mistralrsIsqBits !== undefined) config.mistralrsIsqBits = patch.mistralrsIsqBits;
+    if (mistralrsModelFieldsChanged) invalidateMistralRsModel();
+    if (config.modelProvider === "mistralrs" && (patch.modelProvider !== undefined || mistralrsModelFieldsChanged)) {
+      void ensureMistralRsLoaded(); // fire-and-forget — GET /health / /settings reports progress
+    }
     if (patch.embedModel !== undefined) config.embedModel = patch.embedModel;
     if (patch.ocrModel !== undefined) config.ocrModel = patch.ocrModel;
     if (patch.asrModel !== undefined) {
@@ -2825,6 +2908,8 @@ export function buildServer(
           : `Internet access turned on (${config.webSearchProvider})`,
         patch.webSearchProvider !== undefined,
       ],
+      [`Model provider set to "${config.modelProvider}"`, patch.modelProvider !== undefined],
+      [`Embedded mistral.rs model set to "${config.mistralrsModelId}"`, mistralrsModelFieldsChanged],
     ] as const) {
       if (changed) req.userStore.logActivity("system", "settings.updated", msg);
     }
@@ -2983,6 +3068,10 @@ async function main() {
   void warmModel();
   // Pre-load the QuickJS wasm module so the first run_code isn't slow.
   void warmCompute();
+  // Start loading the embedded mistral.rs model now, if that's the active
+  // provider — fire-and-forget, same reasoning as warmModel() above; GET
+  // /health and /settings report load progress in the meantime.
+  if (config.modelProvider === "mistralrs") void ensureMistralRsLoaded();
 
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, async () => {

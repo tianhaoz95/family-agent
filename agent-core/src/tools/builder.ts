@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import type { ChatOllama } from "@langchain/ollama";
+import type { LocalChatModel } from "../model.js";
 import type { ScopedStore, ToolKind, ToolRecord } from "../db.js";
 import { toolsDir } from "../config.js";
 import { DEFAULT_OPERATIONS, HARNESS } from "./harness.js";
@@ -389,7 +389,7 @@ interface GenContext {
 
 /** Decide backend-or-not and sketch the operations, before any codegen. Best
  *  effort — a null return means "fall back to the keyword heuristic". */
-export async function planTool(model: ChatOllama, prompt: string): Promise<ToolPlan | null> {
+export async function planTool(model: LocalChatModel, prompt: string): Promise<ToolPlan | null> {
   try {
     const res = await model.invoke([
       new SystemMessage(PLAN_SYSTEM),
@@ -420,7 +420,7 @@ function renderPlannedOps(ops: PlannedOperation[]): string {
   return ops.map((o) => `- ${o.name} [${o.access}] — ${o.summary}`).join("\n");
 }
 
-async function generateOperations(model: ChatOllama, ctx: GenContext): Promise<string> {
+async function generateOperations(model: LocalChatModel, ctx: GenContext): Promise<string> {
   const spec = ctx.plannedOperations?.length
     ? `\nImplement EXACTLY these operations — the names and read/write split are decided; fill in each inputSchema and run:\n${renderPlannedOps(
         ctx.plannedOperations
@@ -457,7 +457,7 @@ async function generateOperations(model: ChatOllama, ctx: GenContext): Promise<s
   return DEFAULT_OPERATIONS;
 }
 
-async function repairOperations(model: ChatOllama, ctx: GenContext, broken: string, error: string): Promise<string> {
+async function repairOperations(model: LocalChatModel, ctx: GenContext, broken: string, error: string): Promise<string> {
   const human = [
     `This operations.ts failed to run. Fix it and output the COMPLETE corrected file.`,
     "",
@@ -478,7 +478,7 @@ async function repairOperations(model: ChatOllama, ctx: GenContext, broken: stri
 }
 
 async function generateHtml(
-  model: ChatOllama,
+  model: LocalChatModel,
   kind: ToolKind,
   ctx: GenContext,
   operationsCode?: string
@@ -585,7 +585,7 @@ function schemaLostSomething(before: Map<string, Set<string>>, after: Map<string
 }
 
 async function validateOperations(
-  model: ChatOllama,
+  model: LocalChatModel,
   supervisor: ToolSupervisor,
   stageDir: string,
   ctx: GenContext,
@@ -773,7 +773,7 @@ async function commitServerTool(
 }
 
 async function buildStaticTool(
-  model: ChatOllama,
+  model: LocalChatModel,
   store: ScopedStore,
   toolId: string,
   dir: string,
@@ -788,7 +788,7 @@ async function buildStaticTool(
 }
 
 async function buildServerTool(
-  model: ChatOllama,
+  model: LocalChatModel,
   store: ScopedStore,
   supervisor: ToolSupervisor,
   toolId: string,
@@ -853,7 +853,7 @@ function withTimeout<T>(p: Promise<T>, label: string): Promise<T> {
  * failure is recorded on the ToolRecord (status "failed") and returned.
  */
 export async function buildTool(
-  model: ChatOllama,
+  model: LocalChatModel,
   store: ScopedStore,
   supervisor: ToolSupervisor,
   prompt: string
@@ -897,7 +897,7 @@ export interface IterateResult {
  * nothing to protect, so this just rebuilds with the instruction folded in.
  */
 export async function iterateTool(
-  model: ChatOllama,
+  model: LocalChatModel,
   store: ScopedStore,
   supervisor: ToolSupervisor,
   toolId: string,

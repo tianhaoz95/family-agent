@@ -611,9 +611,47 @@
           </div>
 
           <div class="settings-section">
+            <h3>Model provider</h3>
+            <p class="settings-hint">
+              Which backend answers the assistant's chat/planner model. This is additive,
+              not exclusive — OCR and semantic search below keep using Ollama regardless
+              of what's picked here.
+            </p>
+            <form id="settings-provider-form" class="inline-form">
+              <select id="settings-provider-select">
+                <option value="ollama">Ollama (default)</option>
+                <option value="openai">OpenAI-compatible server</option>
+                <option value="mistralrs">Embedded mistral.rs (no separate install)</option>
+              </select>
+            </form>
+            <label class="field" id="settings-provider-openai-url-row" hidden>Server base URL
+              <input id="settings-provider-openai-url" type="text" placeholder="http://localhost:8000/v1" />
+            </label>
+            <label class="field" id="settings-provider-openai-model-row" hidden>Model name
+              <input id="settings-provider-openai-model" type="text" placeholder="local-model" />
+            </label>
+            <label class="field" id="settings-provider-openai-key-row" hidden>API key
+              <input id="settings-provider-openai-key" type="password" placeholder="Paste the server's API key (often unused)" autocomplete="off" />
+              <button type="submit" form="settings-provider-form">Save</button>
+            </label>
+            <div id="settings-provider-mistralrs-rows" hidden>
+              <label class="field">Hugging Face model id or local path
+                <input id="settings-provider-mistralrs-model" type="text" placeholder="unsloth/Qwen3-0.6B-GGUF" />
+              </label>
+              <label class="field">GGUF filename (leave empty for a full-precision + auto-quantized load)
+                <input id="settings-provider-mistralrs-gguf" type="text" placeholder="Qwen3-0.6B-Q4_K_M.gguf" />
+              </label>
+              <label class="field">In-situ quantization bits (non-GGUF path only)
+                <input id="settings-provider-mistralrs-isq" type="number" min="1" max="8" placeholder="4" />
+              </label>
+              <button type="submit" form="settings-provider-form">Save</button>
+            </div>
+            <p id="settings-provider-status" class="settings-hint" role="status"></p>
+
             <h3>Chat model</h3>
             <p class="settings-hint">
-              The Ollama model the assistant thinks with. Must support tool-calling.
+              The Ollama model the assistant thinks with. Must support tool-calling. Only
+              used when the provider above is Ollama.
             </p>
             <form id="settings-model-form" class="inline-form">
               <select id="settings-model-select"></select>

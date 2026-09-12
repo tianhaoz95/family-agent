@@ -44,6 +44,17 @@ export const envLocked = {
     process.env.FAMILY_AGENT_WEB_SEARCH_PROVIDER !== undefined ||
     process.env.FAMILY_AGENT_WEB_SEARCH_URL !== undefined ||
     process.env.FAMILY_AGENT_WEB_SEARCH_API_KEY !== undefined,
+  // Which backend answers the chat/planner model. Same one-lock-for-the-group
+  // shape as webSearchProvider.
+  modelProvider: process.env.FAMILY_AGENT_MODEL_PROVIDER !== undefined,
+  openaiProvider:
+    process.env.FAMILY_AGENT_OPENAI_BASE_URL !== undefined ||
+    process.env.FAMILY_AGENT_OPENAI_API_KEY !== undefined ||
+    process.env.FAMILY_AGENT_OPENAI_MODEL !== undefined,
+  mistralrsProvider:
+    process.env.FAMILY_AGENT_MISTRALRS_MODEL_ID !== undefined ||
+    process.env.FAMILY_AGENT_MISTRALRS_GGUF_FILE !== undefined ||
+    process.env.FAMILY_AGENT_MISTRALRS_ISQ_BITS !== undefined,
 } as const;
 
 export const config = {
@@ -182,6 +193,53 @@ export const config = {
   webFetchTimeoutMs: Number(process.env.FAMILY_AGENT_WEB_TIMEOUT_MS ?? 15_000),
   webFetchMaxBytes: Number(process.env.FAMILY_AGENT_WEB_MAX_BYTES ?? 2_000_000),
   webFetchMaxChars: Number(process.env.FAMILY_AGENT_WEB_MAX_CHARS ?? 12_000),
+
+  // ---- Chat/planner model provider (model.ts) ----
+  // ADDITIVE, not a replacement: this only chooses which backend answers the
+  // planner/chat model (createLocalModel() in model.ts). OCR (ocrModel) and
+  // embeddings (embedModel) keep their own independent Ollama-only settings
+  // above — so "ollama for embeddings, mistralrs for chat" already works
+  // simply because those are separate client constructions, not because of
+  // anything special here. Precedence matches model/webSearchProvider: env >
+  // persisted (desktop Settings → "Model provider") > "ollama" default.
+  //   ollama    — the original ChatOllama client (ollamaBaseUrl/model above).
+  //   openai    — any OpenAI-API-compatible HTTP endpoint (a hosted API, a
+  //               self-hosted vLLM/LM Studio/llama.cpp server, or even
+  //               Ollama's own /v1 compat route). See openai* below.
+  //   mistralrs — mistral.rs embedded as a Rust library, in-process, via the
+  //               native addon under native/mistralrs-node/ (NOT a spawned
+  //               CLI/server — see mistralrs/ for the whole story). No
+  //               network hop, no separate process to install or supervise.
+  modelProvider: (process.env.FAMILY_AGENT_MODEL_PROVIDER ??
+    persisted.modelProvider ??
+    "ollama") as "ollama" | "openai" | "mistralrs",
+
+  // ---- Generic OpenAI-compatible provider (modelProvider === "openai") ----
+  openaiBaseUrl: process.env.FAMILY_AGENT_OPENAI_BASE_URL ?? persisted.openaiBaseUrl ?? "",
+  // Stored as-is; redacted on API responses, same as webSearchApiKey. Many
+  // local OpenAI-compatible servers don't check this at all — an empty
+  // string is sent as a harmless placeholder, not omitted, since the
+  // OpenAI client requires a non-empty key.
+  openaiApiKey: process.env.FAMILY_AGENT_OPENAI_API_KEY ?? persisted.openaiApiKey ?? "",
+  openaiModel: process.env.FAMILY_AGENT_OPENAI_MODEL ?? persisted.openaiModel ?? "",
+
+  // ---- Embedded mistral.rs (modelProvider === "mistralrs") ----
+  // Hugging Face repo id, or a local model directory path. Defaults to a
+  // small, verified-working GGUF model (real end-to-end smoke-tested: loads,
+  // answers, and makes a tool call through this exact binding) so switching
+  // the provider to "mistralrs" with no further configuration works out of
+  // the box — same spirit as the Ollama default (gemma4:e2b), small first,
+  // swap in something bigger once the plumbing is confirmed working.
+  mistralrsModelId:
+    process.env.FAMILY_AGENT_MISTRALRS_MODEL_ID ?? persisted.mistralrsModelId ?? "unsloth/Qwen3-0.6B-GGUF",
+  // GGUF filename within that repo. Empty = load the (larger) full-precision
+  // repo instead and in-situ-quantize it on load via mistralrsIsqBits — slower
+  // to load, no dependence on a repo actually publishing a matching GGUF file,
+  // and NOT covered by the with_force_cpu() workaround in lib.rs (see there).
+  mistralrsGgufFile:
+    process.env.FAMILY_AGENT_MISTRALRS_GGUF_FILE ?? persisted.mistralrsGgufFile ?? "Qwen3-0.6B-Q4_K_M.gguf",
+  // In-situ quantization width in bits, only used on the non-GGUF path above.
+  mistralrsIsqBits: Number(process.env.FAMILY_AGENT_MISTRALRS_ISQ_BITS ?? persisted.mistralrsIsqBits ?? 4),
 
   // ---- Shell / file-processing access (shell/*, agents/workshopTools.ts) ----
   // A `workshop-agent` that runs allow-listed CLI tools (ffmpeg, qpdf, jq, …)

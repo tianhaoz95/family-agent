@@ -1,7 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import type { ChatOllama } from "@langchain/ollama";
+import type { LocalChatModel } from "../model.js";
 import type { ScopedStore } from "../db.js";
 
 // Deliberately bypasses the deepagents planner/subagent graph for this one
@@ -36,7 +36,7 @@ export interface ExtractionResult {
 }
 
 async function attemptExtraction(
-  model: ChatOllama,
+  model: LocalChatModel,
   filename: string,
   rawText: string
 ): Promise<ExtractionResult | null> {
@@ -69,7 +69,7 @@ async function attemptExtraction(
 // try; one retry clears most of those (see docs/BUILD_LOG.md for observed
 // rates) without masking a real, repeatable failure.
 export async function extractDocument(
-  model: ChatOllama,
+  model: LocalChatModel,
   store: ScopedStore,
   doc: { id: string; filename: string; rawText: string }
 ): Promise<void> {

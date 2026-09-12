@@ -1,7 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import type { ChatOllama } from "@langchain/ollama";
+import type { LocalChatModel } from "../model.js";
 import type { ScopedStore, ArtifactCommentRecord } from "../db.js";
 import { validateArtifactFragment, MAX_ARTIFACT_FRAGMENT } from "./wrap.js";
 
@@ -66,7 +66,7 @@ function commentBlock(comments: ArtifactCommentRecord[]): string {
 }
 
 async function attempt(
-  model: ChatOllama,
+  model: LocalChatModel,
   title: string,
   html: string,
   comments: ArtifactCommentRecord[],
@@ -112,7 +112,7 @@ async function attempt(
  * one, and leaves anything it didn't touch open. Returns per-comment outcomes.
  */
 export async function resolveArtifactComments(
-  model: ChatOllama,
+  model: LocalChatModel,
   store: ScopedStore,
   artifactId: string,
   commentIds?: string[]

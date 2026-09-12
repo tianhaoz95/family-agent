@@ -627,6 +627,30 @@ export interface Settings {
   webSearchUrl: string;
   /** Whether an API key is stored (tavily/brave) — the key itself is never sent. */
   webSearchApiKeySet: boolean;
+  /**
+   * Which backend answers the chat/planner model. ADDITIVE, not exclusive —
+   * switching this never touches ocrModel/embedModel above, which stay on
+   * their own Ollama-only settings regardless. See agent-core's config.ts.
+   */
+  modelProvider: "ollama" | "openai" | "mistralrs";
+  /** Base URL of a generic OpenAI-API-compatible server (modelProvider === "openai"). */
+  openaiBaseUrl: string;
+  /** Whether an API key is stored for that server — the key itself is never sent. */
+  openaiApiKeySet: boolean;
+  /** Model name to request from that server. */
+  openaiModel: string;
+  /** HF repo id or local path for the embedded mistral.rs model. */
+  mistralrsModelId: string;
+  /** GGUF filename within that repo; empty = full-precision + in-situ quant. */
+  mistralrsGgufFile: string;
+  /** In-situ quantization width in bits, non-GGUF path only. */
+  mistralrsIsqBits: number;
+  /** Only present when modelProvider === "mistralrs" — load progress/health. */
+  mistralrsStatus?: {
+    status: "unavailable" | "idle" | "loading" | "ready" | "error";
+    modelId?: string;
+    error?: string;
+  };
   isAdmin: boolean;
   /** Fields pinned by an env var — read-only in the UI. */
   envLocked: {
@@ -641,6 +665,9 @@ export interface Settings {
     vaultEnabled: boolean;
     autoUpdateEnabled: boolean;
     webSearchProvider: boolean;
+    modelProvider: boolean;
+    openaiProvider: boolean;
+    mistralrsProvider: boolean;
   };
 }
 
@@ -658,6 +685,13 @@ export interface SettingsPatch {
   webSearchProvider?: "none" | "ddg" | "searxng" | "tavily" | "brave";
   webSearchUrl?: string;
   webSearchApiKey?: string;
+  modelProvider?: "ollama" | "openai" | "mistralrs";
+  openaiBaseUrl?: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
+  mistralrsModelId?: string;
+  mistralrsGgufFile?: string;
+  mistralrsIsqBits?: number;
 }
 
 // Separate from request() because a file upload must NOT set
