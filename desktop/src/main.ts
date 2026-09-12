@@ -4969,7 +4969,32 @@ async function performUpdateInstall(update: PendingUpdate, onProgress: (text: st
   });
   const { relaunch } = await import("@tauri-apps/plugin-process");
   onProgress("Restarting…");
-  await relaunch();
+  // relaunch() is supposed to end this process — none of its callers ever
+  // reset `updateInFlight` on success, because there's nothing left to reset
+  // it in once the process is gone. But if it silently fails to actually
+  // terminate (hangs, or resolves without the OS following through — seen in
+  // the wild with no error surfaced anywhere), that leaves `updateInFlight`
+  // stuck `true` forever: every future check (manual, remote-triggered, the
+  // periodic background scan) silently no-ops on their very first line, with
+  // no visible symptom beyond "nothing happens" — exactly the failure a phone
+  // stuck on "Waiting for the host to pick this up…" would see, since the
+  // remote poll never even gets far enough to report "checking". Racing it
+  // against a timeout turns that silent, permanent deadlock into a normal,
+  // recoverable error: every caller's existing catch block already resets
+  // `updateInFlight` and surfaces a message.
+  await Promise.race([
+    relaunch(),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("The app didn't restart within 20s. Quit and reopen it by hand, then try again.")),
+        20000
+      )
+    ),
+  ]);
+  // Reached only if relaunch() resolved without the process actually dying —
+  // a real, if unlikely, outcome worth treating the same as the timeout above
+  // rather than falling through to "success" silently.
+  throw new Error("The restart call returned without the app actually restarting.");
 }
 
 settingsUpdateInstallBtn.addEventListener("click", async () => {
