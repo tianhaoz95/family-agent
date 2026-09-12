@@ -592,8 +592,6 @@ textarea {
 
 /* ---------- Chat ------------------------------------------------------- */
 .chat-log {
-  flex: 1;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1355,11 +1353,20 @@ summary:focus-visible {
   list-style: none;
   margin: 0;
   padding: 2px 4px 8px 0;
-  overflow-y: auto;
-  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Events keeps its own scrollport (not wrapped in .view-scroll like
+   Documents/Tools/Activity below) — #task-calendar's hour-grid views depend
+   on getting a bounded height from a height:100%/overflow:hidden ancestor
+   for their own internal scrolling, which the .view-scroll treatment would
+   disturb. Its header stays a plain fixed row (as it already was) rather
+   than the sticky glass bar the other views get. */
+.task-list {
+  overflow-y: auto;
+  flex: 1;
 }
 
 /* The activity log is a dense timeline, not a stack of cards. */
@@ -3200,9 +3207,6 @@ input[type="file"]::file-selector-button:hover {
   list-style: none;
   margin: 0;
   padding: 0;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
 }
 .channel-row {
   position: relative;
@@ -3292,8 +3296,12 @@ input[type="file"]::file-selector-button:hover {
 .conversation {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  /* min-height, not height: .conversation-pane (its parent) is what scrolls
+     now, so this needs to be able to grow taller than the pane's own
+     viewport when the transcript is long — a fixed height:100% capped it to
+     exactly the pane's size and made overflow (and the sticky header inside
+     it) impossible. */
+  min-height: 100%;
 }
 .conversation-head {
   display: flex;
@@ -3334,13 +3342,10 @@ input[type="file"]::file-selector-button:hover {
   height: 15px;
 }
 .message-log {
-  flex: 1;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 12px 2px;
-  min-height: 0;
 }
 .msg {
   max-width: 76%;
@@ -4606,38 +4611,59 @@ input[type="file"]::file-selector-button:hover {
   animation: view-in var(--dur-lg) var(--ease-out);
 }
 
-/* ---- Top scroll fade ----------------------------------------------------
-   Content dissolves into the fixed header above it as it scrolls up
-   underneath, instead of cutting off sharply — the trick introduced on
-   Chat/Messages on iOS/Android, standardized here with a real
-   backdrop-filter blur (the desktop webview can afford it; Android can't).
-   Each of these is a flex-column scroll container with its header rendered
-   as a normal-flow sibling *before* it (the section's <h1>/subtitle/form),
-   so a `::before` pseudo-element works as the fade: as the first flex item,
-   `position: sticky` pins it to the top of this box's own scrollport while
-   later (real) rows scroll underneath and through its blurred band; the
-   negative margin keeps it from adding extra scroll height of its own. */
-.chat-log::before,
-.message-log::before,
-.channel-list::before,
-.task-list::before,
-.document-list::before,
-.activity-list::before,
-.tool-list::before {
-  content: "";
+/* ---- Sticky glass header bars --------------------------------------------
+   Each view's title/header bar is a REAL sticky bar with a backdrop-filter
+   blur — not a decorative strip drawn separately inside the scrolling
+   content. An earlier version used a `::before` pseudo-element pinned to
+   the top of each list's own scrollport for this, which put the blurred
+   band wherever that scrollport happened to start — visually disconnected
+   from the actual header/title above it (the same bug reported on iOS:
+   the blur landed partway down the content, not merged with the app bar).
+   Fixed by making the header itself the sticky element, inside the SAME
+   scrolling box as the content below it: `.conversation-pane`,
+   `.channel-pane`, and `.view-scroll` are now the actual scrollports
+   (overflow-y: auto) for their view, with the header as their first child,
+   `position: sticky`, so real content scrolls up and passes BEHIND the
+   header, blurred, the way a native nav bar (and the iOS/Android
+   counterparts of this same fix) works. Margin-bottom is converted to
+   padding-bottom on each header so that gap is part of the sticky element's
+   own painted (and blurred) box, not a transparent seam below it. */
+.conversation-pane,
+.channel-pane {
+  overflow-y: auto;
+  min-height: 0;
+}
+.view-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.conversation-pane > .view-header,
+.view-scroll > .view-header,
+.channel-pane > .channel-pane-head,
+.conversation > .conversation-head {
   position: sticky;
   top: 0;
-  left: 0;
-  right: 0;
+  z-index: 2;
   flex: none;
-  height: 22px;
-  margin-bottom: -22px;
-  z-index: 5;
-  pointer-events: none;
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
-  -webkit-mask-image: linear-gradient(to bottom, #000, transparent);
-  mask-image: linear-gradient(to bottom, #000, transparent);
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+.conversation-pane > .view-header,
+.view-scroll > .view-header {
+  margin-bottom: 0;
+  padding-bottom: 24px;
+}
+.channel-pane > .channel-pane-head {
+  margin-bottom: 0;
+  padding-bottom: 12px;
+}
+.conversation > .conversation-head {
+  margin-bottom: 0;
+  padding-bottom: 14px;
 }
 
 /* The centred composer floats a little more and glows on focus. */

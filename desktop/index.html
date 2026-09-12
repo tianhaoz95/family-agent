@@ -356,65 +356,69 @@
         </section>
 
         <section id="view-documents" class="view" aria-label="Documents">
-          <div class="view-header">
-            <h1>Documents</h1>
-            <p class="view-sub">
-              Upload a PDF, photo, or scan below — or drop a file into
-              <code id="inbox-path">your watched folder</code>.
-            </p>
+          <div class="view-scroll">
+            <div class="view-header">
+              <h1>Documents</h1>
+              <p class="view-sub">
+                Upload a PDF, photo, or scan below — or drop a file into
+                <code id="inbox-path">your watched folder</code>.
+              </p>
+            </div>
+
+            <div class="doc-search" role="search">
+              <svg class="doc-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+              <input id="document-search" type="search" autocomplete="off" spellcheck="false"
+                     placeholder="Search documents — by name, content, or meaning" aria-label="Search documents" />
+              <select id="document-search-mode" aria-label="Search strategy" title="How to match your query">
+                <option value="hybrid">Smart</option>
+                <option value="keyword">Exact words</option>
+                <option value="fuzzy">Typo-tolerant</option>
+                <option value="semantic">By meaning</option>
+              </select>
+            </div>
+            <p id="document-search-status" class="settings-hint" hidden></p>
+
+            <label id="document-upload-form" class="upload-zone">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+              <span class="upload-zone-text">Add a PDF, photo, scan, or text file to the family archive. It uploads as soon as you pick it.</span>
+              <!-- No `accept` filter: the Linux webview's file picker silently hides
+                   valid files (e.g. .pdf) when accept mixes extensions and MIME
+                   wildcards. agent-core validates the type on upload and returns a
+                   clear "Supported types: …" message, so the filter only cost us
+                   working PDF selection. -->
+              <input id="document-file-input" type="file" />
+            </label>
+            <p id="document-upload-status" class="settings-hint"></p>
+
+            <details class="paste-details">
+              <summary>Or paste text directly</summary>
+              <form id="document-form" class="inline-form inline-form-stacked">
+                <input id="document-filename" type="text" placeholder="Give it a name, e.g. Electric bill" required />
+                <textarea id="document-text" placeholder="Paste the document text here" rows="4" required></textarea>
+                <button type="submit">Add document</button>
+              </form>
+            </details>
+
+            <ul id="document-list" class="document-list"></ul>
           </div>
-
-          <div class="doc-search" role="search">
-            <svg class="doc-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-            <input id="document-search" type="search" autocomplete="off" spellcheck="false"
-                   placeholder="Search documents — by name, content, or meaning" aria-label="Search documents" />
-            <select id="document-search-mode" aria-label="Search strategy" title="How to match your query">
-              <option value="hybrid">Smart</option>
-              <option value="keyword">Exact words</option>
-              <option value="fuzzy">Typo-tolerant</option>
-              <option value="semantic">By meaning</option>
-            </select>
-          </div>
-          <p id="document-search-status" class="settings-hint" hidden></p>
-
-          <label id="document-upload-form" class="upload-zone">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
-            <span class="upload-zone-text">Add a PDF, photo, scan, or text file to the family archive. It uploads as soon as you pick it.</span>
-            <!-- No `accept` filter: the Linux webview's file picker silently hides
-                 valid files (e.g. .pdf) when accept mixes extensions and MIME
-                 wildcards. agent-core validates the type on upload and returns a
-                 clear "Supported types: …" message, so the filter only cost us
-                 working PDF selection. -->
-            <input id="document-file-input" type="file" />
-          </label>
-          <p id="document-upload-status" class="settings-hint"></p>
-
-          <details class="paste-details">
-            <summary>Or paste text directly</summary>
-            <form id="document-form" class="inline-form inline-form-stacked">
-              <input id="document-filename" type="text" placeholder="Give it a name, e.g. Electric bill" required />
-              <textarea id="document-text" placeholder="Paste the document text here" rows="4" required></textarea>
-              <button type="submit">Add document</button>
-            </form>
-          </details>
-
-          <ul id="document-list" class="document-list"></ul>
         </section>
 
         <section id="view-tools" class="view" aria-label="Tools">
-          <div class="view-header">
-            <h1>Tools</h1>
-            <p class="view-sub">
-              Ask the agent to build a small web tool to help finish a task — a checklist,
-              planner, tracker, calculator. Generated locally, runs locally.
-            </p>
+          <div class="view-scroll">
+            <div class="view-header">
+              <h1>Tools</h1>
+              <p class="view-sub">
+                Ask the agent to build a small web tool to help finish a task — a checklist,
+                planner, tracker, calculator. Generated locally, runs locally.
+              </p>
+            </div>
+            <form id="tool-form" class="inline-form">
+              <input id="tool-prompt" type="text" placeholder="e.g. a tool to split our vacation budget between 4 people" required />
+              <button type="submit">Build</button>
+            </form>
+            <p id="tool-status" class="settings-hint" role="status"></p>
+            <ul id="tool-list" class="tool-list"></ul>
           </div>
-          <form id="tool-form" class="inline-form">
-            <input id="tool-prompt" type="text" placeholder="e.g. a tool to split our vacation budget between 4 people" required />
-            <button type="submit">Build</button>
-          </form>
-          <p id="tool-status" class="settings-hint" role="status"></p>
-          <ul id="tool-list" class="tool-list"></ul>
         </section>
 
         <section id="view-artifacts" class="view" aria-label="Artifacts">
@@ -566,11 +570,13 @@
         </section>
 
         <section id="view-activity" class="view" aria-label="Activity">
-          <div class="view-header">
-            <h1>Activity</h1>
-            <p class="view-sub">Everything the agent has read or changed, newest first.</p>
+          <div class="view-scroll">
+            <div class="view-header">
+              <h1>Activity</h1>
+              <p class="view-sub">Everything the agent has read or changed, newest first.</p>
+            </div>
+            <ul id="activity-list" class="activity-list"></ul>
           </div>
-          <ul id="activity-list" class="activity-list"></ul>
         </section>
 
         <section id="view-vault" class="view" aria-label="Vault">
