@@ -43,8 +43,21 @@ if command -v shasum >/dev/null 2>&1; then HASH_CMD=(shasum -a 256)
 else HASH_CMD=(sha256sum)
 fi
 
-# A fingerprint of what the bundle depends on: the built JS + the dep manifest.
-STAMP_INPUT="$(cd "$AGENT_CORE" && find dist -type f -exec "${HASH_CMD[@]}" {} + | "${HASH_CMD[@]}"; "${HASH_CMD[@]}" package.json)"
+# The mistralrs-node native addon (embedded mistral.rs — see
+# agent-core/src/mistralrs/nativeAddon.ts) isn't an npm dependency, so the
+# production `npm install` below never pulls it in; it has to be staged by
+# hand from wherever agent-core/scripts/build-mistralrs-node.sh left it.
+# Only this platform/arch's prebuild exists on any given builder (that
+# script doesn't cross-compile), and it's fine if it doesn't exist at all —
+# nativeAddon.ts already degrades to "mistralrs unavailable" when the file
+# is missing, same as onnxruntime-node elsewhere in this codebase.
+NATIVE_PREBUILDS="$AGENT_CORE/native/mistralrs-node/prebuilds"
+
+# A fingerprint of what the bundle depends on: the built JS + the dep manifest
+# + the native addon (if built) — so rebuilding the addon (or building it for
+# the first time) invalidates a stale staged copy instead of silently keeping
+# the old "unavailable" one around.
+STAMP_INPUT="$(cd "$AGENT_CORE" && find dist -type f -exec "${HASH_CMD[@]}" {} + | "${HASH_CMD[@]}"; "${HASH_CMD[@]}" package.json; [ -d "$NATIVE_PREBUILDS" ] && find "$NATIVE_PREBUILDS" -type f -exec "${HASH_CMD[@]}" {} + | "${HASH_CMD[@]}" || true)"
 STAMP="$(printf '%s' "$STAMP_INPUT" | "${HASH_CMD[@]}" | cut -d' ' -f1)"
 STAMP_FILE="$STAGE/.stamp"
 
@@ -61,6 +74,14 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/agent-core"
 cp -R "$AGENT_CORE/dist" "$STAGE/agent-core/dist"
 cp "$AGENT_CORE/package.json" "$STAGE/agent-core/package.json"
+
+if [ -d "$NATIVE_PREBUILDS" ]; then
+  mkdir -p "$STAGE/agent-core/native/mistralrs-node/prebuilds"
+  cp -R "$NATIVE_PREBUILDS/." "$STAGE/agent-core/native/mistralrs-node/prebuilds/"
+  echo "==> prepare-sidecar: staged mistralrs-node prebuild(s): $(ls "$NATIVE_PREBUILDS")"
+else
+  echo "==> prepare-sidecar: no mistralrs-node prebuild for this machine — embedded mistral.rs will report unavailable (run agent-core/scripts/build-mistralrs-node.sh first if you want it in this build)"
+fi
 
 # The Node binary (resolve nvm shim -> the real Mach-O — a macOS-specific
 # concern; actions/setup-node on Linux/Windows CI installs a plain binary

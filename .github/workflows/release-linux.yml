@@ -89,10 +89,26 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: desktop/src-tauri -> target
+          workspaces: |
+            desktop/src-tauri -> target
+            agent-core/native/mistralrs-node -> target
           # Separate cache per arch — an amd64 target/ directory is useless
           # (and would just be evicted) on an arm64 runner and vice versa.
           key: ${{ matrix.arch }}
+
+      # Embedded mistral.rs (see agent-core/src/mistralrs/nativeAddon.ts) — a
+      # native Node addon linking the mistralrs crate directly, built once per
+      # platform/arch (this script doesn't cross-compile) and staged into the
+      # sidecar by prepare-sidecar.sh later in ./scripts/release-linux.sh's
+      # `npm run tauri:build`. Slow (compiles mistralrs + candle), cached by
+      # the rust-cache step above on subsequent runs.
+      - name: Build the mistralrs-node native addon (embedded mistral.rs)
+        # Non-fatal: this is an optional, gracefully-degrading capability
+        # (see nativeAddon.ts) — a compile failure on some exotic runner
+        # shouldn't block the whole platform's release. The addon simply
+        # won't be staged for this build (prepare-sidecar.sh already
+        # handles that missing case) and mistralrs reports unavailable.
+        run: ./agent-core/scripts/build-mistralrs-node.sh || echo "!! mistralrs-node build failed — continuing without embedded mistral.rs for this platform"
 
       - name: Tauri Linux dependencies
         run: |

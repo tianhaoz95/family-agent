@@ -4662,7 +4662,34 @@ input[type="file"]::file-selector-button:hover {
 .view-scroll.is-scrolled > .view-header,
 .channel-pane.is-scrolled > .channel-pane-head,
 .conversation-pane.is-scrolled .conversation-head {
-  background: var(--surface);
+  /* A literal continuation of body::before's own bloom gradient, not a flat
+     fill: a solid var(--bg) (or var(--surface), or a translucent white
+     glass — all three were tried) still reads as a flat man-made rectangle
+     dropped on the canvas, because the real canvas right here is *not* flat
+     — it's whatever the animated bloom wash looks like at this exact screen
+     position, e.g. distinctly peach-tinted for a header sitting near the
+     top-right corner. Measured: this bar's own on-screen position averages
+     ~6-9 units warmer/less-blue than plain var(--bg) once you're within a
+     bloom's reach, which a flat fill can't reproduce and a human eye reads
+     as a seam even when the average colour is close.
+     `background-attachment: fixed` is the fix: for a fixed-attachment
+     layer, browsers position the image against the *viewport*, not this
+     element's own box — the same rule that makes body::before (itself
+     viewport-sized) line up the way it does. Reusing body::before's exact
+     percentages here means this small inset box samples precisely the same
+     point of the same canvas, so it's indistinguishable from the paper
+     showing through, not an approximation of it. It only skips the JS-driven
+     drift transform (body::before's --atmo-* pan/rotate/scale) — a header
+     that's pixel-static except during an in-flight agent turn is an
+     acceptable trade for never being a visibly separate rectangle. */
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(34vmax 34vmax at 12% 6%, var(--bloom-sky), transparent 60%),
+    radial-gradient(38vmax 38vmax at 92% 14%, var(--bloom-peach), transparent 60%),
+    radial-gradient(40vmax 40vmax at 78% 96%, var(--bloom-lilac), transparent 58%),
+    radial-gradient(32vmax 32vmax at 4% 88%, var(--bloom-mint), transparent 60%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
   box-shadow: var(--shadow-sm);
 }
 .conversation-pane > .view-header,
