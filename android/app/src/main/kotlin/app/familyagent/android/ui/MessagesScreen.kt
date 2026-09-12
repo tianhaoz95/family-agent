@@ -294,9 +294,13 @@ fun ConversationScreen(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
+            // Opaque surface, not a translucent wash — see Components.kt's
+            // ScreenScaffold title bar for why (a thin inset bar has nothing
+            // to blend a translucent fill with; it just reads as pale).
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.background.copy(alpha = 0.94f)),
+                .shadow(2.dp)
+                .background(MaterialTheme.colorScheme.surface),
         ) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")

@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -118,9 +119,17 @@ fun ScreenScaffold(
             title,
             style = MaterialTheme.typography.headlineMedium,
             color = MaterialTheme.colorScheme.onBackground,
+            // Opaque surface (the same white every card/list-row in this app
+            // already uses), not a translucent wash of the canvas color — a
+            // thin bar inset in a padded column has no strong texture behind
+            // it to blend with, so translucency just read as a flat, oddly
+            // pale rectangle. A soft shadow (no border — this app's own
+            // white nav drawer/menu button use the same look) gives it
+            // enough separation from scrolled content instead.
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.background.copy(alpha = 0.94f))
+                .shadow(2.dp)
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(start = if (hasMenuButton) 66.dp else 20.dp, end = 20.dp)
                 .padding(top = if (hasMenuButton) 12.dp else 58.dp, bottom = 6.dp),
         )

@@ -4609,23 +4609,32 @@ input[type="file"]::file-selector-button:hover {
   animation: view-in var(--dur-lg) var(--ease-out);
 }
 
-/* ---- Sticky glass header bars --------------------------------------------
-   Each view's title/header bar is a REAL sticky bar with a backdrop-filter
-   blur — not a decorative strip drawn separately inside the scrolling
-   content. An earlier version used a `::before` pseudo-element pinned to
-   the top of each list's own scrollport for this, which put the blurred
-   band wherever that scrollport happened to start — visually disconnected
-   from the actual header/title above it (the same bug reported on iOS:
-   the blur landed partway down the content, not merged with the app bar).
-   Fixed by making the header itself the sticky element, inside the SAME
-   scrolling box as the content below it: `.conversation-pane`,
+/* ---- Sticky header bars ---------------------------------------------------
+   Each view's title/header bar is a REAL sticky bar — not a decorative strip
+   drawn separately inside the scrolling content. An earlier version used a
+   `::before` pseudo-element pinned to the top of each list's own scrollport
+   for this, which put the fade wherever that scrollport happened to start —
+   visually disconnected from the actual header/title above it (the same bug
+   reported on iOS: the blur landed partway down the content, not merged
+   with the app bar). Fixed by making the header itself the sticky element,
+   inside the SAME scrolling box as the content below it: `.conversation-pane`,
    `.channel-pane`, and `.view-scroll` are now the actual scrollports
    (overflow-y: auto) for their view, with the header as their first child,
-   `position: sticky`, so real content scrolls up and passes BEHIND the
-   header, blurred, the way a native nav bar (and the iOS/Android
-   counterparts of this same fix) works. Margin-bottom is converted to
-   padding-bottom on each header so that gap is part of the sticky element's
-   own painted (and blurred) box, not a transparent seam below it. */
+   `position: sticky`.
+
+   The header is opaque (--surface, the same white every card/list-row in
+   this app already uses), not the translucent --glass/--glass-strong
+   tokens: those are for floating panels (side panel, tool viewer) that are
+   meant to read as distinct elevated chrome over the page. This header sits
+   INSET in a padded column, not edge-to-edge like a native OS bar — a
+   translucent patch there had no strong texture behind it to blend with and
+   just looked like a flat white rectangle dropped on the canvas, glass or
+   not. Solid + a soft ambient shadow (no hard border/hairline — matches
+   every other card's elevation in this app) reads as deliberate chrome
+   instead. Content is fully hidden behind it when scrolled, not blurred.
+   Margin-bottom is converted to padding-bottom on each header so that gap
+   is part of the sticky element's own painted box, not a transparent seam
+   below it that would let scrolled content peek through. */
 .conversation-pane,
 .channel-pane {
   overflow-y: auto;
@@ -4646,9 +4655,8 @@ input[type="file"]::file-selector-button:hover {
   top: 0;
   z-index: 2;
   flex: none;
-  background: var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 .conversation-pane > .view-header,
 .view-scroll > .view-header {
