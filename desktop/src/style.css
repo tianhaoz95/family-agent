@@ -4622,19 +4622,20 @@ input[type="file"]::file-selector-button:hover {
    (overflow-y: auto) for their view, with the header as their first child,
    `position: sticky`.
 
-   The header is opaque (--surface, the same white every card/list-row in
-   this app already uses), not the translucent --glass/--glass-strong
-   tokens: those are for floating panels (side panel, tool viewer) that are
-   meant to read as distinct elevated chrome over the page. This header sits
-   INSET in a padded column, not edge-to-edge like a native OS bar — a
-   translucent patch there had no strong texture behind it to blend with and
-   just looked like a flat white rectangle dropped on the canvas, glass or
-   not. Solid + a soft ambient shadow (no hard border/hairline — matches
-   every other card's elevation in this app) reads as deliberate chrome
-   instead. Content is fully hidden behind it when scrolled, not blurred.
-   Margin-bottom is converted to padding-bottom on each header so that gap
-   is part of the sticky element's own painted box, not a transparent seam
-   below it that would let scrolled content peek through. */
+   The header stays fully transparent — no fill at all — for as long as its
+   scrollport is at rest (scrollTop === 0): it's just page canvas at that
+   point, nothing to separate it from. A background here regardless of
+   scroll state (tried both translucent --glass and opaque --surface) always
+   looked like a flat white patch dropped on the warm/gradient canvas, since
+   this bar sits INSET in a padded column, not edge-to-edge like a native OS
+   bar, and there's nothing behind it yet to actually need separating from.
+   `main.ts` adds `.is-scrolled` to the scrollport (a plain scroll listener)
+   the moment there's real content to hide behind the header, and that's
+   the ONLY time it gains a background + soft shadow (no border/hairline) —
+   the same "header appears on scroll" pattern many native apps and sites
+   use. Margin-bottom is converted to padding-bottom on each header so that
+   gap is part of the sticky element's own painted box once it has one, not
+   a transparent seam below it that would let scrolled content peek through. */
 .conversation-pane,
 .channel-pane {
   overflow-y: auto;
@@ -4655,6 +4656,12 @@ input[type="file"]::file-selector-button:hover {
   top: 0;
   z-index: 2;
   flex: none;
+  transition: background-color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out);
+}
+.conversation-pane.is-scrolled > .view-header,
+.view-scroll.is-scrolled > .view-header,
+.channel-pane.is-scrolled > .channel-pane-head,
+.conversation-pane.is-scrolled .conversation-head {
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }

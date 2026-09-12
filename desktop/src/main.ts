@@ -7377,6 +7377,17 @@ async function pollMessageSteps(messageId: string, strip: HTMLElement): Promise<
 
 void boot();
 
+// Sticky header bars (Chat/Messages/Documents/Tools/Activity's title rows —
+// see style.css's "Sticky header bars") only gain a background + shadow
+// once their scrollport has actually scrolled — at rest they're fully
+// transparent, since a background there regardless of scroll state just
+// looked like a flat white patch dropped on the canvas. These elements are
+// static (present in the DOM from page load, just hidden/shown per view),
+// so one listener per scrollport, wired once here, covers every view.
+document.querySelectorAll(".conversation-pane, .channel-pane, .view-scroll").forEach((el) => {
+  el.addEventListener("scroll", () => el.classList.toggle("is-scrolled", el.scrollTop > 0), { passive: true });
+});
+
 // Tell the index.html watchdog the module evaluated — no reload needed.
 (window as unknown as Record<string, unknown>).__mainLoaded = true;
 try {
