@@ -15,50 +15,64 @@ struct ConversationView: View {
 
     private let mentionNames: Set<String> = ["agent", "ai", "assistant"]
 
+    // Matches this header's actual rendered height (.appTitle() + its
+    // paddings) — same "measure once, hardcode, document" approach as
+    // ScreenScaffold's headerHeight.
+    private let headerHeight: CGFloat = 44
+
     var body: some View {
         VStack(spacing: 0) {
-            // Custom header (Android has no app bar): back + title + delete + divider.
-            HStack(spacing: 4) {
-                Button { model.closeChannel(); onBack() } label: {
-                    Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
-                }
-                Text((model.activeChannel?.title).flatMap { $0.isEmpty ? nil : $0 } ?? "Conversation")
-                    .appTitle().foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                Spacer()
-                Button { showDelete = true } label: {
-                    Image(systemName: "trash").font(.system(size: 16))
-                }
-            }
-            .foregroundStyle(Theme.accentInk)
-            .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8)
-            Divider()
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(model.channelMessages) { m in
-                            MessageBubble(message: m,
-                                          isMe: m.senderId == model.currentUser?.id,
-                                          senderName: name(for: m.senderId),
-                                          ttsEnabled: model.ttsEnabled,
-                                          speakingText: model.speakingText,
-                                          loadingText: model.speakLoadingText,
-                                          onSpeak: model.speak,
-                                          onStepsTap: { model.showStepsDetail($0) },
-                                          onCardSource: { model.showCardSource($0) })
-                            .id(m.id)
+            // The header floats in front of the transcript (a ZStack overlay,
+            // not a row above it) with a translucent background, so messages
+            // dissolve into blur as they scroll up underneath it — real bar
+            // chrome the content passes behind, not a fade drawn inside the
+            // scrollport. The bottom hairline from .topBarMaterial() replaces
+            // the old plain Divider().
+            ZStack(alignment: .top) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(model.channelMessages) { m in
+                                MessageBubble(message: m,
+                                              isMe: m.senderId == model.currentUser?.id,
+                                              senderName: name(for: m.senderId),
+                                              ttsEnabled: model.ttsEnabled,
+                                              speakingText: model.speakingText,
+                                              loadingText: model.speakLoadingText,
+                                              onSpeak: model.speak,
+                                              onStepsTap: { model.showStepsDetail($0) },
+                                              onCardSource: { model.showCardSource($0) })
+                                .id(m.id)
+                            }
                         }
+                        .padding(16)
+                        .padding(.top, headerHeight)
                     }
-                    .padding(16)
+                    // Drag the transcript down to dismiss the keyboard (iPhone has no
+                    // hardware dismiss); a "Done" key above the keyboard also works.
+                    .scrollDismissesKeyboard(.interactively)
+                    .onChange(of: model.channelMessages.count) { _, _ in
+                        withAnimation { proxy.scrollTo(model.channelMessages.last?.id, anchor: .bottom) }
+                    }
                 }
-                // Drag the transcript down to dismiss the keyboard (iPhone has no
-                // hardware dismiss); a "Done" key above the keyboard also works.
-                .scrollDismissesKeyboard(.interactively)
-                .onChange(of: model.channelMessages.count) { _, _ in
-                    withAnimation { proxy.scrollTo(model.channelMessages.last?.id, anchor: .bottom) }
+
+                // Custom header (Android has no app bar): back + title + delete.
+                HStack(spacing: 4) {
+                    Button { model.closeChannel(); onBack() } label: {
+                        Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
+                    }
+                    Text((model.activeChannel?.title).flatMap { $0.isEmpty ? nil : $0 } ?? "Conversation")
+                        .appTitle().foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                    Spacer()
+                    Button { showDelete = true } label: {
+                        Image(systemName: "trash").font(.system(size: 16))
+                    }
                 }
-                .overlay(alignment: .top) { TopScrollFade() }
+                .foregroundStyle(Theme.accentInk)
+                .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .topBarMaterial()
             }
 
             if !attached.isEmpty {

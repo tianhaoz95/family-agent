@@ -44,6 +44,22 @@ extension View {
         }
     }
 
+    /// A full-bleed translucent bar background — a top app-bar's title row,
+    /// a chat header — so content scrolling underneath it is visibly
+    /// blurred through it, the way Apple's own nav bars (and Claude's own
+    /// app) work. Unlike `.glass(_:in:)` this isn't clipped to a floating
+    /// card shape with a border (a bar spans edge to edge); just the
+    /// material, plus a bottom hairline for definition against the content
+    /// scrolling behind it. Same material on every OS version — a plain top
+    /// bar doesn't need the iOS 26 `glassEffect` treatment `.glass()` uses
+    /// for floating/interactive chrome.
+    @ViewBuilder
+    func topBarMaterial() -> some View {
+        self
+            .background(.ultraThinMaterial)
+            .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 0.5) }
+    }
+
     /// Group child glass shapes so they merge/morph (iOS 26 `GlassEffectContainer`).
     /// No-op below 26.
     @ViewBuilder

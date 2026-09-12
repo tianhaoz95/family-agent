@@ -2,39 +2,25 @@ import SwiftUI
 
 // Shared UI pieces — the iOS mirror of `android/.../ui/Components.kt`.
 
-// MARK: - TopScrollFade
-
-/// A soft blur-into-fade strip pinned to the top of a scrolling transcript —
-/// content dissolves into the header as it scrolls up underneath, the same
-/// idea as the Claude app's chat view. Non-interactive; drop it in as a
-/// `.overlay(alignment: .top)` on the ScrollView. Used by Chat and Messages.
-struct TopScrollFade: View {
-    var height: CGFloat = 26
-    var body: some View {
-        Rectangle()
-            .fill(.ultraThinMaterial)
-            .mask(LinearGradient(colors: [.black, .black.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom))
-            .frame(height: height)
-            .frame(maxWidth: .infinity, alignment: .top)
-            .allowsHitTesting(false)
-    }
-}
-
 // MARK: - ScreenScaffold
 
 /// Standard screen frame: a title, an editorial serif subtitle, then content.
 /// Transparent — the `Atmosphere` gradient shows through.
 ///
-/// The title is a **fixed** header, not part of the scrollable body: MainShell's
-/// floating menu button is a ZStack overlay at a fixed position, oblivious to
-/// any scroll offset. Older versions of this view put the title inside the
-/// same ScrollView as the content (each screen wrapped the whole thing in its
-/// own `ScrollView { ScreenScaffold(...) { ... } }`) — as soon as the screen
-/// scrolled even slightly, the title (now above the reserved top inset) moved
-/// up underneath the button and was covered by it. This makes every
-/// ScreenScaffold user do the same thing by construction — the caller no
-/// longer wraps it in its own ScrollView; only `subtitle` + `content` scroll
-/// under the fixed title.
+/// The title is a **floating bar**, not part of the scrollable body — it sits
+/// in front of the ScrollView (a ZStack overlay, not a row above it in a
+/// VStack) with a translucent material background, so content dissolves into
+/// blur as it scrolls up underneath, the same way Apple's own nav bars (and
+/// Claude's own app) work: the bar is real chrome the content passes behind,
+/// not a decorative fade drawn inside the scrollport. `content`/`subtitle`
+/// get top padding equal to `headerHeight` so they start right below the bar
+/// at rest. (An earlier version drew a separate blurred fade strip pinned to
+/// the top of the ScrollView itself, floating in the middle of the content
+/// rather than merged with the title bar — this replaces that.)
+///
+/// MainShell's floating menu button is a ZStack overlay at a fixed position,
+/// oblivious to any scroll offset — the title bar sits above it (same
+/// z-order relationship as before), and both are unaffected by scrolling.
 ///
 /// The title sits on the **same row** as that floating button — a leading
 /// inset clears it (46pt, plus the base 20pt horizontal padding = 66pt from
@@ -50,6 +36,8 @@ struct TopScrollFade: View {
 /// case that surfaces this: inside a ScrollView, GeometryReader has no
 /// incoming height constraint to report and collapses to a sliver, so the
 /// board rendered as a short card with notes spilling out past its edge.
+/// The title bar still floats above it (for visual consistency across every
+/// screen), even though nothing scrolls underneath it there.
 ///
 /// Set `hasMenuButton: false` for a screen shown before MainShell ever mounts
 /// (LoginView, DiscoveryView — there's no drawer or floating button yet
@@ -64,28 +52,37 @@ struct ScreenScaffold<Content: View>: View {
     var hasMenuButton: Bool = true
     @ViewBuilder var content: Content
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(title).appHeadline().foregroundStyle(Theme.text)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 20)
-                .padding(.leading, hasMenuButton ? 46 : 0) // clears MainShell's floating menu button
-                .padding(.top, hasMenuButton ? 12 : 58)
-                .padding(.bottom, 6)
+    // Tuned to the title bar's actual rendered height (appHeadline's 30pt
+    // bold + the paddings below) — same "measure once, hardcode, document"
+    // approach as the 46pt/66pt button-clearance numbers above, verified
+    // against a real simulator screenshot rather than computed at runtime
+    // (avoids a measure-then-relayout flash on first appearance).
+    private var headerHeight: CGFloat { hasMenuButton ? 58 : 104 }
 
+    var body: some View {
+        ZStack(alignment: .top) {
             if scrollable {
                 ScrollView {
                     body(fillHeight: false)
                 }
-                // Content dissolves into the title as it scrolls up
-                // underneath — the same trick Chat/Messages introduced,
-                // standardized here so every scrollable screen gets it.
-                .overlay(alignment: .top) { TopScrollFade() }
             } else {
                 body(fillHeight: true)
             }
+
+            titleBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var titleBar: some View {
+        Text(title).appHeadline().foregroundStyle(Theme.text)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 20)
+            .padding(.leading, hasMenuButton ? 46 : 0) // clears MainShell's floating menu button
+            .padding(.top, hasMenuButton ? 12 : 58)
+            .padding(.bottom, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .topBarMaterial()
     }
 
     @ViewBuilder
@@ -103,6 +100,7 @@ struct ScreenScaffold<Content: View>: View {
             content
         }
         .padding(.horizontal, 20)
+        .padding(.top, headerHeight)
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity, maxHeight: fillHeight ? .infinity : nil, alignment: .topLeading)
     }

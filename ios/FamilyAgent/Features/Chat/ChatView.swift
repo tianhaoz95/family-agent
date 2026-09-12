@@ -26,52 +26,63 @@ struct ChatView: View {
     @State private var showSlashHelp = false
     @FocusState private var composerFocused: Bool
 
+    // Matches ScreenScaffold's headerHeight for hasMenuButton: true — same
+    // title style (.appHeadline()) and paddings (12 top, 6 bottom).
+    private let headerHeight: CGFloat = 58
+
     var body: some View {
         VStack(spacing: 0) {
-            header
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        if model.chatMessages.isEmpty && !model.chatSending {
-                            EmptyState(
-                                text: "Start a conversation. Try \u{201C}Remind me to renew the car registration by Nov 1\u{201D}, or attach a photo.",
-                                systemImage: "bubble.left.and.bubble.right"
-                            )
-                            .padding(.top, 40)
-                        }
-                        ForEach(model.chatMessages) { msg in
-                            ChatBubble(message: msg,
-                                       ttsEnabled: model.ttsEnabled,
-                                       speakingText: model.speakingText,
-                                       loadingText: model.speakLoadingText,
-                                       onSpeak: model.speak,
-                                       onStepsTap: { model.showStepsDetail($0) },
-                                       onCardSource: { model.showCardSource($0) },
-                                       onReference: { model.openReferenceDetail($0) })
-                            .id(msg.id)
-                        }
-                        if model.chatSending {
-                            if !model.chatLiveSteps.isEmpty {
-                                StepsStrip(steps: model.chatLiveSteps, live: true) {
-                                    model.showStepsDetail(model.chatLiveSteps)
-                                }
+            // The header floats in front of the transcript (a ZStack overlay,
+            // not a row above it) with a translucent background, so messages
+            // dissolve into blur as they scroll up underneath it — real bar
+            // chrome the content passes behind, not a fade drawn inside the
+            // scrollport. See ScreenScaffold's doc comment for the fuller story.
+            ZStack(alignment: .top) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            if model.chatMessages.isEmpty && !model.chatSending {
+                                EmptyState(
+                                    text: "Start a conversation. Try \u{201C}Remind me to renew the car registration by Nov 1\u{201D}, or attach a photo.",
+                                    systemImage: "bubble.left.and.bubble.right"
+                                )
+                                .padding(.top, 40)
                             }
-                            TypingDots().id("typing")
+                            ForEach(model.chatMessages) { msg in
+                                ChatBubble(message: msg,
+                                           ttsEnabled: model.ttsEnabled,
+                                           speakingText: model.speakingText,
+                                           loadingText: model.speakLoadingText,
+                                           onSpeak: model.speak,
+                                           onStepsTap: { model.showStepsDetail($0) },
+                                           onCardSource: { model.showCardSource($0) },
+                                           onReference: { model.openReferenceDetail($0) })
+                                .id(msg.id)
+                            }
+                            if model.chatSending {
+                                if !model.chatLiveSteps.isEmpty {
+                                    StepsStrip(steps: model.chatLiveSteps, live: true) {
+                                        model.showStepsDetail(model.chatLiveSteps)
+                                    }
+                                }
+                                TypingDots().id("typing")
+                            }
                         }
+                        .padding(16)
+                        .padding(.top, headerHeight)
                     }
-                    .padding(16)
+                    // Drag the transcript down to dismiss the keyboard (iPhone has no
+                    // hardware dismiss); a "Done" key above the keyboard also works.
+                    .scrollDismissesKeyboard(.interactively)
+                    .onChange(of: model.chatMessages.count) { _, _ in
+                        withAnimation { proxy.scrollTo(model.chatMessages.last?.id, anchor: .bottom) }
+                    }
+                    .onChange(of: model.chatSending) { _, sending in
+                        if sending { withAnimation { proxy.scrollTo("typing", anchor: .bottom) } }
+                    }
                 }
-                // Drag the transcript down to dismiss the keyboard (iPhone has no
-                // hardware dismiss); a "Done" key above the keyboard also works.
-                .scrollDismissesKeyboard(.interactively)
-                .onChange(of: model.chatMessages.count) { _, _ in
-                    withAnimation { proxy.scrollTo(model.chatMessages.last?.id, anchor: .bottom) }
-                }
-                .onChange(of: model.chatSending) { _, sending in
-                    if sending { withAnimation { proxy.scrollTo("typing", anchor: .bottom) } }
-                }
-                .overlay(alignment: .top) { TopScrollFade() }
+
+                header
             }
 
             if !attached.isEmpty {
@@ -122,6 +133,8 @@ struct ChatView: View {
         .padding(.leading, 46)
         .padding(.top, 12)
         .padding(.bottom, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .topBarMaterial()
     }
 
     private func headerIcon(_ name: String, _ action: @escaping () -> Void) -> some View {
