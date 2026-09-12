@@ -19,6 +19,7 @@ struct BoardView: View {
     @Environment(AppModel.self) private var model
     @State private var editing: StickyNote?
     @State private var showDraw = false
+    @State private var showPhotoPicker = false
     @State private var photoItem: PhotosPickerItem?
     @State private var boardZoom: Double = {
         let saved = UserDefaults.standard.double(forKey: BOARD_ZOOM_KEY)
@@ -48,11 +49,19 @@ struct BoardView: View {
                                 model.addBlankNote(x: x, y: y) { editing = $0 }
                             } label: { Label("Text note", systemImage: "text.alignleft") }
                             Button { showDraw = true } label: { Label("Draw", systemImage: "scribble") }
-                            PhotosPicker(selection: $photoItem, matching: .images) {
-                                Label("Photo", systemImage: "photo")
-                            }
+                            // Not a PhotosPicker directly in the menu's content —
+                            // Menu renders its items as a native UIMenu, and a
+                            // PhotosPicker nested inside one doesn't reliably
+                            // present (its own sheet-trigger gets swallowed by
+                            // the menu's action-cell tap instead of firing
+                            // normally). A plain button flips a flag instead,
+                            // and .photosPicker(isPresented:) below is attached
+                            // outside the menu, on a view that's actually part
+                            // of the live hierarchy either way.
+                            Button { showPhotoPicker = true } label: { Label("Photo", systemImage: "photo") }
                         } label: { Label("Add", systemImage: "plus") }
                         .buttonStyle(.ghost)
+                        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
                     }
 
                     GeometryReader { geo in
