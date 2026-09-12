@@ -42,4 +42,22 @@ describe("note tools", () => {
     const out = (await find("list_sticky_notes").invoke({ scope: "shared" })) as string;
     expect(out.toLowerCase()).toContain("no sticky notes");
   });
+
+  it("attributes each shared note to who added it, so a summary can say what another family member added", async () => {
+    const raw = new Store(":memory:");
+    const dad = raw.createUser({ username: "dad", displayName: "Dad", password: "sekret123" });
+    const kid = raw.createUser({ username: "kid", displayName: "Kid", password: "sekret123" });
+    const dadStore = raw.scoped(dad.id);
+    const kidStore = raw.scoped(kid.id);
+    const dadTools = makeNoteTools(dadStore);
+    const kidTools = makeNoteTools(kidStore);
+
+    await dadTools.find((t) => t.name === "add_sticky_note")!.invoke({ scope: "shared", text: "Buy milk" });
+    await kidTools.find((t) => t.name === "add_sticky_note")!.invoke({ scope: "shared", text: "Feed the cat" });
+
+    // Either family member reading the shared board sees who pinned what.
+    const seenByDad = (await dadTools.find((t) => t.name === "list_sticky_notes")!.invoke({ scope: "shared" })) as string;
+    expect(seenByDad).toContain("Buy milk — added by Dad");
+    expect(seenByDad).toContain("Feed the cat — added by Kid");
+  });
 });

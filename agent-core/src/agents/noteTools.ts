@@ -19,14 +19,22 @@ export function makeNoteTools(store: ScopedStore) {
         `Read the ${want} sticky note board${want === "all" ? "s" : ""} — ${notes.length} note(s)`
       );
       if (notes.length === 0) return `No sticky notes on the ${want} board.`;
+      // Attribute each note to who added it — the shared board is the one
+      // place someone can ask "what has everyone else pinned up" and expect
+      // a real answer, not just a flat text dump with no idea whose note is
+      // whose. A private note's user_id is always the caller themselves, so
+      // this is harmless there too (and cheap: one query, not one per note).
+      const names = new Map(store.listFamilyMembers().map((m) => [m.id, m.displayName]));
       return notes
-        .map((n) => `- [${n.scope}] ${n.text} (id: ${n.id})`)
+        .map((n) => `- [${n.scope}] ${n.text} — added by ${names.get(n.userId) ?? "someone"} (id: ${n.id})`)
         .join("\n");
     },
     {
       name: "list_sticky_notes",
       description:
-        "Read the family's sticky notes. 'shared' is the whole-family board, 'private' is the current person's own board, 'all' (default) is both. Use this to answer 'what's on the board / the fridge / our notes'.",
+        "Read the family's sticky notes, each with who added it. 'shared' is the whole-family board, " +
+        "'private' is the current person's own board, 'all' (default) is both. Use this to answer " +
+        "'what's on the board / the fridge / our notes' or 'summarize what everyone's added to the board'.",
       schema: z.object({
         scope: z.enum(["shared", "private", "all"]).optional(),
       }),

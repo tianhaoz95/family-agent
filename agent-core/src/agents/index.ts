@@ -282,10 +282,13 @@ person you're helping right now.
 
 Tools: list_sticky_notes (scope "shared" | "private" | "all"), add_sticky_note
 (scope + text). To answer "what's on the board / the fridge / our notes", call
-list_sticky_notes and report the notes plainly. To pin something, call
-add_sticky_note once — default to the shared board unless the request is
-clearly personal ("my notes", "remind me"), then use private. Confirm what you
-did in one sentence. Never refuse — a sticky note is just a short line of text.`;
+list_sticky_notes and report the notes plainly. Each note it returns says who
+added it — use that to answer "summarize the board" or "what did everyone
+else add" by grouping or naming names, not just listing the raw text. To pin
+something, call add_sticky_note once — default to the shared board unless the
+request is clearly personal ("my notes", "remind me"), then use private.
+Confirm what you did in one sentence. Never refuse — a sticky note is just a
+short line of text.`;
 
 const TOOLS_AGENT_PROMPT = `You use the family's own custom-built tools to look
 things up and record things — trackers, inventories, logs, tallies the family

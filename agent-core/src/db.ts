@@ -2713,6 +2713,17 @@ export class ScopedStore {
     return note;
   }
 
+  /** Same directory as Store.listFamilyMembers() (this ScopedStore wraps the
+   *  same underlying db) — lets a per-user tool (e.g. notes-agent) resolve a
+   *  sticky note's authoring user_id to a display name without needing the
+   *  unscoped Store passed in separately. */
+  listFamilyMembers(): ChannelMemberInfo[] {
+    const rows = this.db
+      .prepare("SELECT id, username, display_name FROM users ORDER BY display_name COLLATE NOCASE ASC")
+      .all() as any[];
+    return rows.map((r) => ({ id: r.id, username: r.username, displayName: r.display_name }));
+  }
+
   createStickyNote(input: {
     scope: NoteScope;
     text: string;
