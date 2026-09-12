@@ -638,7 +638,6 @@
             </label>
             <label class="field" id="settings-provider-openai-key-row" hidden>API key
               <input id="settings-provider-openai-key" type="password" placeholder="Paste the server's API key (often unused)" autocomplete="off" />
-              <button type="submit" form="settings-provider-form">Save</button>
             </label>
             <div id="settings-provider-mistralrs-rows" hidden>
               <label class="field">Hugging Face model id or local path
@@ -650,7 +649,6 @@
               <label class="field">In-situ quantization bits (non-GGUF path only)
                 <input id="settings-provider-mistralrs-isq" type="number" min="1" max="8" placeholder="4" />
               </label>
-              <button type="submit" form="settings-provider-form">Save</button>
             </div>
             <p id="settings-provider-status" class="settings-hint" role="status"></p>
 
@@ -788,7 +786,6 @@
                 <option value="tavily">On — Tavily (API key)</option>
                 <option value="brave">On — Brave Search (API key)</option>
               </select>
-              <button type="submit">Save</button>
             </form>
             <label class="field" id="settings-web-url-row" hidden>SearXNG URL
               <input id="settings-web-url" type="url" placeholder="http://localhost:8888" />

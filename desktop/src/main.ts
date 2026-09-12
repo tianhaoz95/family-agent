@@ -4494,10 +4494,8 @@ function syncWebProviderRows() {
   settingsWebUrlRow.hidden = p !== "searxng";
   settingsWebKeyRow.hidden = p !== "tavily" && p !== "brave";
 }
-settingsWebProviderSelect.addEventListener("change", syncWebProviderRows);
 
-settingsWebForm.addEventListener("submit", (e) => {
-  e.preventDefault();
+function saveWebAccess() {
   const provider = settingsWebProviderSelect.value as SettingsPatch["webSearchProvider"];
   const patch: SettingsPatch = { webSearchProvider: provider };
   if (provider === "searxng") patch.webSearchUrl = settingsWebUrlInput.value.trim();
@@ -4510,6 +4508,33 @@ settingsWebForm.addEventListener("submit", (e) => {
   void saveSetting(patch, settingsWebStatusEl, (s) =>
     s.webEnabled ? `Saved — internet access on (${s.webSearchProvider}).` : "Saved — internet access off."
   );
+}
+
+settingsWebProviderSelect.addEventListener("change", () => {
+  syncWebProviderRows();
+  // A provider needing no extra info (off / keyless) is a complete choice on
+  // its own — save immediately, no separate Save button. One needing a
+  // URL/key isn't complete yet; that field's own edit saves instead, below.
+  const p = settingsWebProviderSelect.value;
+  if (p !== "searxng" && p !== "tavily" && p !== "brave") saveWebAccess();
+});
+
+// Debounced auto-save for the URL/key fields — saves 700ms after the admin
+// stops typing rather than requiring an explicit Save click.
+let webFieldSaveTimer: number | undefined;
+function scheduleWebAccessSave() {
+  window.clearTimeout(webFieldSaveTimer);
+  webFieldSaveTimer = window.setTimeout(saveWebAccess, 700);
+}
+settingsWebUrlInput.addEventListener("input", scheduleWebAccessSave);
+settingsWebKeyInput.addEventListener("input", scheduleWebAccessSave);
+
+// Enter key in either field still saves immediately (no submit button left
+// to click, but the form itself still submits on Enter).
+settingsWebForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  window.clearTimeout(webFieldSaveTimer);
+  saveWebAccess();
 });
 
 // Model provider — additive, not exclusive (see the HTML hint). Same
@@ -4521,10 +4546,7 @@ function syncProviderRows() {
   settingsProviderOpenaiKeyRow.hidden = p !== "openai";
   settingsProviderMistralrsRows.hidden = p !== "mistralrs";
 }
-settingsProviderSelect.addEventListener("change", syncProviderRows);
-
-settingsProviderForm.addEventListener("submit", (e) => {
-  e.preventDefault();
+function saveModelProvider() {
   const provider = settingsProviderSelect.value as SettingsPatch["modelProvider"];
   const patch: SettingsPatch = { modelProvider: provider };
   if (provider === "openai") {
@@ -4548,6 +4570,39 @@ settingsProviderForm.addEventListener("submit", (e) => {
     }
     return `Saved — chat model provider is ${s.modelProvider}.`;
   });
+}
+
+settingsProviderSelect.addEventListener("change", () => {
+  syncProviderRows();
+  const p = settingsProviderSelect.value;
+  // Ollama needs nothing further; mistral.rs already has working defaults
+  // filled in — both save immediately. OpenAI-compatible needs a base URL
+  // typed first, so its fields save themselves instead, below.
+  if (p === "ollama" || p === "mistralrs") saveModelProvider();
+});
+
+// Debounced auto-save for the per-provider fields — saves 700ms after the
+// admin stops typing rather than requiring an explicit Save click.
+let providerFieldSaveTimer: number | undefined;
+function scheduleModelProviderSave() {
+  window.clearTimeout(providerFieldSaveTimer);
+  providerFieldSaveTimer = window.setTimeout(saveModelProvider, 700);
+}
+for (const el of [
+  settingsProviderOpenaiUrlInput,
+  settingsProviderOpenaiModelInput,
+  settingsProviderOpenaiKeyInput,
+  settingsProviderMistralrsModelInput,
+  settingsProviderMistralrsGgufInput,
+  settingsProviderMistralrsIsqInput,
+]) el.addEventListener("input", scheduleModelProviderSave);
+
+// Enter key in any field still saves immediately (no submit button left to
+// click, but the form itself still submits on Enter).
+settingsProviderForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  window.clearTimeout(providerFieldSaveTimer);
+  saveModelProvider();
 });
 
 settingsServerNameForm.addEventListener("submit", (e) => {

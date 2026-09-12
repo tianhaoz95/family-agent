@@ -246,6 +246,14 @@ private struct InternetAccessSection: View {
     @State private var url = ""
     @State private var apiKey = ""
     @State private var status: String?
+    @State private var saveTask: Task<Void, Never>?
+    // Guards the .onChange handlers below against firing from .onAppear's
+    // own initial assignment (loading the saved provider/URL into state is
+    // not a user edit) — without it, opening this screen would fire a
+    // spurious, idempotent save and briefly flash "Saving…".
+    @State private var hasLoaded = false
+
+    private static let needsCompanionField: Set<String> = ["searxng", "tavily", "brave"]
 
     private var editable: Bool { settings.isAdmin && !settings.envLocked.webSearchProvider }
 
@@ -261,31 +269,37 @@ private struct InternetAccessSection: View {
             }
             .pickerStyle(.menu)
             .disabled(!editable)
+            .onChange(of: provider) { _, newValue in
+                guard hasLoaded else { return }
+                // A provider that needs no extra info (off / keyless) is a
+                // complete choice on its own — save immediately, no separate
+                // Save button. One that needs a URL/key isn't complete yet;
+                // that field's own edit triggers the save instead, below.
+                if !Self.needsCompanionField.contains(newValue) { save() }
+            }
 
             if provider == "searxng" {
                 TextField("SearXNG URL — http://localhost:8888", text: $url)
                     .textFieldStyle(.app)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .disabled(!editable)
+                    .onSubmit { save() }
+                    .onChange(of: url) { _, _ in
+                        guard hasLoaded else { return }
+                        scheduleSave()
+                    }
             }
             if provider == "tavily" || provider == "brave" {
                 SecureField(settings.webSearchApiKeySet ? "A key is saved — type to replace" : "Paste the provider API key",
                             text: $apiKey)
                     .textFieldStyle(.app)
                     .disabled(!editable)
+                    .onSubmit { save() }
+                    .onChange(of: apiKey) { _, _ in
+                        guard hasLoaded else { return }
+                        scheduleSave()
+                    }
             }
-
-            Button("Save") {
-                status = "Saving…"
-                model.setWebAccess(
-                    provider: provider,
-                    url: provider == "searxng" ? url.trimmingCharacters(in: .whitespaces) : nil,
-                    apiKey: (provider == "tavily" || provider == "brave") && !apiKey.isEmpty
-                        ? apiKey.trimmingCharacters(in: .whitespaces) : nil)
-                status = provider == "none" ? "Off — no internet access." : "On — searching with \(provider)."
-            }
-            .buttonStyle(.primary)
-            .disabled(!editable)
 
             Text(status ?? hint)
                 .appLabelSmall().foregroundStyle(Theme.textMuted)
@@ -293,7 +307,29 @@ private struct InternetAccessSection: View {
         .onAppear {
             provider = settings.webSearchProvider
             url = settings.webSearchUrl
+            hasLoaded = true
         }
+    }
+
+    /// Debounced so typing a URL/key doesn't fire a save on every keystroke.
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(for: .seconds(0.7))
+            guard !Task.isCancelled else { return }
+            save()
+        }
+    }
+
+    private func save() {
+        guard editable else { return }
+        status = "Saving…"
+        model.setWebAccess(
+            provider: provider,
+            url: provider == "searxng" ? url.trimmingCharacters(in: .whitespaces) : nil,
+            apiKey: (provider == "tavily" || provider == "brave") && !apiKey.isEmpty
+                ? apiKey.trimmingCharacters(in: .whitespaces) : nil)
+        status = provider == "none" ? "Off — no internet access." : "On — searching with \(provider)."
     }
 
     private var hint: String {

@@ -16,6 +16,7 @@ import app.familyagent.android.ConnectionStatus
 import app.familyagent.android.ReplyNotifications
 import app.familyagent.android.data.ServerSettings
 import app.familyagent.android.ui.theme.AppAccents
+import kotlinx.coroutines.delay
 
 @Composable
 fun SettingsScreen(
@@ -340,6 +341,23 @@ private fun InternetAccessSection(
     var apiKey by remember(s.webSearchApiKeySet) { mutableStateOf("") }
     var status by remember { mutableStateOf<String?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
+    // Skips the very first LaunchedEffect firing below, which happens on
+    // initial composition (loading the saved URL into state, not a user
+    // edit) — without it, opening this screen would fire a spurious,
+    // idempotent save.
+    var hasLoaded by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { hasLoaded = true }
+
+    fun save() {
+        status = "Saving…"
+        onSetWebAccess(
+            provider,
+            if (provider == "searxng") url.trim() else null,
+            if ((provider == "tavily" || provider == "brave") && apiKey.isNotBlank()) apiKey.trim() else null,
+            { status = if (provider == "none") "Off — no internet access." else "On — searching with $provider." },
+            { status = it },
+        )
+    }
 
     SectionLabel("Internet access")
     Spacer(Modifier.height(4.dp))
@@ -364,7 +382,19 @@ private fun InternetAccessSection(
         )
         ExposedDropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             WEB_PROVIDERS.forEach { (value, label) ->
-                DropdownMenuItem(text = { Text(label) }, onClick = { provider = value; menuOpen = false })
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        provider = value
+                        menuOpen = false
+                        // A provider needing no extra info (off / keyless) is
+                        // a complete choice on its own — save immediately, no
+                        // separate Save button. One needing a URL/key isn't
+                        // complete yet; that field's own edit saves instead
+                        // (the LaunchedEffect blocks below).
+                        if (value != "searxng" && value != "tavily" && value != "brave") save()
+                    },
+                )
             }
         }
     }
@@ -380,6 +410,13 @@ private fun InternetAccessSection(
             placeholder = { Text("http://localhost:8888") },
             modifier = Modifier.fillMaxWidth(),
         )
+        // Debounced auto-save: a fresh LaunchedEffect cancels the previous
+        // one whenever `url` changes, so typing doesn't save every keystroke.
+        LaunchedEffect(url) {
+            if (!hasLoaded) return@LaunchedEffect
+            delay(700)
+            save()
+        }
     }
     if (provider == "tavily" || provider == "brave") {
         Spacer(Modifier.height(8.dp))
@@ -393,23 +430,12 @@ private fun InternetAccessSection(
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
         )
+        LaunchedEffect(apiKey) {
+            if (!hasLoaded || apiKey.isBlank()) return@LaunchedEffect
+            delay(700)
+            save()
+        }
     }
-
-    Spacer(Modifier.height(10.dp))
-    Button(
-        onClick = {
-            status = "Saving…"
-            onSetWebAccess(
-                provider,
-                if (provider == "searxng") url.trim() else null,
-                if ((provider == "tavily" || provider == "brave") && apiKey.isNotBlank()) apiKey.trim() else null,
-                { status = if (provider == "none") "Off — no internet access." else "On — searching with $provider." },
-                { status = it },
-            )
-        },
-        enabled = editable,
-        shape = MaterialTheme.shapes.medium,
-    ) { Text("Save") }
 
     Spacer(Modifier.height(4.dp))
     Text(
