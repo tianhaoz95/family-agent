@@ -592,6 +592,12 @@ textarea {
 
 /* ---------- Chat ------------------------------------------------------- */
 .chat-log {
+  /* The transcript is its own scrollport — not .conversation-pane (its
+     parent) — so the composer below it, a sibling rather than a descendant,
+     never scrolls away with it. See the "Sticky header bars" comment. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -3257,33 +3263,10 @@ input[type="file"]::file-selector-button:hover {
   justify-content: center;
 }
 /* Chat history sessions reuse the channel-pane/channel-row look — same list
-   shape, minus the unread badge, plus a delete icon revealed on hover. */
-.session-row-delete {
-  grid-row: 1 / 3;
-  grid-column: 2;
-  align-self: center;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--r-md);
-  border: none;
-  background: none;
-  color: var(--text-faint);
-  cursor: pointer;
-}
-.session-row-delete svg {
-  width: 13px;
-  height: 13px;
-}
-.session-row:hover .session-row-delete {
-  display: inline-flex;
-}
-.session-row-delete:hover {
-  color: var(--danger);
-  background: var(--danger-soft);
-}
+   shape, minus the unread badge. Row ops (Delete today) are right-click only
+   (see .context-menu) — a hover-revealed button here used to reserve a grid
+   column that only appeared on hover, reflowing the title/preview text and
+   visibly changing the row's height. */
 
 .conversation-pane {
   flex: 1;
@@ -3296,12 +3279,18 @@ input[type="file"]::file-selector-button:hover {
 .conversation {
   display: flex;
   flex-direction: column;
-  /* min-height, not height: .conversation-pane (its parent) is what scrolls
-     now, so this needs to be able to grow taller than the pane's own
-     viewport when the transcript is long — a fixed height:100% capped it to
-     exactly the pane's size and made overflow (and the sticky header inside
-     it) impossible. */
-  min-height: 100%;
+  /* A real height, not min-height: .conversation-scroll (its child) is what
+     scrolls and needs a bounded ancestor chain to shrink against via its own
+     flex:1;min-height:0 — this used to be min-height:100% back when
+     .conversation-pane (this element's parent) was itself the scrollport,
+     but the composer lived there too and scrolled away with the transcript
+     (see the "Sticky header bars" comment). Now only .conversation-scroll
+     overflows; this element and its composer siblings stay a fixed size. */
+  height: 100%;
+  min-height: 0;
+}
+.conversation-scroll {
+  padding-right: 4px;
 }
 .conversation-head {
   display: flex;
@@ -3468,6 +3457,45 @@ input[type="file"]::file-selector-button:hover {
   height: 17px;
   flex: none;
   color: var(--text-muted);
+}
+
+/* Generic right-click row menu (#context-menu, shared + repositioned per
+   open() call) — same look as .note-add-menu, but position: fixed since
+   main.ts places it at the click point anywhere on screen rather than
+   anchoring it to one relatively-positioned trigger. */
+.context-menu {
+  position: fixed;
+  z-index: 300;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  min-width: 148px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  animation: view-in var(--dur) var(--ease-out);
+}
+.context-menu button {
+  all: unset;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  font-size: 0.85rem;
+  color: var(--text-strong);
+  cursor: pointer;
+}
+.context-menu button:hover,
+.context-menu button:focus-visible {
+  background: var(--accent-soft);
+}
+.context-menu button.is-danger {
+  color: var(--danger);
+}
+.context-menu button.is-danger:hover,
+.context-menu button.is-danger:focus-visible {
+  background: var(--danger-soft);
 }
 .board-zoom {
   display: flex;
@@ -4774,10 +4802,23 @@ input[type="file"]::file-selector-button:hover {
    visually disconnected from the actual header/title above it (the same bug
    reported on iOS: the blur landed partway down the content, not merged
    with the app bar). Fixed by making the header itself the sticky element,
-   inside the SAME scrolling box as the content below it: `.conversation-pane`,
-   `.channel-pane`, and `.view-scroll` are now the actual scrollports
-   (overflow-y: auto) for their view, with the header as their first child,
-   `position: sticky`.
+   inside the SAME scrolling box as the content below it: `.channel-pane`,
+   `.view-scroll`, and (Messages only) `.conversation-scroll` are the actual
+   scrollports (overflow-y: auto) for their view, with the header as their
+   first child, `position: sticky`.
+
+   `.conversation-pane` itself is deliberately NOT one of those scrollports,
+   even though it looks like it should be (it's the column that visually
+   holds everything) — it also holds the composer, and a composer that's
+   just another child of an overflowing ancestor scrolls away with the
+   transcript instead of staying pinned at the bottom (reported: scroll up
+   in Chat/Messages and the input bar disappears). Only the transcript
+   scrolls: Chat's `#chat-log` is its own scrollport directly (it has no
+   header of its own to keep sticky); Messages wraps its header +
+   `#message-log` in `.conversation-scroll` so the header can stay sticky
+   over the messages that scroll beneath it, while `#message-slash-menu` /
+   `#message-attachments` / `#message-form` stay siblings of that wrapper —
+   present in the layout, never inside the scrolling box.
 
    The header stays fully transparent — no fill at all — for as long as its
    scrollport is at rest (scrollTop === 0): it's just page canvas at that
@@ -4793,32 +4834,30 @@ input[type="file"]::file-selector-button:hover {
    use. Margin-bottom is converted to padding-bottom on each header so that
    gap is part of the sticky element's own painted box once it has one, not
    a transparent seam below it that would let scrolled content peek through. */
-.conversation-pane,
 .channel-pane {
   overflow-y: auto;
   min-height: 0;
 }
-.view-scroll {
+.view-scroll,
+.conversation-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
-.conversation-pane > .view-header,
 .view-scroll > .view-header,
 .channel-pane > .channel-pane-head,
-.conversation > .conversation-head {
+.conversation-scroll > .conversation-head {
   position: sticky;
   top: 0;
   z-index: 2;
   flex: none;
   transition: background-color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out);
 }
-.conversation-pane.is-scrolled > .view-header,
 .view-scroll.is-scrolled > .view-header,
 .channel-pane.is-scrolled > .channel-pane-head,
-.conversation-pane.is-scrolled .conversation-head {
+.conversation-scroll.is-scrolled > .conversation-head {
   /* A literal continuation of body::before's own bloom gradient, not a flat
      fill: a solid var(--bg) (or var(--surface), or a translucent white
      glass — all three were tried) still reads as a flat man-made rectangle
@@ -4849,7 +4888,6 @@ input[type="file"]::file-selector-button:hover {
   background-attachment: fixed;
   box-shadow: var(--shadow-sm);
 }
-.conversation-pane > .view-header,
 .view-scroll > .view-header {
   margin-bottom: 0;
   padding-bottom: 24px;
@@ -4858,17 +4896,19 @@ input[type="file"]::file-selector-button:hover {
   margin-bottom: 0;
   padding-bottom: 12px;
 }
-.conversation > .conversation-head {
+.conversation-scroll > .conversation-head {
   margin-bottom: 0;
   padding-bottom: 14px;
 }
 
-/* The centred composer floats a little more and glows on focus. */
+/* The centred composer floats a little more on focus — no accent-ring glow
+   (tried it; a thick blue halo around the whole composer read as an error
+   state, not a nice focus cue). */
 .chat-form {
   transition: box-shadow var(--dur) var(--ease-out), transform var(--dur) var(--ease-out);
 }
 .chat-form:focus-within {
-  box-shadow: var(--shadow-hover), 0 0 0 4px var(--accent-ring);
+  box-shadow: var(--shadow-hover);
   transform: translateY(-1px);
 }
 

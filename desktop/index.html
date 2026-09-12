@@ -175,9 +175,6 @@
               <ul id="chat-session-list" class="channel-list session-list"></ul>
             </div>
             <div class="conversation-pane">
-              <div class="view-header">
-                <p class="view-sub">Ask about tasks, documents, or anything else — routed locally.</p>
-              </div>
               <div id="chat-log" class="chat-log" role="log" aria-live="polite">
                 <div class="chat-empty" id="chat-empty">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 17 0Z"/></svg>
@@ -288,21 +285,23 @@
                 <p class="chat-empty-hint">Type <code>@agent</code> in any conversation to pull in the assistant.</p>
               </div>
               <div id="conversation" class="conversation" hidden>
-                <div class="conversation-head">
-                  <div class="conversation-head-main">
-                    <h2 id="conversation-title"></h2>
-                    <span id="conversation-members" class="view-sub"></span>
+                <div class="conversation-scroll">
+                  <div class="conversation-head">
+                    <div class="conversation-head-main">
+                      <h2 id="conversation-title"></h2>
+                      <span id="conversation-members" class="view-sub"></span>
+                    </div>
+                    <button type="button" id="message-help-btn" class="btn-ghost btn-icon-only" title="Slash commands">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4.9.8c0 1.7-2.4 1.7-2.4 3.5"/><line x1="12" y1="17" x2="12" y2="17.01"/></svg>
+                      <span class="sr-only">Slash commands</span>
+                    </button>
+                    <button type="button" id="conversation-delete" class="btn-ghost conversation-delete" title="Delete this conversation for everyone">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                      <span>Delete</span>
+                    </button>
                   </div>
-                  <button type="button" id="message-help-btn" class="btn-ghost btn-icon-only" title="Slash commands">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4.9.8c0 1.7-2.4 1.7-2.4 3.5"/><line x1="12" y1="17" x2="12" y2="17.01"/></svg>
-                    <span class="sr-only">Slash commands</span>
-                  </button>
-                  <button type="button" id="conversation-delete" class="btn-ghost conversation-delete" title="Delete this conversation for everyone">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
-                    <span>Delete</span>
-                  </button>
+                  <div id="message-log" class="message-log" role="log" aria-live="polite"></div>
                 </div>
-                <div id="message-log" class="message-log" role="log" aria-live="polite"></div>
                 <ul id="message-slash-menu" class="slash-menu" hidden></ul>
                 <div id="message-attachments" class="chat-attachments" hidden></div>
                 <form id="message-form" class="chat-form">
@@ -1051,6 +1050,11 @@
         <p id="voice-overlay-hint" class="voice-overlay-hint">Release to send · slide away to cancel</p>
       </div>
     </div>
+
+    <!-- A generic right-click menu, positioned by JS at the click point and
+         populated per-target — the chat-session list's own row menu today,
+         a home for other per-row ops later. -->
+    <ul id="context-menu" class="context-menu" hidden role="menu"></ul>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

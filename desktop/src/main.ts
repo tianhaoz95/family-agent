@@ -268,6 +268,59 @@ const chatSendBtn = document.getElementById("chat-send-btn") as HTMLButtonElemen
 const chatStopBtn = document.getElementById("chat-stop-btn") as HTMLButtonElement;
 const chatSessionList = document.getElementById("chat-session-list")!;
 const chatSlashMenu = document.getElementById("chat-slash-menu")!;
+const contextMenuEl = document.getElementById("context-menu") as HTMLUListElement;
+
+// ---- generic right-click context menu ----
+// One shared element, repopulated per open() call — a home for any row-level
+// "..." menu (chat sessions today; more can reuse this instead of each
+// growing its own hover-revealed button, which changes row layout on hover).
+interface ContextMenuItem {
+  label: string;
+  danger?: boolean;
+  onSelect: () => void;
+}
+function openContextMenu(x: number, y: number, items: ContextMenuItem[]) {
+  contextMenuEl.innerHTML = "";
+  for (const item of items) {
+    const li = document.createElement("li");
+    li.setAttribute("role", "none");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("role", "menuitem");
+    if (item.danger) btn.classList.add("is-danger");
+    btn.textContent = item.label;
+    btn.addEventListener("click", () => {
+      closeContextMenu();
+      item.onSelect();
+    });
+    li.appendChild(btn);
+    contextMenuEl.appendChild(li);
+  }
+  // Positioned then measured then clamped, so it never runs off the right/
+  // bottom edge of the window when the click lands near it.
+  contextMenuEl.hidden = false;
+  contextMenuEl.style.left = "0px";
+  contextMenuEl.style.top = "0px";
+  const rect = contextMenuEl.getBoundingClientRect();
+  const clampedX = Math.min(x, window.innerWidth - rect.width - 8);
+  const clampedY = Math.min(y, window.innerHeight - rect.height - 8);
+  contextMenuEl.style.left = `${Math.max(8, clampedX)}px`;
+  contextMenuEl.style.top = `${Math.max(8, clampedY)}px`;
+}
+function closeContextMenu() {
+  contextMenuEl.hidden = true;
+}
+document.addEventListener("click", () => closeContextMenu());
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !contextMenuEl.hidden) closeContextMenu();
+});
+document.addEventListener(
+  "scroll",
+  () => {
+    if (!contextMenuEl.hidden) closeContextMenu();
+  },
+  { capture: true, passive: true }
+);
 
 // The active persisted session, if any — null until the first message of a
 // fresh conversation gets a reply and the server hands back a sessionId (see
@@ -1379,14 +1432,17 @@ function renderChatSessionList() {
     li.innerHTML = `
       <span class="channel-row-title">${escapeHtml(s.title)}</span>
       <span class="channel-row-preview">${escapeHtml(preview)}</span>
-      <button type="button" class="session-row-delete" title="Delete this conversation" aria-label="Delete this conversation">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
-      </button>
     `;
     li.addEventListener("click", () => void openChatSession(s.id));
-    li.querySelector(".session-row-delete")!.addEventListener("click", (e) => {
-      e.stopPropagation();
-      void deleteChatSessionRow(s.id);
+    // Right-click for row ops (just Delete today) rather than a button
+    // revealed on hover — that button's reserved column changed the row's
+    // grid sizing on hover, reflowing the title/preview text and visibly
+    // changing the row's height. A context menu never touches row layout.
+    li.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openContextMenu(e.clientX, e.clientY, [
+        { label: "Delete", danger: true, onSelect: () => void deleteChatSessionRow(s.id) },
+      ]);
     });
     chatSessionList.appendChild(li);
   }
@@ -7676,7 +7732,7 @@ void boot();
 // looked like a flat white patch dropped on the canvas. These elements are
 // static (present in the DOM from page load, just hidden/shown per view),
 // so one listener per scrollport, wired once here, covers every view.
-document.querySelectorAll(".conversation-pane, .channel-pane, .view-scroll").forEach((el) => {
+document.querySelectorAll(".channel-pane, .view-scroll, .conversation-scroll").forEach((el) => {
   el.addEventListener("scroll", () => el.classList.toggle("is-scrolled", el.scrollTop > 0), { passive: true });
 });
 
