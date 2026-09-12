@@ -426,6 +426,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         scope = state.noteScope,
                         onScope = viewModel::setNoteScope,
                         onAddBlank = viewModel::addBlankNote,
+                        onAddImage = viewModel::addImageNote,
                         onEdit = viewModel::editNote,
                         onMove = viewModel::moveNote,
                         onDelete = viewModel::deleteNote,

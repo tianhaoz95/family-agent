@@ -46,6 +46,15 @@ suspend fun uriToScaledJpegDataUri(context: Context, uri: Uri): String? = withCo
     "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 }
 
+/** PNG-encodes a [Bitmap] already in memory (e.g. a rendered drawing canvas)
+ *  as a data URI — no downscaling, since the source is already exactly the
+ *  size it should be. */
+fun bitmapToPngDataUri(bitmap: Bitmap): String {
+    val out = ByteArrayOutputStream()
+    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+    return "data:image/png;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+}
+
 /** Decode a `data:…;base64,…` URI back to an ImageBitmap for display. */
 fun dataUriToImageBitmap(dataUri: String): ImageBitmap? = runCatching {
     val b64 = dataUri.substringAfter(",", "")

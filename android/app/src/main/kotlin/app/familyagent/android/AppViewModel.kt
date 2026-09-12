@@ -1165,9 +1165,23 @@ class AppViewModel(
     /** "+ Add" — pins a blank note the user then fills in. [onCreated] gets the new note. */
     fun addBlankNote(x: Float, y: Float, onCreated: (StickyNote) -> Unit) {
         viewModelScope.launch {
-            apiCall { api.createNote(_state.value.noteScope, "", null, x, y) }.onSuccess { note ->
+            apiCall { api.createNote(scope = _state.value.noteScope, text = "", color = null, x = x, y = y) }
+                .onSuccess { note ->
+                    _state.value = _state.value.copy(notes = _state.value.notes + note)
+                    onCreated(note)
+                }
+        }
+    }
+
+    /** Pins a "Draw" or "Photo" note — chosen from the board's "+" menu,
+     *  mirroring desktop's #note-add-draw / #note-add-photo. [kind] is
+     *  "drawing" or "photo"; a drawing carries no caption text. */
+    fun addImageNote(kind: String, image: String, x: Float, y: Float) {
+        viewModelScope.launch {
+            apiCall {
+                api.createNote(scope = _state.value.noteScope, kind = kind, text = "", image = image, color = null, x = x, y = y)
+            }.onSuccess { note ->
                 _state.value = _state.value.copy(notes = _state.value.notes + note)
-                onCreated(note)
             }
         }
     }

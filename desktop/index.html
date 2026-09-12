@@ -344,7 +344,30 @@
                 <button type="button" id="board-zoom-reset" class="ghost-btn" aria-label="Reset zoom">100%</button>
                 <button type="button" id="board-zoom-in" class="ghost-btn" aria-label="Zoom in">+</button>
               </div>
-              <button type="button" id="note-add" class="board-add">+ Add note</button>
+              <div class="note-add-wrap">
+                <button type="button" id="note-add" class="board-add" aria-haspopup="menu" aria-expanded="false">+ Add</button>
+                <ul id="note-add-menu" class="note-add-menu" role="menu" hidden>
+                  <li role="none">
+                    <button type="button" id="note-add-text" role="menuitem">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+                      <span>Text note</span>
+                    </button>
+                  </li>
+                  <li role="none">
+                    <button type="button" id="note-add-draw" role="menuitem">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19 7-7 3 3-7 7-3-3Z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18l5-5Z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+                      <span>Draw</span>
+                    </button>
+                  </li>
+                  <li role="none">
+                    <button type="button" id="note-add-photo" role="menuitem">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="m21 15-5-5L5 19"/></svg>
+                      <span>Photo</span>
+                    </button>
+                  </li>
+                </ul>
+                <input type="file" id="note-photo-input" accept="image/*" hidden />
+              </div>
             </div>
           </div>
           <p id="note-status" class="settings-hint" role="status"></p>
@@ -354,6 +377,26 @@
             </div>
           </div>
         </section>
+
+        <div id="draw-overlay" class="draw-overlay" hidden role="dialog" aria-modal="true" aria-label="Draw a note">
+          <div class="draw-overlay-inner">
+            <div class="draw-toolbar">
+              <div class="draw-swatches" id="draw-swatches"></div>
+              <div class="draw-sizes" id="draw-sizes">
+                <button type="button" data-size="3" class="draw-size-btn" aria-label="Thin"><span style="width:4px;height:4px"></span></button>
+                <button type="button" data-size="7" class="draw-size-btn is-active" aria-label="Medium"><span style="width:8px;height:8px"></span></button>
+                <button type="button" data-size="14" class="draw-size-btn" aria-label="Thick"><span style="width:14px;height:14px"></span></button>
+              </div>
+              <button type="button" id="draw-undo" class="ghost-btn" title="Undo last stroke">Undo</button>
+              <button type="button" id="draw-clear" class="ghost-btn">Clear</button>
+            </div>
+            <canvas id="draw-canvas" class="draw-canvas" width="560" height="420"></canvas>
+            <div class="draw-actions">
+              <button type="button" id="draw-cancel" class="ghost-btn">Cancel</button>
+              <button type="button" id="draw-save" class="btn-primary">Pin to board</button>
+            </div>
+          </div>
+        </div>
 
         <section id="view-documents" class="view" aria-label="Documents">
           <div class="view-scroll">

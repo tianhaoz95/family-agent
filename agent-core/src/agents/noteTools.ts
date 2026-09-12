@@ -25,8 +25,19 @@ export function makeNoteTools(store: ScopedStore) {
       // whose. A private note's user_id is always the caller themselves, so
       // this is harmless there too (and cheap: one query, not one per note).
       const names = new Map(store.listFamilyMembers().map((m) => [m.id, m.displayName]));
+      // A drawing has no text at all, and a photo's caption is optional — say
+      // so plainly rather than rendering an empty line, since "summarize the
+      // board" should still account for every note, not just the text ones.
+      const describe = (n: (typeof notes)[number]) =>
+        n.kind === "drawing"
+          ? "[a hand-drawn note]"
+          : n.kind === "photo"
+            ? n.text.trim()
+              ? `[a photo: "${n.text}"]`
+              : "[a photo, no caption]"
+            : n.text;
       return notes
-        .map((n) => `- [${n.scope}] ${n.text} — added by ${names.get(n.userId) ?? "someone"} (id: ${n.id})`)
+        .map((n) => `- [${n.scope}] ${describe(n)} — added by ${names.get(n.userId) ?? "someone"} (id: ${n.id})`)
         .join("\n");
     },
     {

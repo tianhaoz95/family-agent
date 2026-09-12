@@ -3425,6 +3425,50 @@ input[type="file"]::file-selector-button:hover {
 .board-add {
   white-space: nowrap;
 }
+
+/* "+ Add" opens a small attachment-style menu (text / draw / photo) instead
+   of adding a text note directly — same idea as the Claude composer's "Add
+   context" menu, just for a note's modality instead of a file's. */
+.note-add-wrap {
+  position: relative;
+}
+.note-add-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  min-width: 168px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  animation: view-in var(--dur) var(--ease-out);
+}
+.note-add-menu button {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  font-size: 0.85rem;
+  color: var(--text-strong);
+  cursor: pointer;
+}
+.note-add-menu button:hover,
+.note-add-menu button:focus-visible {
+  background: var(--accent-soft);
+}
+.note-add-menu svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  color: var(--text-muted);
+}
 .board-zoom {
   display: flex;
   align-items: center;
@@ -3541,6 +3585,32 @@ input[type="file"]::file-selector-button:hover {
 .note-card-text.is-placeholder {
   color: rgba(51, 48, 42, 0.4);
 }
+
+/* A drawing/photo note is image-first: the flattened image fills the card,
+   with any caption (photo only — a drawing has no text at all) underneath
+   rather than the plain editable text block above. */
+.note-card.note-has-image {
+  width: 200px;
+  padding: 14px 12px 26px;
+}
+.note-card-image {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  border-radius: var(--r-sm);
+  background: rgba(0, 0, 0, 0.04);
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+.note-card.note-drawing .note-card-image {
+  background: #fff;
+}
+.note-card-caption {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .note-card-edit {
   width: 100%;
   min-height: 74px;
@@ -3612,6 +3682,93 @@ input[type="file"]::file-selector-button:hover {
 .note-swatch.note-sky    { background: #dbe8f6; }
 .note-swatch.note-blush  { background: #f6dfe4; }
 .note-swatch.note-lilac  { background: #e6e0f2; }
+
+/* Freehand drawing modal — the "Draw" board note modality. Same full-screen
+   glass-overlay recipe as .voice-overlay (fixed, blurred backdrop), sized
+   for a canvas + toolbar instead of a waveform. */
+.draw-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  backdrop-filter: blur(18px) saturate(1.1);
+  animation: voice-overlay-in 0.18s var(--ease);
+}
+.draw-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px;
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+.draw-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.draw-swatches {
+  display: flex;
+  gap: 6px;
+}
+.draw-swatch {
+  all: unset;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  border: 2px solid transparent;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+.draw-swatch.is-active {
+  border-color: var(--accent);
+}
+.draw-sizes {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.draw-size-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+}
+.draw-size-btn span {
+  display: block;
+  border-radius: 50%;
+  background: var(--text-strong);
+}
+.draw-size-btn.is-active {
+  background: var(--accent-soft);
+}
+.draw-canvas {
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: #fff;
+  cursor: crosshair;
+  touch-action: none;
+}
+.draw-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .draw-overlay {
+    animation: none;
+  }
+}
 
 .account-signout {
   margin-top: 14px;

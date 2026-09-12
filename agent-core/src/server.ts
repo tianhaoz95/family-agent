@@ -1881,14 +1881,20 @@ export function buildServer(
   // A fresh "+ Add" note starts blank (text ""), so no min length here — the
   // note is a real object on the board the moment you add it, edited in place.
   const coord = z.number().finite().min(-2000).max(20000);
+  // A drawing/photo note's flattened image, same shape as a chat attachment.
+  const noteImage = z.string().regex(/^data:image\/[a-z+.-]+;base64,/i);
   const CreateNoteBody = z.object({
     scope: z.enum(["shared", "private"]),
+    kind: z.enum(["text", "drawing", "photo"]).optional(),
     text: z.string().trim().max(2000).default(""),
+    image: noteImage.optional(),
     color: z.string().trim().max(24).optional(),
     x: coord.optional(),
     y: coord.optional(),
   });
-  app.post("/notes", async (req, reply) => {
+  // bodyLimit raised for the same reason as /chat and /channels/:id/messages:
+  // a note's image travels as base64 in the JSON body, not multipart.
+  app.post("/notes", { bodyLimit: 24 * 1024 * 1024 }, async (req, reply) => {
     const parsed = CreateNoteBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
     return { note: req.userStore.createStickyNote(parsed.data) };
@@ -1897,12 +1903,13 @@ export function buildServer(
   const UpdateNoteBody = z
     .object({
       text: z.string().trim().max(2000).optional(),
+      image: noteImage.nullable().optional(),
       color: z.string().trim().max(24).optional(),
       x: coord.optional(),
       y: coord.optional(),
     })
     .refine((b) => Object.values(b).some((v) => v !== undefined), { message: "Nothing to update." });
-  app.patch("/notes/:id", async (req, reply) => {
+  app.patch("/notes/:id", { bodyLimit: 24 * 1024 * 1024 }, async (req, reply) => {
     const parsed = UpdateNoteBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
     const { id } = req.params as { id: string };

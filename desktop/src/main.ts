@@ -5624,6 +5624,11 @@ const noteBoard = document.getElementById("note-board")!;
 // this inner layer, holding the actual notes, is what scales — see the CSS.
 const noteCanvas = document.getElementById("note-canvas")!;
 const noteAddBtn = document.getElementById("note-add") as HTMLButtonElement;
+const noteAddMenu = document.getElementById("note-add-menu") as HTMLUListElement;
+const noteAddTextBtn = document.getElementById("note-add-text") as HTMLButtonElement;
+const noteAddDrawBtn = document.getElementById("note-add-draw") as HTMLButtonElement;
+const noteAddPhotoBtn = document.getElementById("note-add-photo") as HTMLButtonElement;
+const notePhotoInput = document.getElementById("note-photo-input") as HTMLInputElement;
 const noteStatus = document.getElementById("note-status")!;
 const boardZoomOutBtn = document.getElementById("board-zoom-out") as HTMLButtonElement;
 const boardZoomInBtn = document.getElementById("board-zoom-in") as HTMLButtonElement;
@@ -6237,7 +6242,8 @@ function makeNoteEl(n: StickyNote): HTMLElement {
   const card = document.createElement("div");
   // A colour the agent invented (or an older value) falls back to butter.
   const noteColor = (NOTE_COLORS as readonly string[]).includes(n.color) ? n.color : "butter";
-  card.className = `note-card note-${noteColor}`;
+  const hasImage = n.kind !== "text" && !!n.image;
+  card.className = `note-card note-${noteColor}` + (hasImage ? ` note-has-image note-${n.kind}` : "");
   card.dataset.id = n.id;
   const { x, y } = clampToBoard(n.x, n.y);
   card.style.left = `${x}px`;
@@ -6258,44 +6264,65 @@ function makeNoteEl(n: StickyNote): HTMLElement {
     void refreshNotes();
   });
 
-  const body = document.createElement("div");
-  body.className = "note-card-text";
-  if (n.text) {
-    body.textContent = n.text;
-  } else {
-    body.classList.add("is-placeholder");
-    body.textContent = "Type here…";
+  card.appendChild(del);
+
+  if (hasImage) {
+    const img = document.createElement("img");
+    img.className = "note-card-image";
+    img.src = n.image!;
+    img.alt = n.kind === "drawing" ? "A hand-drawn note" : "A pinned photo";
+    card.appendChild(img);
   }
 
-  const palette = document.createElement("div");
-  palette.className = "note-card-palette";
-  for (const color of NOTE_COLORS) {
-    const sw = document.createElement("button");
-    sw.type = "button";
-    sw.className = `note-swatch note-${color}` + (color === noteColor ? " is-active" : "");
-    sw.setAttribute("aria-label", color);
-    sw.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      n.color = color;
-      card.className = `note-card note-${color}`;
-      for (const s of palette.children) s.classList.toggle("is-active", s === sw);
-      await api.updateNote(n.id, { color }).catch(() => {});
-    });
-    palette.appendChild(sw);
+  // A drawing has no text at all (nothing to type); a photo can still take an
+  // editable caption, same click-to-edit interaction as a plain text note.
+  let body: HTMLElement | null = null;
+  if (n.kind !== "drawing") {
+    body = document.createElement("div");
+    body.className = hasImage ? "note-card-caption" : "note-card-text";
+    if (n.text) {
+      body.textContent = n.text;
+    } else {
+      body.classList.add("is-placeholder");
+      body.textContent = hasImage ? "Add a caption…" : "Type here…";
+    }
+    card.appendChild(body);
   }
 
-  card.append(del, body, palette);
+  // Recolouring only makes sense for a plain text note — a drawing/photo's
+  // colour is baked into its own image.
+  if (!hasImage) {
+    const palette = document.createElement("div");
+    palette.className = "note-card-palette";
+    for (const color of NOTE_COLORS) {
+      const sw = document.createElement("button");
+      sw.type = "button";
+      sw.className = `note-swatch note-${color}` + (color === noteColor ? " is-active" : "");
+      sw.setAttribute("aria-label", color);
+      sw.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        n.color = color;
+        card.className = `note-card note-${color}`;
+        for (const s of palette.children) s.classList.toggle("is-active", s === sw);
+        await api.updateNote(n.id, { color }).catch(() => {});
+      });
+      palette.appendChild(sw);
+    }
+    card.appendChild(palette);
+  }
+
   wireNoteDrag(card, n, body);
   if (autoEditId === n.id) {
     autoEditId = null;
-    // Let the element land in the DOM before focusing the editor.
-    queueMicrotask(() => startEditNote(card, n, body));
+    // Let the element land in the DOM before focusing the editor. A drawing
+    // has no text field to focus at all.
+    if (body) queueMicrotask(() => startEditNote(card, n, body!));
   }
   return card;
 }
 
 // Pointer-drag that also acts as a click-to-edit when the pointer barely moves.
-function wireNoteDrag(card: HTMLElement, n: StickyNote, body: HTMLElement) {
+function wireNoteDrag(card: HTMLElement, n: StickyNote, body: HTMLElement | null) {
   card.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
     const t = e.target as HTMLElement;
@@ -6336,7 +6363,7 @@ function wireNoteDrag(card: HTMLElement, n: StickyNote, body: HTMLElement) {
       card.classList.remove("is-dragging");
       boardBusy = false;
       if (!moved) {
-        if (ev?.type !== "pointercancel") startEditNote(card, n, body);
+        if (ev?.type !== "pointercancel" && body) startEditNote(card, n, body);
         return;
       }
       // Move to the end so it renders on top next time.
@@ -6357,7 +6384,7 @@ function startEditNote(card: HTMLElement, n: StickyNote, body: HTMLElement) {
   const ta = document.createElement("textarea");
   ta.className = "note-card-edit";
   ta.value = n.text;
-  ta.placeholder = "Type here…";
+  ta.placeholder = n.kind === "photo" ? "Add a caption…" : "Type here…";
   body.replaceWith(ta);
 
   let done = false;
@@ -6370,8 +6397,10 @@ function startEditNote(card: HTMLElement, n: StickyNote, body: HTMLElement) {
       n.text = text;
       await api.updateNote(n.id, { text }).catch(() => {});
     }
-    // A note left completely blank is clutter on a real board — clear it away.
-    if (!n.text.trim()) {
+    // A blank TEXT note is clutter on a real board — clear it away. A photo
+    // note's caption is optional; the photo itself is still the content, so
+    // an empty caption is never a reason to delete it.
+    if (n.kind === "text" && !n.text.trim()) {
       notes = notes.filter((m) => m.id !== n.id);
       await api.deleteNote(n.id).catch(() => {});
     }
@@ -6392,16 +6421,199 @@ function startEditNote(card: HTMLElement, n: StickyNote, body: HTMLElement) {
   ta.setSelectionRange(ta.value.length, ta.value.length);
 }
 
-noteAddBtn.addEventListener("click", async () => {
-  noteStatus.textContent = "";
-  // Cascade new notes from the top-left so repeated adds don't stack exactly.
+// Cascade new notes from the top-left so repeated adds don't stack exactly.
+function nextCascadePos() {
   const n = notes.length;
-  const pos = clampToBoard(24 + (n % 6) * 26, 24 + (n % 6) * 26);
-  const color = NOTE_COLORS[Math.floor(Math.random() * NOTE_COLORS.length)];
+  return clampToBoard(24 + (n % 6) * 26, 24 + (n % 6) * 26);
+}
+function randomNoteColor() {
+  return NOTE_COLORS[Math.floor(Math.random() * NOTE_COLORS.length)];
+}
+
+function closeNoteAddMenu() {
+  noteAddMenu.hidden = true;
+  noteAddBtn.setAttribute("aria-expanded", "false");
+}
+
+// "+ Add" opens a small attachment-style menu (text / draw / photo) rather
+// than adding a text note directly — see the Board multi-modal request: the
+// board isn't just editable text anymore.
+noteAddBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const opening = noteAddMenu.hidden;
+  noteAddMenu.hidden = !opening;
+  noteAddBtn.setAttribute("aria-expanded", String(opening));
+});
+document.addEventListener("click", (e) => {
+  if (!noteAddMenu.hidden && !(e.target as HTMLElement).closest(".note-add-wrap")) closeNoteAddMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !noteAddMenu.hidden) closeNoteAddMenu();
+});
+
+noteAddTextBtn.addEventListener("click", async () => {
+  closeNoteAddMenu();
+  noteStatus.textContent = "";
   try {
-    const { note } = await api.createNote(boardScope, "", color, pos);
+    const { note } = await api.createNote(boardScope, "", randomNoteColor(), nextCascadePos());
     autoEditId = note.id;
     await refreshNotes();
+  } catch (err) {
+    noteStatus.textContent = err instanceof Error ? err.message : String(err);
+  }
+});
+
+noteAddPhotoBtn.addEventListener("click", () => {
+  closeNoteAddMenu();
+  notePhotoInput.click();
+});
+notePhotoInput.addEventListener("change", async () => {
+  const file = notePhotoInput.files?.[0];
+  notePhotoInput.value = "";
+  if (!file) return;
+  noteStatus.textContent = "";
+  try {
+    const image = await fileToScaledDataUrl(file);
+    const { note } = await api.createNote(boardScope, "", randomNoteColor(), nextCascadePos(), {
+      kind: "photo",
+      image,
+    });
+    notes.push(note);
+    renderBoard();
+    await refreshNotes(true);
+  } catch (err) {
+    noteStatus.textContent = err instanceof Error ? err.message : String(err);
+  }
+});
+
+noteAddDrawBtn.addEventListener("click", () => {
+  closeNoteAddMenu();
+  openDrawOverlay();
+});
+
+// ---- "Draw" note modality: a small freehand-drawing modal ----
+const drawOverlay = document.getElementById("draw-overlay")!;
+const drawCanvas = document.getElementById("draw-canvas") as HTMLCanvasElement;
+const drawSwatchesEl = document.getElementById("draw-swatches")!;
+const drawSizesEl = document.getElementById("draw-sizes")!;
+const drawUndoBtn = document.getElementById("draw-undo") as HTMLButtonElement;
+const drawClearBtn = document.getElementById("draw-clear") as HTMLButtonElement;
+const drawCancelBtn = document.getElementById("draw-cancel") as HTMLButtonElement;
+const drawSaveBtn = document.getElementById("draw-save") as HTMLButtonElement;
+const DRAW_COLORS = ["#2b2b2b", "#c0392b", "#0075de", "#1f8a4c", "#e6a817", "#ffffff"];
+let drawColor = DRAW_COLORS[0];
+let drawSize = 7;
+let drawCtx: CanvasRenderingContext2D | null = null;
+// Undo works a stroke at a time by snapshotting the canvas before each new
+// stroke starts — simple and plenty for a quick sticky-note doodle.
+let drawUndoStack: ImageData[] = [];
+
+function drawSwatchesInit() {
+  drawSwatchesEl.innerHTML = "";
+  for (const color of DRAW_COLORS) {
+    const sw = document.createElement("button");
+    sw.type = "button";
+    sw.className = "draw-swatch" + (color === drawColor ? " is-active" : "");
+    sw.style.background = color;
+    sw.setAttribute("aria-label", color);
+    if (color === "#ffffff") sw.style.boxShadow = "inset 0 0 0 1px rgba(0,0,0,0.25)";
+    sw.addEventListener("click", () => {
+      drawColor = color;
+      for (const s of drawSwatchesEl.children) s.classList.toggle("is-active", s === sw);
+    });
+    drawSwatchesEl.appendChild(sw);
+  }
+}
+drawSwatchesInit();
+for (const btn of drawSizesEl.querySelectorAll<HTMLButtonElement>(".draw-size-btn")) {
+  btn.addEventListener("click", () => {
+    drawSize = Number(btn.dataset.size) || 7;
+    for (const b of drawSizesEl.querySelectorAll(".draw-size-btn")) b.classList.toggle("is-active", b === btn);
+  });
+}
+
+function clearCanvasToWhite() {
+  if (!drawCtx) return;
+  drawCtx.fillStyle = "#ffffff";
+  drawCtx.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+}
+
+function openDrawOverlay() {
+  if (!drawCtx) drawCtx = drawCanvas.getContext("2d");
+  drawUndoStack = [];
+  clearCanvasToWhite();
+  drawUndoBtn.disabled = true;
+  drawOverlay.hidden = false;
+}
+function closeDrawOverlay() {
+  drawOverlay.hidden = true;
+}
+drawCancelBtn.addEventListener("click", closeDrawOverlay);
+
+drawClearBtn.addEventListener("click", () => {
+  if (!drawCtx) return;
+  drawUndoStack.push(drawCtx.getImageData(0, 0, drawCanvas.width, drawCanvas.height));
+  drawUndoBtn.disabled = false;
+  clearCanvasToWhite();
+});
+drawUndoBtn.addEventListener("click", () => {
+  if (!drawCtx || drawUndoStack.length === 0) return;
+  const prev = drawUndoStack.pop()!;
+  drawCtx.putImageData(prev, 0, 0);
+  drawUndoBtn.disabled = drawUndoStack.length === 0;
+});
+
+(function wireDrawCanvas() {
+  let drawing = false;
+  const point = (e: PointerEvent) => {
+    const r = drawCanvas.getBoundingClientRect();
+    return {
+      x: ((e.clientX - r.left) / r.width) * drawCanvas.width,
+      y: ((e.clientY - r.top) / r.height) * drawCanvas.height,
+    };
+  };
+  drawCanvas.addEventListener("pointerdown", (e) => {
+    if (!drawCtx) return;
+    drawing = true;
+    drawCanvas.setPointerCapture(e.pointerId);
+    drawUndoStack.push(drawCtx.getImageData(0, 0, drawCanvas.width, drawCanvas.height));
+    drawUndoBtn.disabled = false;
+    const p = point(e);
+    drawCtx.beginPath();
+    drawCtx.moveTo(p.x, p.y);
+    // A single click (no drag) should still leave a dot.
+    drawCtx.lineTo(p.x + 0.01, p.y + 0.01);
+    drawCtx.strokeStyle = drawColor;
+    drawCtx.lineWidth = drawSize;
+    drawCtx.lineCap = "round";
+    drawCtx.lineJoin = "round";
+    drawCtx.stroke();
+  });
+  drawCanvas.addEventListener("pointermove", (e) => {
+    if (!drawing || !drawCtx) return;
+    const p = point(e);
+    drawCtx.lineTo(p.x, p.y);
+    drawCtx.stroke();
+  });
+  const stop = () => {
+    drawing = false;
+  };
+  drawCanvas.addEventListener("pointerup", stop);
+  drawCanvas.addEventListener("pointercancel", stop);
+})();
+
+drawSaveBtn.addEventListener("click", async () => {
+  noteStatus.textContent = "";
+  const image = drawCanvas.toDataURL("image/png");
+  closeDrawOverlay();
+  try {
+    const { note } = await api.createNote(boardScope, "", randomNoteColor(), nextCascadePos(), {
+      kind: "drawing",
+      image,
+    });
+    notes.push(note);
+    renderBoard();
+    await refreshNotes(true);
   } catch (err) {
     noteStatus.textContent = err instanceof Error ? err.message : String(err);
   }

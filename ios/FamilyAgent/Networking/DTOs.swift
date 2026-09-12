@@ -446,7 +446,13 @@ struct StickyNote: Codable, Sendable, Identifiable, Hashable {
     let id: String
     var scope: String
     var userId: String
+    /// "text" | "drawing" | "photo" — chosen once at creation from the
+    /// board's "+" attachment menu. A drawing has no text; a photo can still
+    /// take an editable caption via `text`.
+    var kind: String = "text"
     var text: String
+    /// A drawing/photo note's flattened image, as a data: URI.
+    var image: String? = nil
     var color: String = "butter"
     var x: Double = 0
     var y: Double = 0
@@ -456,13 +462,16 @@ struct StickyNote: Codable, Sendable, Identifiable, Hashable {
 
 struct CreateNoteRequest: Codable, Sendable {
     let scope: String
+    var kind: String? = nil
     let text: String
+    var image: String? = nil
     var color: String? = nil
     var x: Double? = nil
     var y: Double? = nil
 }
 struct UpdateNoteRequest: Codable, Sendable {
     var text: String? = nil
+    var image: String? = nil
     var color: String? = nil
     var x: Double? = nil
     var y: Double? = nil

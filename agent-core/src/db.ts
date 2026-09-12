@@ -408,13 +408,23 @@ export interface ChatSessionMessageRecord {
 
 // ---- sticky notes ----
 export type NoteScope = "shared" | "private";
+// A note is one of three modalities, chosen once at creation from the
+// board's "+" attachment menu (mirrors the Claude-style "Add context" menu):
+// 'text' is the original editable note; 'drawing' and 'photo' both carry a
+// single flattened image (a data URI, like chat's image attachments) instead
+// of/alongside editable text — a drawing has no text at all, a photo can
+// still be captioned via the existing `text` field.
+export type NoteKind = "text" | "drawing" | "photo";
 
 export interface StickyNoteRecord {
   id: string;
   scope: NoteScope;
   /** Author (shared board) or owner (private board). */
   userId: string;
+  kind: NoteKind;
   text: string;
+  /** A hand-drawn or photo note's flattened image, as a data: URI. */
+  image: string | null;
   color: string;
   /** Position on the corkboard, in CSS px from the board's top-left. */
   x: number;
@@ -655,7 +665,9 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
   id TEXT PRIMARY KEY,
   scope TEXT NOT NULL,
   user_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'text',
   text TEXT NOT NULL,
+  image TEXT,
   color TEXT NOT NULL DEFAULT 'butter',
   pos_x REAL NOT NULL DEFAULT 0,
   pos_y REAL NOT NULL DEFAULT 0,
@@ -856,6 +868,11 @@ const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   // release has the table but not these columns.
   { table: "artifacts", column: "prev_html", ddl: "ALTER TABLE artifacts ADD COLUMN prev_html TEXT" },
   { table: "artifacts", column: "revision", ddl: "ALTER TABLE artifacts ADD COLUMN revision INTEGER NOT NULL DEFAULT 0" },
+  // Multi-modal board notes: a note can now be a hand drawing or a pinned
+  // photo, not just editable text. Existing rows are all `kind = 'text'`
+  // with no image, which the DEFAULT + nullable column already gives them.
+  { table: "sticky_notes", column: "kind", ddl: "ALTER TABLE sticky_notes ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'" },
+  { table: "sticky_notes", column: "image", ddl: "ALTER TABLE sticky_notes ADD COLUMN image TEXT" },
 ];
 
 export class Store {
@@ -2726,7 +2743,9 @@ export class ScopedStore {
 
   createStickyNote(input: {
     scope: NoteScope;
+    kind?: NoteKind;
     text: string;
+    image?: string | null;
     color?: string;
     x?: number;
     y?: number;
@@ -2740,7 +2759,9 @@ export class ScopedStore {
       id: shortId(),
       scope: input.scope,
       userId: this.userId,
+      kind: input.kind ?? "text",
       text: input.text,
+      image: input.image ?? null,
       color: input.color?.trim() || "butter",
       x: input.x ?? scatter(460),
       y: input.y ?? scatter(320),
@@ -2749,32 +2770,52 @@ export class ScopedStore {
     };
     this.db
       .prepare(
-        "INSERT INTO sticky_notes (id, scope, user_id, text, color, pos_x, pos_y, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO sticky_notes (id, scope, user_id, kind, text, image, color, pos_x, pos_y, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       )
-      .run(rec.id, rec.scope, rec.userId, rec.text, rec.color, rec.x, rec.y, rec.createdAt, rec.updatedAt);
+      .run(
+        rec.id,
+        rec.scope,
+        rec.userId,
+        rec.kind,
+        rec.text,
+        rec.image,
+        rec.color,
+        rec.x,
+        rec.y,
+        rec.createdAt,
+        rec.updatedAt
+      );
     this.logActivity(
       "user",
       "note.created",
-      rec.text.trim()
-        ? `Added a ${rec.scope} sticky note: "${rec.text.slice(0, 80)}"`
-        : `Added a blank ${rec.scope} sticky note`
+      rec.kind !== "text"
+        ? `Added a ${rec.scope} sticky note (${rec.kind})`
+        : rec.text.trim()
+          ? `Added a ${rec.scope} sticky note: "${rec.text.slice(0, 80)}"`
+          : `Added a blank ${rec.scope} sticky note`
     );
     return rec;
   }
 
   updateStickyNote(
     id: string,
-    patch: { text?: string; color?: string; x?: number; y?: number }
+    patch: { text?: string; image?: string | null; color?: string; x?: number; y?: number }
   ): StickyNoteRecord | undefined {
     const note = this.getStickyNote(id);
     if (!note) return undefined;
     // Shared notes: any member can edit. Private notes: getStickyNote already
-    // guaranteed ownership.
+    // guaranteed ownership. `kind` itself is never patched — a note's
+    // modality is fixed at creation, same as the "+ Add" menu choice that
+    // made it.
     const sets: string[] = [];
-    const values: (string | number)[] = [];
+    const values: (string | number | null)[] = [];
     if (patch.text !== undefined) {
       sets.push("text = ?");
       values.push(patch.text);
+    }
+    if (patch.image !== undefined) {
+      sets.push("image = ?");
+      values.push(patch.image);
     }
     if (patch.color !== undefined) {
       sets.push("color = ?");
@@ -3429,7 +3470,9 @@ function rowToStickyNote(r: any): StickyNoteRecord {
     id: r.id,
     scope: (r.scope as NoteScope) ?? "shared",
     userId: r.user_id,
+    kind: (r.kind as NoteKind) ?? "text",
     text: r.text,
+    image: r.image ?? null,
     color: r.color ?? "butter",
     x: typeof r.pos_x === "number" ? r.pos_x : 0,
     y: typeof r.pos_y === "number" ? r.pos_y : 0,

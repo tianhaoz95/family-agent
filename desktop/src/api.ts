@@ -202,12 +202,16 @@ export interface ChatSessionMessage {
 }
 
 export type NoteScope = "shared" | "private";
+export type NoteKind = "text" | "drawing" | "photo";
 
 export interface StickyNote {
   id: string;
   scope: NoteScope;
   userId: string;
+  kind: NoteKind;
   text: string;
+  /** A drawing/photo note's flattened image, as a data: URI. */
+  image: string | null;
   color: string;
   /** Position on the corkboard, CSS px from its top-left. */
   x: number;
@@ -981,12 +985,18 @@ export const api = {
 
   // ---- sticky notes ----
   listNotes: (scope: NoteScope) => request<{ notes: StickyNote[] }>(`/notes?scope=${scope}`),
-  createNote: (scope: NoteScope, text: string, color?: string, pos?: { x: number; y: number }) =>
+  createNote: (
+    scope: NoteScope,
+    text: string,
+    color?: string,
+    pos?: { x: number; y: number },
+    extra?: { kind?: NoteKind; image?: string }
+  ) =>
     request<{ note: StickyNote }>("/notes", {
       method: "POST",
-      body: JSON.stringify({ scope, text, color, ...pos }),
+      body: JSON.stringify({ scope, text, color, ...pos, ...extra }),
     }),
-  updateNote: (id: string, patch: { text?: string; color?: string; x?: number; y?: number }) =>
+  updateNote: (id: string, patch: { text?: string; image?: string | null; color?: string; x?: number; y?: number }) =>
     request<{ note: StickyNote }>(`/notes/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteNote: (id: string) => request<{ note: StickyNote }>(`/notes/${id}`, { method: "DELETE" }),
   // ---- password vault ----

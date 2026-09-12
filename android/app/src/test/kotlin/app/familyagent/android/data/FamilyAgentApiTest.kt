@@ -311,7 +311,7 @@ class FamilyAgentApiTest {
                 """{"note":{"id":"N0000001","scope":"shared","userId":"U1","text":"","color":"butter","x":24.0,"y":24.0,"createdAt":"2026-09-01T00:00:00.000Z","updatedAt":"2026-09-01T00:00:00.000Z"}}"""
             )
         )
-        val note = api.createNote("shared", "", null, 24f, 24f)
+        val note = api.createNote(scope = "shared", text = "", color = null, x = 24f, y = 24f)
         assertEquals(24f, note.x)
 
         val recorded = server.takeRequest()

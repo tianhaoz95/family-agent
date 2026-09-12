@@ -272,11 +272,23 @@ struct FamilyAgentAPI: Sendable {
     func listNotes(scope: String) async throws -> [StickyNote] {
         try await get("/notes", query: [URLQueryItem(name: "scope", value: scope)], as: NotesEnvelope.self).notes
     }
-    func createNote(scope: String, text: String, color: String?, x: Double? = nil, y: Double? = nil) async throws -> StickyNote {
-        try await send("POST", "/notes", body: CreateNoteRequest(scope: scope, text: text, color: color, x: x, y: y), as: NoteEnvelope.self).note
+    func createNote(
+        scope: String, kind: String? = nil, text: String, image: String? = nil,
+        color: String?, x: Double? = nil, y: Double? = nil
+    ) async throws -> StickyNote {
+        try await send(
+            "POST", "/notes",
+            body: CreateNoteRequest(scope: scope, kind: kind, text: text, image: image, color: color, x: x, y: y),
+            as: NoteEnvelope.self
+        ).note
     }
-    func updateNote(_ id: String, text: String? = nil, color: String? = nil, x: Double? = nil, y: Double? = nil) async throws -> StickyNote {
-        try await send("PATCH", "/notes/\(id)", body: UpdateNoteRequest(text: text, color: color, x: x, y: y), as: NoteEnvelope.self).note
+    func updateNote(
+        _ id: String, text: String? = nil, image: String? = nil, color: String? = nil, x: Double? = nil, y: Double? = nil
+    ) async throws -> StickyNote {
+        try await send(
+            "PATCH", "/notes/\(id)", body: UpdateNoteRequest(text: text, image: image, color: color, x: x, y: y),
+            as: NoteEnvelope.self
+        ).note
     }
     func deleteNote(_ id: String) async throws { try await sendVoid("DELETE", "/notes/\(id)") }
 

@@ -547,7 +547,13 @@ data class StickyNote(
     val id: String,
     val scope: String,
     val userId: String,
+    /** "text" | "drawing" | "photo" — chosen once at creation from the
+     *  board's "+" attachment menu. A drawing has no text; a photo can still
+     *  take an editable caption via `text`. */
+    val kind: String = "text",
     val text: String,
+    /** A drawing/photo note's flattened image, as a data: URI. */
+    val image: String? = null,
     val color: String = "butter",
     /** Position on the corkboard, in dp from its top-left. */
     val x: Float = 0f,
@@ -565,7 +571,9 @@ data class NoteResponse(val note: StickyNote)
 @Serializable
 data class CreateNoteRequest(
     val scope: String,
+    val kind: String? = null,
     val text: String,
+    val image: String? = null,
     val color: String? = null,
     val x: Float? = null,
     val y: Float? = null,
@@ -574,6 +582,7 @@ data class CreateNoteRequest(
 @Serializable
 data class UpdateNoteRequest(
     val text: String? = null,
+    val image: String? = null,
     val color: String? = null,
     val x: Float? = null,
     val y: Float? = null,

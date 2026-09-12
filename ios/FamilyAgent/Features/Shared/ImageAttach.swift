@@ -19,6 +19,14 @@ enum ImageAttach {
         return "data:image/jpeg;base64,\(jpeg.base64EncodedString())"
     }
 
+    /// PNG-encodes a `UIImage` already in memory (e.g. a rendered drawing
+    /// canvas) as a data URI — no downscaling, since the source is already
+    /// exactly the size it should be.
+    static func pngDataURI(from image: UIImage) -> String? {
+        guard let png = image.pngData() else { return nil }
+        return "data:image/png;base64,\(png.base64EncodedString())"
+    }
+
     static func image(fromDataURI uri: String) -> UIImage? {
         guard let comma = uri.firstIndex(of: ","),
               let data = Data(base64Encoded: String(uri[uri.index(after: comma)...])) else { return nil }

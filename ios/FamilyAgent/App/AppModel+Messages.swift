@@ -142,6 +142,17 @@ extension AppModel {
             }
         }
     }
+    /// Pins a "Draw" or "Photo" note — chosen from the board's "+" menu,
+    /// mirroring desktop's #note-add-draw / #note-add-photo. `kind` is
+    /// "drawing" or "photo"; a drawing carries no caption text.
+    func addImageNote(kind: String, image: String, x: Double, y: Double) {
+        Task {
+            _ = await perform {
+                try await api.createNote(scope: noteScope, kind: kind, text: "", image: image, color: nil, x: x, y: y)
+            }
+            await refreshNotes()
+        }
+    }
     func editNote(_ id: String, text: String?, color: String?) {
         Task { _ = await perform { try await api.updateNote(id, text: text, color: color) }; await refreshNotes() }
     }

@@ -60,4 +60,22 @@ describe("note tools", () => {
     expect(seenByDad).toContain("Buy milk — added by Dad");
     expect(seenByDad).toContain("Feed the cat — added by Kid");
   });
+
+  // A drawing/photo note is pinned through POST /notes (the board's "+ Add"
+  // menu), never through this add_sticky_note tool — the agent can't draw or
+  // take a photo. But it still needs to describe one sensibly when summarizing
+  // the board, since list_sticky_notes is the "what has everyone added" tool.
+  it("describes non-text notes plainly instead of an empty line", () => {
+    store.createStickyNote({ scope: "shared", kind: "drawing", text: "" });
+    store.createStickyNote({ scope: "shared", kind: "photo", text: "", image: "data:image/png;base64,AAAA" });
+    store.createStickyNote({ scope: "shared", kind: "photo", text: "the new fridge", image: "data:image/png;base64,AAAA" });
+
+    return find("list_sticky_notes")
+      .invoke({ scope: "shared" })
+      .then((out) => {
+        expect(out).toContain("[a hand-drawn note]");
+        expect(out).toContain("[a photo, no caption]");
+        expect(out).toContain('[a photo: "the new fridge"]');
+      });
+  });
 });

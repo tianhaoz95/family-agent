@@ -1,6 +1,9 @@
 package app.familyagent.android.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -9,7 +12,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Notes
+import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,13 +28,16 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.data.StickyNote
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private val NOTE_COLORS = listOf(
@@ -68,6 +77,7 @@ fun BoardScreen(
     scope: String,
     onScope: (String) -> Unit,
     onAddBlank: (x: Float, y: Float, onCreated: (StickyNote) -> Unit) -> Unit,
+    onAddImage: (kind: String, image: String, x: Float, y: Float) -> Unit,
     onEdit: (id: String, text: String?, color: String?) -> Unit,
     onMove: (id: String, x: Float, y: Float) -> Unit,
     onDelete: (String) -> Unit,
@@ -77,8 +87,27 @@ fun BoardScreen(
     var editing by remember { mutableStateOf<StickyNote?>(null) }
     var boardSize by remember { mutableStateOf(IntSize.Zero) }
     var zoom by rememberSaveable { mutableFloatStateOf(1f) }
+    var showAddMenu by remember { mutableStateOf(false) }
+    var showDraw by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val notePx = with(density) { NOTE_SIZE_DP.dp.toPx() }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    fun cascadePos(): Pair<Float, Float> {
+        val c = 24f + (notes.size % 6) * 24f
+        return c to c
+    }
+
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            uriToScaledJpegDataUri(context, uri)?.let {
+                val (x, y) = cascadePos()
+                onAddImage("photo", it, x, y)
+            }
+        }
+    }
 
     ScreenScaffold(
         title = "Board",
@@ -97,17 +126,50 @@ fun BoardScreen(
             Spacer(Modifier.width(10.dp))
             ZoomControls(zoom = zoom, onZoom = { zoom = it.coerceIn(BOARD_ZOOM_MIN, BOARD_ZOOM_MAX) })
             Spacer(Modifier.width(10.dp))
-            FilledTonalButton(
-                onClick = {
-                    val n = notes.size
-                    val cascade = 24f + (n % 6) * 24f
-                    onAddBlank(cascade, cascade) { editing = it }
-                },
-            ) {
-                Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("Add note")
+            // "+ Add" is an attachment-style menu, not a single action — a
+            // note can be typed, drawn, or a photo (mirrors desktop/iOS).
+            Box {
+                FilledTonalButton(onClick = { showAddMenu = true }) {
+                    Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Add")
+                }
+                DropdownMenu(expanded = showAddMenu, onDismissRequest = { showAddMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Text note") },
+                        leadingIcon = { Icon(Icons.Rounded.Notes, contentDescription = null) },
+                        onClick = {
+                            showAddMenu = false
+                            val (x, y) = cascadePos()
+                            onAddBlank(x, y) { editing = it }
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Draw") },
+                        leadingIcon = { Icon(Icons.Rounded.Brush, contentDescription = null) },
+                        onClick = { showAddMenu = false; showDraw = true },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Photo") },
+                        leadingIcon = { Icon(Icons.Rounded.Photo, contentDescription = null) },
+                        onClick = {
+                            showAddMenu = false
+                            pickPhoto.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                    )
+                }
             }
+        }
+
+        if (showDraw) {
+            DrawNoteSheet(
+                onSave = { bitmap ->
+                    showDraw = false
+                    val (x, y) = cascadePos()
+                    onAddImage("drawing", bitmapToPngDataUri(bitmap), x, y)
+                },
+                onCancel = { showDraw = false },
+            )
         }
 
         Spacer(Modifier.height(12.dp))
@@ -128,7 +190,7 @@ fun BoardScreen(
         ) {
             if (notes.isEmpty()) {
                 Text(
-                    "Nothing pinned up yet. Tap \"Add note\".",
+                    "Nothing pinned up yet. Tap \"Add\".",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
@@ -141,7 +203,9 @@ fun BoardScreen(
                         boardSize = boardSize,
                         notePx = notePx,
                         zoom = zoom,
-                        onTap = { editing = note },
+                        // A drawing has no text to edit at all — same as
+                        // desktop/iOS, tapping one is a no-op.
+                        onTap = { if (note.kind != "drawing") editing = note },
                         onMoved = { x, y -> onMove(note.id, x, y) },
                         onDelete = { onDelete(note.id) },
                     )
@@ -155,12 +219,15 @@ fun BoardScreen(
         EditNoteDialog(
             note = note,
             onDismiss = {
-                // A note left blank is clutter on a real board — clear it away.
-                if (note.text.isBlank()) onDelete(note.id)
+                // A blank TEXT note is clutter — clear it away, same as
+                // desktop/iOS. A photo's caption is optional; the photo
+                // itself is still the content, so an empty caption never
+                // deletes it.
+                if (note.kind == "text" && note.text.isBlank()) onDelete(note.id)
                 editing = null
             },
             onSave = { text, color ->
-                if (text.isBlank()) {
+                if (note.kind == "text" && text.isBlank()) {
                     onDelete(note.id)
                 } else {
                     onEdit(note.id, text.takeIf { it != note.text }, color.takeIf { it != note.color })
@@ -254,12 +321,40 @@ private fun DraggableNote(
             }
             .padding(with(density) { (12 * zoom).toDp() }),
     ) {
-        Text(
-            note.text.ifBlank { "Tap to write…" },
-            style = MaterialTheme.typography.bodyMedium.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize * zoom),
-            color = if (note.text.isBlank()) Color(0x660F172A) else Color(0xFF33302A),
-            modifier = Modifier.padding(top = (6 * zoom).dp, end = (14 * zoom).dp),
-        )
+        val hasImage = note.kind != "text" && note.image != null
+        if (hasImage) {
+            val bitmap = remember(note.image) { note.image?.let { dataUriToImageBitmap(it) } }
+            Column(Modifier.padding(top = (6 * zoom).dp, end = (14 * zoom).dp)) {
+                bitmap?.let {
+                    Image(
+                        it,
+                        contentDescription = if (note.kind == "drawing") "A hand-drawn note" else "A pinned photo",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = with(density) { (notePx * zoom * 0.62f).toDp() })
+                            .clip(RoundedCornerShape(2.dp)),
+                    )
+                }
+                // A drawing has no caption at all; a photo can still take one.
+                if (note.kind == "photo") {
+                    Text(
+                        note.text.ifBlank { "Tap to caption…" },
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = MaterialTheme.typography.bodySmall.fontSize * zoom),
+                        color = if (note.text.isBlank()) Color(0x660F172A) else Color(0xFF33302A),
+                        maxLines = 2,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
+        } else {
+            Text(
+                note.text.ifBlank { "Tap to write…" },
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize * zoom),
+                color = if (note.text.isBlank()) Color(0x660F172A) else Color(0xFF33302A),
+                modifier = Modifier.padding(top = (6 * zoom).dp, end = (14 * zoom).dp),
+            )
+        }
         Icon(
             Icons.Rounded.Close,
             contentDescription = "Remove note",
@@ -281,32 +376,52 @@ private fun EditNoteDialog(
 ) {
     var text by remember { mutableStateOf(note.text) }
     var color by remember { mutableStateOf(note.color) }
+    val isPhoto = note.kind == "photo"
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (note.text.isBlank()) "New note" else "Edit note") },
+        title = { Text(if (isPhoto) "Caption" else if (note.text.isBlank()) "New note" else "Edit note") },
         text = {
             Column {
+                if (isPhoto) {
+                    val bitmap = remember(note.image) { note.image?.let { dataUriToImageBitmap(it) } }
+                    bitmap?.let {
+                        Image(
+                            it,
+                            contentDescription = "A pinned photo",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .clip(RoundedCornerShape(10.dp)),
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
+                }
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
                     modifier = Modifier.fillMaxWidth(),
-                    minLines = 3,
-                    placeholder = { Text("Write a note…") },
+                    minLines = if (isPhoto) 1 else 3,
+                    placeholder = { Text(if (isPhoto) "Add a caption…" else "Write a note…") },
                 )
-                Spacer(Modifier.height(10.dp))
-                Row {
-                    NOTE_COLORS.forEach { (name, swatch) ->
-                        Box(
-                            Modifier
-                                .padding(end = 8.dp)
-                                .size(26.dp)
-                                .clip(CircleShape)
-                                .background(swatch)
-                                .pointerInput(Unit) { detectTapGestures(onTap = { color = name }) }
-                                .then(if (name == color) Modifier.padding(2.dp) else Modifier),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (name == color) Text("✓", fontWeight = FontWeight.Bold)
+                // Recolouring only makes sense for a plain text note — a
+                // photo's colour is baked into its own image.
+                if (!isPhoto) {
+                    Spacer(Modifier.height(10.dp))
+                    Row {
+                        NOTE_COLORS.forEach { (name, swatch) ->
+                            Box(
+                                Modifier
+                                    .padding(end = 8.dp)
+                                    .size(26.dp)
+                                    .clip(CircleShape)
+                                    .background(swatch)
+                                    .pointerInput(Unit) { detectTapGestures(onTap = { color = name }) }
+                                    .then(if (name == color) Modifier.padding(2.dp) else Modifier),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (name == color) Text("✓", fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
