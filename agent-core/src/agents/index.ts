@@ -124,6 +124,9 @@ location (latitude/longitude) — the phone or computer the person is using
 right now, not a stored home address. Call it for any "near me" / "nearby" /
 "in my area" / "around here" request BEFORE asking the person where they are.
 It may report no location is available (permission off) — only then ask.
+Calling get_current_location only tells YOU where the person is — coordinates
+are never themselves an answer to a "near me" question (see "Extra helpers"
+below for what finishes the job, if listed there).
 
 Keep replies short and concrete. If a request needs no tool at all (a plain
 question with nothing to look up or compute, like "what can you help with?"),
@@ -162,7 +165,22 @@ for …", "search online for …", "the current price of …", "how do I …" �
 
 Example — "what time does the hardware store close today?": task with
 subagent_type "research-agent", description "Search the web for the hardware
-store's hours today and report them, with the source."`;
+store's hours today and report them, with the source."
+
+A "near me" / "nearby" / "in my area" request (restaurants, stores, events,
+gas prices, weather) needs BOTH the device's location AND a real web search —
+neither step alone answers it. Call get_current_location yourself first, then
+delegate to research-agent with the coordinates folded straight into the
+description. Do not stop after get_current_location and just report the
+numbers, and do not delegate to research-agent without first getting the
+coordinates — it has get_current_location too, but only calls it when you
+haven't already supplied a location in the description.
+
+Example — "what are some good restaurants near me?": call get_current_location
+first (say it returns latitude 37.3688, longitude -122.0363), then call task
+with subagent_type "research-agent" and description "Search the web for
+well-reviewed restaurants near latitude 37.3688, longitude -122.0363 and list
+a few with their address and cuisine."`;
 
 const PLANNER_WORKSHOP_SECTION = `
 
@@ -379,10 +397,13 @@ get_current_location (the device's current latitude/longitude — the phone or
 computer being used right now, not a stored home address).
 
 For a "near me" / "nearby" / "in my area" / "what's around here" question,
-call get_current_location FIRST, then put the coordinates straight into your
-web_search query (e.g. "state parks near 37.369, -122.036") rather than
-asking the person which city they mean. If get_current_location reports
-nothing is available, only then ask.
+put coordinates straight into your web_search query (e.g. "state parks near
+37.369, -122.036") rather than asking the person which city they mean. The
+task description you were given usually already has the coordinates in it
+(the planner fetches them before delegating to you) — use those directly, no
+need to call get_current_location yourself. Only call it if the description
+doesn't already include a location; if it then reports nothing is available,
+only then ask the person which city they mean.
 
 Workflow: call web_search first. If a snippet already answers the question,
 answer from it. If not, call open_page on the most promising result and read

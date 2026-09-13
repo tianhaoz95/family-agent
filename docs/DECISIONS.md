@@ -2934,3 +2934,62 @@ up to the ceiling.
 Files: `agent-core/src/config.ts` (`chatTimeoutMs`), `agent-core/src/server.ts`
 (`ChatTimeoutError`, `withChatTimeout`). Tests:
 `agent-core/test/chatTimeout.test.ts`.
+
+## Planner stopped short on "near me" questions instead of delegating
+
+Follow-up to the location-hang report: once Chat stopped hanging, "what are
+some good restaurants near me?" came back fast but useless — the reply was
+just the raw latitude/longitude with a suggestion to search it yourself. The
+transcript's tool-call strip showed exactly one call, `get_current_location`,
+and nothing else; the planner never delegated to `research-agent` at all.
+
+Root cause: `get_current_location` is bound directly on the planner (so a
+bare "where am I?" can be answered without a subagent round-trip), and its
+own instruction just said to call it "before asking the person where they
+are" — silent on what to do *with* the coordinates afterward. A small model,
+having satisfied the literal instruction, treated "I have a location" as
+"I'm done," rather than continuing on to delegate. `research-agent`'s own
+prompt was already correct (call get_current_location, then fold the
+coordinates into `web_search`) — but that code path never ran, because the
+planner never reached it.
+
+Fixed the same way every other unreliable-delegation case in this file was
+fixed: a worked example, not just an abstract instruction, showing the full
+two-step flow end to end (call get_current_location, THEN
+`task(subagent_type: "research-agent", description: "…near latitude …,
+longitude …")`) — added to `PLANNER_RESEARCH_SECTION`, the capability-gated
+block that only exists when web access is on, alongside an explicit line
+that raw coordinates are never themselves an answer to a "near me" question.
+The base, always-on prompt's own `get_current_location` paragraph got a
+similar nudge but deliberately **without naming research-agent** — the base
+prompt must never name an optional subagent (see "Planner delegated to a
+disabled subagent" above; a real test, `askFamilyAgent.test.ts`, asserts the
+base prompt contains none of the optional subagent names) — so it just points
+at "Extra helpers below" generically. `research-agent`'s own prompt gained
+the mirror-image note: use a location already folded into the task
+description as-is, don't redundantly call get_current_location again when
+the planner already did.
+
+**Not a speed fix — the opposite.** The broken shortcut (one tool call, a
+non-answer) was faster than the fix (get_current_location, then a real
+delegated web search) will be — correctness and latency pull in opposite
+directions here. A local 2-4B model doing real work for a "near me" question
+was always going to take longer than not doing that work; the reported
+slowness on top of the wrong answer wasn't a separate bug on top of the
+routing one, it's what the *correct* answer costs on modest hardware. No
+attempt was made to shrink that cost as part of this fix.
+
+**Verification gap, stated plainly**: this is a prompt-wording change, and
+the failure mode it fixes is a delegation-routing decision made by the local
+model itself — the one class of bug `agents.integration.test.ts` exists for
+(real, slow, live-model calls; see CLAUDE.md's "Test tiers" — small local
+models are unreliable enough that prompt/tool-wiring bugs routinely don't
+show up any other way), and the one this session's sandbox has no Ollama
+install to run. The fast suite (`askFamilyAgent.test.ts`'s
+"only advertises wired subagents" tests, unaffected — they check *which
+subagent names appear where*, not what the model does with them) passes,
+but whether the reworded prompt actually gets the configured model to
+delegate reliably is unverified here and should be watched for in real use.
+
+Files: `agent-core/src/agents/index.ts` (`PLANNER_PROMPT`,
+`PLANNER_RESEARCH_SECTION`, `RESEARCH_AGENT_PROMPT`).
