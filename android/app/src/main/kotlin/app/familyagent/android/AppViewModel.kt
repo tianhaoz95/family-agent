@@ -1637,29 +1637,46 @@ class AppViewModel(
         viewModelScope.launch {
             val started = apiCall { api.requestDesktopUpdate() }.getOrNull() ?: return@launch
             _state.value = _state.value.copy(desktopUpdateStatus = started, desktopUpdatePolling = true)
-            var consecutiveFailures = 0
-            for (i in 0 until 45) { // ~90s at 2s/tick — comfortably covers check+download+install
-                delay(2000)
-                val result = runCatching { api.getDesktopUpdateStatus() }
-                var stop = false
-                result.onSuccess { status ->
-                    consecutiveFailures = 0
-                    _state.value = _state.value.copy(desktopUpdateStatus = status)
-                    if (status.state == "no-update" || status.state == "error") stop = true
-                }.onFailure {
-                    consecutiveFailures++
-                    // A few misses in a row almost certainly means the host is
-                    // mid-relaunch, not that something's actually wrong.
-                    if (consecutiveFailures >= 3) {
-                        _state.value = _state.value.copy(
-                            desktopUpdateStatus = _state.value.desktopUpdateStatus?.copy(state = "restarting")
-                        )
-                        stop = true
-                    }
-                }
-                if (stop) break
-            }
+            pollDesktopUpdateStatus()
             _state.value = _state.value.copy(desktopUpdatePolling = false)
+        }
+    }
+
+    /** A plain restart, no update check — for a desktop stuck in a bad state
+     *  (a reply that never finishes, a frozen screen) with nothing new to
+     *  install. See docs/DECISIONS.md → "Remote restart, not just remote update". */
+    fun triggerDesktopRestart() {
+        if (_state.value.desktopUpdatePolling) return
+        viewModelScope.launch {
+            val started = apiCall { api.requestDesktopRestart() }.getOrNull() ?: return@launch
+            _state.value = _state.value.copy(desktopUpdateStatus = started, desktopUpdatePolling = true)
+            pollDesktopUpdateStatus()
+            _state.value = _state.value.copy(desktopUpdatePolling = false)
+        }
+    }
+
+    private suspend fun pollDesktopUpdateStatus() {
+        var consecutiveFailures = 0
+        for (i in 0 until 45) { // ~90s at 2s/tick — comfortably covers check+download+install
+            delay(2000)
+            val result = runCatching { api.getDesktopUpdateStatus() }
+            var stop = false
+            result.onSuccess { status ->
+                consecutiveFailures = 0
+                _state.value = _state.value.copy(desktopUpdateStatus = status)
+                if (status.state == "no-update" || status.state == "error") stop = true
+            }.onFailure {
+                consecutiveFailures++
+                // A few misses in a row almost certainly means the host is
+                // mid-relaunch, not that something's actually wrong.
+                if (consecutiveFailures >= 3) {
+                    _state.value = _state.value.copy(
+                        desktopUpdateStatus = _state.value.desktopUpdateStatus?.copy(state = "restarting")
+                    )
+                    stop = true
+                }
+            }
+            if (stop) break
         }
     }
 

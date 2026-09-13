@@ -318,6 +318,7 @@ struct DesktopUpdateStatus: Codable, Sendable, Equatable {
     var percent: Double? = nil
     var requestedAt: String? = nil
     var requestedBy: String? = nil
+    var requestedMode: String? = nil // "update" | "restart" — which kind of request this is
 }
 struct UpdateReportRequest: Codable, Sendable {
     var state: String

@@ -145,10 +145,16 @@ class FamilyAgentApi(
     suspend fun setAutoUpdateEnabled(enabled: Boolean): ServerSettings =
         json.decodeFromString(send("PUT", "/settings", json.encodeToString(UpdateSettingsRequest(autoUpdateEnabled = enabled))))
 
-    // ---- remote update-and-restart of the host desktop app ----
+    // ---- remote update-and-restart (or a plain restart) of the host desktop app ----
     suspend fun getDesktopUpdateStatus(): DesktopUpdateStatus = json.decodeFromString(get("/system/update-status"))
     suspend fun requestDesktopUpdate(): DesktopUpdateStatus =
         json.decodeFromString(sendNoBody("POST", "/system/update-request"))
+
+    /** A plain restart, no update check — for a desktop stuck in a bad state
+     *  with nothing new to install. See docs/DECISIONS.md → "Remote restart,
+     *  not just remote update". */
+    suspend fun requestDesktopRestart(): DesktopUpdateStatus =
+        json.decodeFromString(sendNoBody("POST", "/system/restart-request"))
 
     /** Set the internet-access provider (`"none"` = off) and its companion URL / API key. */
     suspend fun setWebAccess(provider: String, url: String? = null, apiKey: String? = null): ServerSettings =

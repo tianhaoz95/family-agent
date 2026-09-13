@@ -43,6 +43,7 @@ fun SettingsScreen(
     desktopUpdateStatus: app.familyagent.android.data.DesktopUpdateStatus? = null,
     desktopUpdatePolling: Boolean = false,
     onTriggerDesktopUpdate: () -> Unit = {},
+    onTriggerDesktopRestart: () -> Unit = {},
     onSetAutoUpdateEnabled: (Boolean) -> Unit = {},
     onSave: (String) -> Unit,
     onSignOut: () -> Unit,
@@ -50,6 +51,7 @@ fun SettingsScreen(
     var draft by remember(serverUrl) { mutableStateOf(serverUrl) }
     var showAdvanced by remember { mutableStateOf(false) }
     var showUpdateConfirm by remember { mutableStateOf(false) }
+    var showRestartConfirm by remember { mutableStateOf(false) }
 
     ScreenScaffold(
         title = "Settings",
@@ -281,6 +283,18 @@ fun SettingsScreen(
                         )
                     }
                     Spacer(Modifier.height(14.dp))
+                    Text(
+                        "If the app seems stuck — a reply that never finishes, a frozen screen — restarting it (with no update needed) can unstick it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppAccents.textSecondary,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { showRestartConfirm = true },
+                        enabled = !desktopUpdatePolling,
+                        shape = MaterialTheme.shapes.medium,
+                    ) { Text("Restart the host") }
+                    Spacer(Modifier.height(14.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Switch(
                             checked = serverSettings.autoUpdateEnabled,
@@ -323,6 +337,23 @@ fun SettingsScreen(
                     TextButton(onClick = { showUpdateConfirm = false; onTriggerDesktopUpdate() }) { Text("Update & restart") }
                 },
                 dismissButton = { TextButton(onClick = { showUpdateConfirm = false }) { Text("Cancel") } },
+            )
+        }
+
+        if (showRestartConfirm) {
+            AlertDialog(
+                onDismissRequest = { showRestartConfirm = false },
+                title = { Text("Restart the host?") },
+                text = {
+                    Text(
+                        "This restarts the Family Agent server on the host laptop — no update, just a fresh start. " +
+                            "Use this if it seems stuck. Everyone using it will reconnect in a few seconds."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showRestartConfirm = false; onTriggerDesktopRestart() }) { Text("Restart") }
+                },
+                dismissButton = { TextButton(onClick = { showRestartConfirm = false }) { Text("Cancel") } },
             )
         }
 

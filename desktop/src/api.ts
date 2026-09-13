@@ -736,13 +736,15 @@ export function toolUrl(toolsPort: number, path: string): string {
   return `http://127.0.0.1:${toolsPort}${path}`;
 }
 
-/** Remote update-and-restart of the host desktop app (triggered from a phone). */
+/** Remote update-and-restart (or a plain restart) of the host desktop app
+ *  (triggered from a phone). */
 export interface DesktopUpdateStatus {
   state: "idle" | "requested" | "checking" | "no-update" | "downloading" | "installing" | "restarting" | "error";
   message?: string;
   percent?: number;
   requestedAt?: string;
   requestedBy?: string;
+  requestedMode?: "update" | "restart";
 }
 
 export const api = {
@@ -771,10 +773,14 @@ export const api = {
     request<{ user: User }>(`/users/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteUser: (id: string) => request<{ deleted: true }>(`/users/${id}`, { method: "DELETE" }),
 
-  // ---- remote update-and-restart of the host desktop app ----
+  // ---- remote update-and-restart (or a plain restart) of the host desktop app ----
   getDesktopUpdateStatus: () => request<DesktopUpdateStatus>("/system/update-status"),
   requestDesktopUpdate: () => request<DesktopUpdateStatus>("/system/update-request", { method: "POST" }),
-  reportDesktopUpdateStatus: (patch: Omit<DesktopUpdateStatus, "requestedAt" | "requestedBy">) =>
+  /** A plain restart, no update check — for a desktop stuck in a bad state
+   *  with nothing new to install. See docs/DECISIONS.md → "Remote restart,
+   *  not just remote update". */
+  requestDesktopRestart: () => request<DesktopUpdateStatus>("/system/restart-request", { method: "POST" }),
+  reportDesktopUpdateStatus: (patch: Omit<DesktopUpdateStatus, "requestedAt" | "requestedBy" | "requestedMode">) =>
     request<DesktopUpdateStatus>("/system/update-report", { method: "POST", body: JSON.stringify(patch) }),
 
   getSettings: () => request<Settings>("/settings"),

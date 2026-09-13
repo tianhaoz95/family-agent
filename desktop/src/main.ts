@@ -5085,6 +5085,38 @@ settingsUpdateCheckBtn.addEventListener("click", () => void checkForUpdate());
 // — downloads, installs, and relaunches, reporting progress through
 // onProgress as it goes. Never asks for confirmation itself; callers that
 // need one (the manual button) ask before calling this.
+// relaunch() is supposed to end this process — none of the callers below
+// ever reset `updateInFlight` on success, because there's nothing left to
+// reset it in once the process is gone. But if it silently fails to
+// actually terminate (hangs, or resolves without the OS following through —
+// seen in the wild with no error surfaced anywhere), that leaves
+// `updateInFlight` stuck `true` forever: every future check (manual,
+// remote-triggered, the periodic background scan) silently no-ops on its
+// very first line, with no visible symptom beyond "nothing happens" —
+// exactly the failure a phone stuck on "Waiting for the host to pick this
+// up…" would see, since the remote poll never even gets far enough to
+// report "checking". Racing it against a timeout turns that silent,
+// permanent deadlock into a normal, recoverable error: every caller's
+// existing catch block already resets `updateInFlight` and surfaces a
+// message. Shared by an actual update install AND a plain remote restart
+// (performPlainRestart below) — both end the same way.
+async function relaunchWithTimeout(): Promise<never> {
+  const { relaunch } = await import("@tauri-apps/plugin-process");
+  await Promise.race([
+    relaunch(),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("The app didn't restart within 20s. Quit and reopen it by hand, then try again.")),
+        20000
+      )
+    ),
+  ]);
+  // Reached only if relaunch() resolved without the process actually dying —
+  // a real, if unlikely, outcome worth treating the same as the timeout above
+  // rather than falling through to "success" silently.
+  throw new Error("The restart call returned without the app actually restarting.");
+}
+
 async function performUpdateInstall(update: PendingUpdate, onProgress: (text: string) => void): Promise<void> {
   let downloaded = 0;
   let total = 0;
@@ -5103,34 +5135,19 @@ async function performUpdateInstall(update: PendingUpdate, onProgress: (text: st
       onProgress("Installing…");
     }
   });
-  const { relaunch } = await import("@tauri-apps/plugin-process");
   onProgress("Restarting…");
-  // relaunch() is supposed to end this process — none of its callers ever
-  // reset `updateInFlight` on success, because there's nothing left to reset
-  // it in once the process is gone. But if it silently fails to actually
-  // terminate (hangs, or resolves without the OS following through — seen in
-  // the wild with no error surfaced anywhere), that leaves `updateInFlight`
-  // stuck `true` forever: every future check (manual, remote-triggered, the
-  // periodic background scan) silently no-ops on their very first line, with
-  // no visible symptom beyond "nothing happens" — exactly the failure a phone
-  // stuck on "Waiting for the host to pick this up…" would see, since the
-  // remote poll never even gets far enough to report "checking". Racing it
-  // against a timeout turns that silent, permanent deadlock into a normal,
-  // recoverable error: every caller's existing catch block already resets
-  // `updateInFlight` and surfaces a message.
-  await Promise.race([
-    relaunch(),
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error("The app didn't restart within 20s. Quit and reopen it by hand, then try again.")),
-        20000
-      )
-    ),
-  ]);
-  // Reached only if relaunch() resolved without the process actually dying —
-  // a real, if unlikely, outcome worth treating the same as the timeout above
-  // rather than falling through to "success" silently.
-  throw new Error("The restart call returned without the app actually restarting.");
+  await relaunchWithTimeout();
+}
+
+// A plain restart, no update check at all — see docs/DECISIONS.md → "Remote
+// restart, not just remote update": a desktop wedged in a bad client-side
+// state (a hung operation, a stuck webview) has nothing for "Update &
+// restart" to install if it's already on the latest version, so that button
+// alone can't help. This is the same relaunch, just without a version to
+// fetch first.
+async function performPlainRestart(onProgress: (text: string) => void): Promise<void> {
+  onProgress("Restarting…");
+  await relaunchWithTimeout();
 }
 
 settingsUpdateInstallBtn.addEventListener("click", async () => {
@@ -5186,6 +5203,18 @@ async function pollRemoteUpdateRequest(): Promise<void> {
   };
   const who = status.requestedBy ? ` (requested by ${status.requestedBy} on their phone)` : "";
   try {
+    // "restart": skip the update check entirely — there may be nothing new
+    // to install, and the point is just a fresh process for a desktop
+    // that's stuck, not a version bump.
+    if (status.requestedMode === "restart") {
+      settingsUpdateStatusEl.textContent = `Restarting${who}…`;
+      await performPlainRestart((text) => {
+        settingsUpdateStatusEl.textContent = text;
+        report({ state: "restarting" });
+      });
+      // relaunch() ends this process — nothing below ever runs on success.
+      return;
+    }
     report({ state: "checking" });
     settingsUpdateCheckBtn.disabled = true;
     settingsUpdateStatusEl.textContent = `Checking for an update${who}…`;
@@ -5213,7 +5242,8 @@ async function pollRemoteUpdateRequest(): Promise<void> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     report({ state: "error", message });
-    settingsUpdateStatusEl.textContent = `Remote-triggered update failed: ${message}`;
+    settingsUpdateStatusEl.textContent =
+      status.requestedMode === "restart" ? `Remote-triggered restart failed: ${message}` : `Remote-triggered update failed: ${message}`;
     settingsUpdateCheckBtn.disabled = false;
     settingsUpdateInstallBtn.disabled = false;
     updateInFlight = false;

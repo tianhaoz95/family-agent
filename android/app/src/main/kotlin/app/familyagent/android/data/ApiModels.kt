@@ -360,7 +360,7 @@ data class EnvLocked(
     val webSearchProvider: Boolean = false,
 )
 
-// ---- remote update-and-restart of the host desktop app ----
+// ---- remote update-and-restart (or a plain restart) of the host desktop app ----
 
 @Serializable
 data class DesktopUpdateStatus(
@@ -370,6 +370,8 @@ data class DesktopUpdateStatus(
     val percent: Double? = null,
     val requestedAt: String? = null,
     val requestedBy: String? = null,
+    // "update" | "restart" — which kind of request this is
+    val requestedMode: String? = null,
 )
 
 @Serializable

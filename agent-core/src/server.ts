@@ -2956,7 +2956,7 @@ export function buildServer(
     return settingsPayload(req.authUser);
   });
 
-  // ---- remote update-and-restart of the host desktop app ----
+  // ---- remote update-and-restart (or a plain restart) of the host desktop app ----
   // See desktopUpdate.ts for the full hand-off shape. Reading/reporting is
   // open to any signed-in user (the desktop's own webview may currently be
   // signed in as a non-admin family member and still needs to report
@@ -2964,7 +2964,16 @@ export function buildServer(
   app.get("/system/update-status", async () => getDesktopUpdateStatus());
 
   app.post("/system/update-request", { preHandler: requireAdmin }, async (req) => {
-    return requestDesktopUpdate(req.authUser.displayName);
+    return requestDesktopUpdate(req.authUser.displayName, "update");
+  });
+
+  // A plain restart, no update check at all — for a desktop that's stuck in
+  // a bad state (a hung client-side operation, a wedged webview) and just
+  // needs a fresh process. "Update & restart" alone can't help there: if
+  // no new version is published, it just reports "You're up to date" and
+  // does nothing, leaving the family with no way to unstick it remotely.
+  app.post("/system/restart-request", { preHandler: requireAdmin }, async (req) => {
+    return requestDesktopUpdate(req.authUser.displayName, "restart");
   });
 
   const UpdateReportBody = z.object({

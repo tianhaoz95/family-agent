@@ -19,6 +19,8 @@ final class LocationProvider: NSObject {
     private var authContinuation: CheckedContinuation<Void, Never>?
     private var cached: (location: CLLocation, capturedAt: Date)?
     private static let cacheTTL: TimeInterval = 180
+    private static let locationTimeout: TimeInterval = 10
+    private static let authTimeout: TimeInterval = 120
 
     private override init() {
         super.init()
@@ -30,8 +32,23 @@ final class LocationProvider: NSObject {
 
     /// Returns a location for the current chat turn, requesting the
     /// when-in-use permission first if it hasn't been decided yet. Never
-    /// throws — nil covers denied/restricted/unavailable/timed out alike,
-    /// all of which get_current_location degrades to plainly the same way.
+    /// throws, and never hangs — nil covers denied/restricted/unavailable/
+    /// timed out alike, all of which get_current_location degrades to
+    /// plainly the same way.
+    ///
+    /// `requestLocation()`'s own delegate callback is NOT guaranteed to fire
+    /// promptly (or, in practice, at all — poor signal, no network-based fix
+    /// available indoors, Location Services toggled off system-wide after
+    /// the per-app permission was already granted, …), and there is no
+    /// built-in timeout: a caller awaiting this with no timeout of its own
+    /// hangs the whole chat send forever (confirmed — the actual bug behind
+    /// a report of Chat getting stuck on "…" after a "near me" question,
+    /// with no failure ever surfacing). Each continuation below is guarded
+    /// by its own timeout task that resumes it (with nil/Void) if nothing
+    /// else has by then; the `= nil` after every resume anywhere means
+    /// whichever of "the real callback" or "the timeout" runs first wins,
+    /// and the other's `?.resume` on an already-nil reference is a no-op —
+    /// never a double-resume.
     func currentLocation() async -> CLLocation? {
         if let cached, Date().timeIntervalSince(cached.capturedAt) < Self.cacheTTL {
             return cached.location
@@ -45,6 +62,13 @@ final class LocationProvider: NSObject {
         return await withCheckedContinuation { (cont: CheckedContinuation<CLLocation?, Never>) in
             locationContinuation = cont
             manager.requestLocation()
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(Self.locationTimeout))
+                if let pending = self.locationContinuation {
+                    self.locationContinuation = nil
+                    pending.resume(returning: nil)
+                }
+            }
         }
     }
 
@@ -52,6 +76,20 @@ final class LocationProvider: NSObject {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             authContinuation = cont
             manager.requestWhenInUseAuthorization()
+            // A generous timeout, not a short one: this one resolves only
+            // when the person actually answers the system permission alert,
+            // which blocks all interaction until they do — the failure mode
+            // here isn't "slow", it's "never came back at all" for some
+            // reason (the alert failing to appear, an odd app-lifecycle
+            // edge case), which is worth guarding against for the same
+            // reason as the location fetch above, just with more slack.
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(Self.authTimeout))
+                if let pending = self.authContinuation {
+                    self.authContinuation = nil
+                    pending.resume()
+                }
+            }
         }
     }
 }

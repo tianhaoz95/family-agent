@@ -5,6 +5,7 @@ struct SettingsView: View {
     @State private var serverURLDraft = ""
     @State private var showAdvanced = false
     @State private var showUpdateConfirm = false
+    @State private var showRestartConfirm = false
     @State private var notifyBlockedHint = false
     @State private var locationBlockedHint = false
 
@@ -141,6 +142,13 @@ struct SettingsView: View {
                             Button("Update & restart") { showUpdateConfirm = true }
                                 .buttonStyle(.soft)
                                 .disabled(model.desktopUpdatePolling)
+                            Spacer().frame(height: 10)
+                            Text("If the app seems stuck \u{2014} a reply that never finishes, a frozen screen — restarting it (with no update needed) can unstick it.")
+                                .appBodySmall().foregroundStyle(Theme.textMuted)
+                            Spacer().frame(height: 10)
+                            Button("Restart the host") { showRestartConfirm = true }
+                                .buttonStyle(.soft)
+                                .disabled(model.desktopUpdatePolling)
                             if let status = model.desktopUpdateStatus {
                                 Spacer().frame(height: 8)
                                 Text(desktopUpdateStatusText(status))
@@ -196,6 +204,12 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This restarts the Family Agent server on the host laptop. Everyone using it \u{2014} on this phone or any other \u{2014} will reconnect in a few seconds.")
+        }
+        .alert("Restart the host?", isPresented: $showRestartConfirm) {
+            Button("Restart", role: .destructive) { model.triggerDesktopRestart() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This restarts the Family Agent server on the host laptop \u{2014} no update, just a fresh start. Use this if it seems stuck. Everyone using it will reconnect in a few seconds.")
         }
     }
 

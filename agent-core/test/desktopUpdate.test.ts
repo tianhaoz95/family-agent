@@ -87,4 +87,32 @@ describe("remote update-and-restart of the host desktop app", () => {
     const res = await memberInject({ method: "POST", url: "/system/update-report", payload: { state: "bogus" } });
     expect(res.statusCode).toBe(400);
   });
+
+  // A plain restart — for a desktop stuck in a bad state with no update
+  // available, where "Update & restart" alone would just report "up to
+  // date" and leave it stuck. Shares the same hand-off shape, distinguished
+  // only by requestedMode.
+  it("defaults /system/update-request to requestedMode 'update'", async () => {
+    const res = await adminInject({ method: "POST", url: "/system/update-request" });
+    expect(res.json()).toMatchObject({ state: "requested", requestedMode: "update" });
+  });
+
+  it("/system/restart-request sets requestedMode 'restart', admin-only", async () => {
+    const memberRes = await memberInject({ method: "POST", url: "/system/restart-request" });
+    expect(memberRes.statusCode).toBe(403);
+
+    const res = await adminInject({ method: "POST", url: "/system/restart-request" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ state: "requested", requestedMode: "restart", requestedBy: admin.user.displayName });
+  });
+
+  it("requestedMode survives through a run's progress reports, like requestedBy/requestedAt", async () => {
+    await adminInject({ method: "POST", url: "/system/restart-request" });
+    const reported = await memberInject({
+      method: "POST",
+      url: "/system/update-report",
+      payload: { state: "restarting" },
+    });
+    expect(reported.json()).toMatchObject({ state: "restarting", requestedMode: "restart" });
+  });
 });

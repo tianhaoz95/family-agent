@@ -195,6 +195,10 @@ struct FamilyAgentAPI: Sendable {
 
     func getDesktopUpdateStatus() async throws -> DesktopUpdateStatus { try await get("/system/update-status") }
     func requestDesktopUpdate() async throws -> DesktopUpdateStatus { try await send("POST", "/system/update-request") }
+    /// A plain restart, no update check — for a desktop stuck in a bad state
+    /// with nothing new to install. See docs/DECISIONS.md → "Remote restart,
+    /// not just remote update".
+    func requestDesktopRestart() async throws -> DesktopUpdateStatus { try await send("POST", "/system/restart-request") }
     /// Set the internet-access provider (`"none"` = off) plus its companion URL / API key.
     func setWebAccess(provider: String, url: String? = nil, apiKey: String? = nil) async throws -> ServerSettings {
         try await send("PUT", "/settings", body: UpdateSettingsRequest(

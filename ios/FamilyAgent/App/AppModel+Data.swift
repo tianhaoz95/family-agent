@@ -405,27 +405,47 @@ extension AppModel {
         Task {
             desktopUpdateStatus = await perform { try await api.requestDesktopUpdate() }
             guard desktopUpdateStatus != nil else { return }
-            desktopUpdatePolling = true
-            var consecutiveFailures = 0
-            for _ in 0..<45 { // ~90s at 2s/tick — comfortably covers check+download+install
-                try? await Task.sleep(for: .seconds(2))
-                do {
-                    let status = try await api.getDesktopUpdateStatus()
-                    desktopUpdateStatus = status
-                    consecutiveFailures = 0
-                    if status.state == "no-update" || status.state == "error" { break }
-                } catch {
-                    consecutiveFailures += 1
-                    // A few misses in a row almost certainly means the host is
-                    // mid-relaunch, not that something's actually wrong.
-                    if consecutiveFailures >= 3 {
-                        desktopUpdateStatus = DesktopUpdateStatus(state: "restarting", requestedAt: desktopUpdateStatus?.requestedAt, requestedBy: desktopUpdateStatus?.requestedBy)
-                        break
-                    }
+            await pollDesktopUpdateStatus()
+        }
+    }
+
+    /// A plain restart, no update check — for when the desktop app itself
+    /// seems stuck (a hung operation, a frozen chat send) rather than out of
+    /// date. "Update & restart" alone can't help there: with nothing new to
+    /// install it just reports "up to date" and does nothing.
+    func triggerDesktopRestart() {
+        guard !desktopUpdatePolling else { return }
+        Task {
+            desktopUpdateStatus = await perform { try await api.requestDesktopRestart() }
+            guard desktopUpdateStatus != nil else { return }
+            await pollDesktopUpdateStatus()
+        }
+    }
+
+    private func pollDesktopUpdateStatus() async {
+        desktopUpdatePolling = true
+        var consecutiveFailures = 0
+        for _ in 0..<45 { // ~90s at 2s/tick — comfortably covers check+download+install
+            try? await Task.sleep(for: .seconds(2))
+            do {
+                let status = try await api.getDesktopUpdateStatus()
+                desktopUpdateStatus = status
+                consecutiveFailures = 0
+                if status.state == "no-update" || status.state == "error" { break }
+            } catch {
+                consecutiveFailures += 1
+                // A few misses in a row almost certainly means the host is
+                // mid-relaunch, not that something's actually wrong.
+                if consecutiveFailures >= 3 {
+                    desktopUpdateStatus = DesktopUpdateStatus(
+                        state: "restarting", requestedAt: desktopUpdateStatus?.requestedAt,
+                        requestedBy: desktopUpdateStatus?.requestedBy, requestedMode: desktopUpdateStatus?.requestedMode
+                    )
+                    break
                 }
             }
-            desktopUpdatePolling = false
         }
+        desktopUpdatePolling = false
     }
     /// Internet access: provider "none" = off; searxng needs `url`; tavily/brave need `apiKey`.
     func setWebAccess(provider: String, url: String?, apiKey: String?) {

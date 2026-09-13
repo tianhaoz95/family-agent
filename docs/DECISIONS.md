@@ -2744,3 +2744,57 @@ iOS: `ios/FamilyAgent/App/LocationProvider.swift`,
 `AppModel+Chat.swift` (`currentChatLocation`). Android:
 `android/.../data/LocationProvider.kt`, `AppViewModel.kt` (`currentChatLocation`).
 Tests: `agent-core/test/locationTool.test.ts`, `agent-core/test/chatLocation.test.ts`.
+
+## Remote restart, not just remote update
+
+"Remote-triggered update" (see "Desktop update" above) already gave a phone a
+way to unstick a hung desktop app — but only by accident, and only some of
+the time. `POST /system/update-request` asks the desktop to *check for an
+update and install it if there is one*; if the installed version is already
+current, that whole flow is a no-op (`"no-update"`, nothing happens) even
+though the actual problem — a wedged planner turn, a frozen renderer, some
+in-memory state the app got itself into — has nothing to do with which
+version is installed. A family member staring at a permanently-spinning
+"…" indicator (see the iOS location-hang bug this shipped alongside) had no
+remote lever to pull if no update happened to be published that day.
+
+The fix is a second, parallel request that reuses the exact same hand-off
+machinery instead of inventing a new one: `DesktopUpdateStatus` gained a
+`requestedMode: "update" | "restart"` field, set once at request time and
+carried through every progress report untouched
+(`requestDesktopUpdate(requestedBy, mode)` in `desktopUpdate.ts`). A new
+admin-only `POST /system/restart-request` is a one-line wrapper that calls
+the same `requestDesktopUpdate()` with `mode: "restart"` instead of minting
+a separate status shape, a separate poll loop, or a separate route family.
+
+The desktopside poll (`pollRemoteUpdateRequest` in `desktop/src/main.ts`)
+branches on `requestedMode` right at the top: `"restart"` skips the
+check/download/install sequence entirely and goes straight to
+`performPlainRestart()` — extracted to share `relaunchWithTimeout()` (the
+same 20s-race-then-throw helper `performUpdateInstall()` already used to
+survive `relaunch()` occasionally resolving without the OS actually tearing
+the process down) rather than duplicating that logic. A plain restart still
+reports progress through the identical `"restarting"` state every client's
+polling UI already knows how to render — no new terminal state, no new
+client-side branch beyond the button that starts it.
+
+Each client's Settings → "Host machine" section gained a second button,
+"Restart the host", next to "Update & restart", each with its own
+confirmation dialog (both affect every family member using the shared
+server, so both ask first) — copy makes the distinction explicit ("no
+update, just a fresh start… use this if it seems stuck"), so a family
+member who doesn't already understand the update-vs-restart distinction
+isn't left guessing which button to press. iOS: `AppModel+Data.swift`
+(`triggerDesktopRestart()`, sharing the extracted `pollDesktopUpdateStatus()`
+with `triggerDesktopUpdate()`) + `SettingsView.swift`. Android:
+`AppViewModel.kt` (`triggerDesktopRestart()`, same `pollDesktopUpdateStatus()`
+extraction) + `SettingsScreen.kt`.
+
+Files: `agent-core/src/desktopUpdate.ts`, `agent-core/src/server.ts`
+(`/system/restart-request`). Desktop: `desktop/src/main.ts`
+(`relaunchWithTimeout`, `performPlainRestart`), `desktop/src/api.ts`
+(`requestDesktopRestart`). iOS: `FamilyAgentAPI.swift`
+(`requestDesktopRestart`), `AppModel+Data.swift`, `SettingsView.swift`.
+Android: `data/FamilyAgentApi.kt` (`requestDesktopRestart`),
+`AppViewModel.kt`, `ui/SettingsScreen.kt`. Tests:
+`agent-core/test/desktopUpdate.test.ts`.
