@@ -2993,3 +2993,84 @@ delegate reliably is unverified here and should be watched for in real use.
 
 Files: `agent-core/src/agents/index.ts` (`PLANNER_PROMPT`,
 `PLANNER_RESEARCH_SECTION`, `RESEARCH_AGENT_PROMPT`).
+
+## Chat replies never notified while backgrounded (iOS)
+
+Reported as: sent a message in Chat, switched to another app while it was
+still working, and never got a "reply is ready" notification — the reply
+was just sitting there, already answered, the next time the app was opened.
+The permission/settings/foreground-check logic (`notifyOnReply`,
+`isAppForeground`, `isChatScreenActive`) was all already correct; the actual
+notification-posting code simply never got the chance to run.
+
+**Root cause: iOS suspends a backgrounded app's process almost immediately
+unless it explicitly asks for extra time.** `sendChat`'s work — await the
+`/chat` response, then decide whether to notify — ran inside a plain `Task
+{ }`. A bare `Task` gets no special treatment from the OS: the moment the app
+is backgrounded (in practice, within a few seconds — nowhere close to a real
+planner turn's ~30-110s+, and now up to `chatTimeoutMs`'s 240s ceiling with
+the timeout fix above), the whole process is suspended and every line of app
+code — including that `Task`'s `await api.chat(...)` — simply stops
+executing, mid-flight, with zero CPU given to it. It isn't cancelled or
+failed; it's frozen. When the app is reopened, the process resumes and the
+`Task` picks up where it left off, gets the reply, and evaluates the
+notify-or-not check — but by now the app is foreground again, so the "you're
+already looking at it" skip fires and no notification is shown for something
+the user in fact never saw arrive. The family-channel `@agent` reply path has
+the identical root cause via a different mechanism: `MainShell`'s 8s
+`refreshChannels()` poll loop (which is how a channel reply is even noticed —
+unlike Chat, nothing is being awaited inline) equally freezes the instant the
+process suspends, so a reply that lands seconds after backgrounding goes
+unnoticed the same way.
+
+**Fix: `BackgroundExecution.extend` (`App/Notifications.swift`)** wraps a
+unit of work in a `UIApplication.beginBackgroundTask` assertion — the
+standard iOS mechanism for "let me finish what I'm doing" after the user
+switches away, expiring after roughly 30 seconds (an OS-controlled budget,
+not something this app can lengthen or renew by re-requesting more — doing
+that is treated as abuse and throttled). `sendChat`'s `Task { }` became
+`BackgroundExecution.extend("chat-turn") { … }` with no other change to its
+body. The channel-poll case needed a different shape, since there's no
+single request to extend — the poll loop itself is what dies: a new
+`catchUpChannelsInBackground()` (`AppModel+Messages.swift`), fired once from
+`MainShell`'s existing `scenePhase` handler on the transition to
+`.background`, runs a short bounded loop (`refreshChannels()` every 2.5s for
+up to 25s) inside the same assertion — the ordinary 8s poll resumes on its
+own once the app is foreground again regardless.
+
+**This is a real improvement, not a complete fix — stated plainly, not
+buried.** ~30 seconds is comfortably enough for a fast turn but is very
+plausibly *not* enough for a slow one (a "near me" question doing a real web
+search, say) — a person backgrounding the app right after sending a genuinely
+slow request may still see nothing. Closing that gap for good needs a
+fundamentally different mechanism — a background `URLSession` (survives
+suspension and even termination, but the request outliving the *server*
+picking it up would still need coordinating) or a real push notification
+relayed through a server — and this app deliberately has no cloud component
+to relay a push through (see CLAUDE.md: nothing leaves the box except the
+opt-in web/MCP capabilities, and neither is a notification-relay service).
+`beginBackgroundTask` is the honest, architecture-consistent option available
+without adding one.
+
+**Android and desktop don't share this failure mode, checked rather than
+assumed.** Desktop is a normal long-running OS process — minimizing or
+switching away from the window never pauses the Node/JS event loop, so an
+in-flight `fetch` and its notification call run to completion exactly as if
+the window were focused; nothing to fix there. Android doesn't suspend an
+already-running app's process the instant it's backgrounded the way iOS
+does — a `viewModelScope` coroutine started before backgrounding generally
+keeps running for as long as the process survives, which for a normal
+foreground-then-backgrounded app is typically the whole duration of a chat
+turn. The gap that remains there is narrower and different in kind — the OS
+reclaiming the process under real memory pressure, or an OEM's aggressive
+battery-saver killing it outright — not something a code change here can
+close, and not something confirmed to actually be happening (no Android
+report, only the reasonable suspicion it might match iOS). Left alone rather
+than reaching for a foreground service (a permission + a persistent visible
+notification for the entire turn) to guard against an unconfirmed, lower-
+probability failure.
+
+Files: `ios/FamilyAgent/App/Notifications.swift` (`BackgroundExecution`),
+`AppModel+Chat.swift` (`sendChat`), `AppModel+Messages.swift`
+(`catchUpChannelsInBackground`), `Features/MainShell.swift` (fires it on
+`scenePhase` → `.background`).

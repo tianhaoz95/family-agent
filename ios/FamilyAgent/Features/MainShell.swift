@@ -136,7 +136,10 @@ struct MainShell: View {
         // whether the user is already looking at that exact conversation
         // (Chat — a specific channel is tracked via `model.activeChannel`
         // already) and skip a redundant notification.
-        .onChange(of: scenePhase, initial: true) { _, phase in model.isAppForeground = phase == .active }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            model.isAppForeground = phase == .active
+            if phase == .background { model.catchUpChannelsInBackground() }
+        }
         .onChange(of: selection, initial: true) { _, d in model.isChatScreenActive = d == .chat }
         // A tapped "reply is ready" notification — jump straight there.
         .onChange(of: model.pendingNotificationNav) { _, nav in

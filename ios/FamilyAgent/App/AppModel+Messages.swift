@@ -35,6 +35,26 @@ extension AppModel {
         channelNotifySeeded = true
     }
 
+    /// Best-effort catch-up for the moment the user backgrounds the app: the
+    /// periodic 8s channel poll (MainShell) effectively freezes as soon as
+    /// iOS suspends this process, so an @agent reply that lands shortly
+    /// after backgrounding would otherwise go unnoticed until the app is
+    /// reopened — the same underlying cause as sendChat's own fix (see
+    /// BackgroundExecution / docs/DECISIONS.md → "Chat replies never
+    /// notified while backgrounded"), just for the poll-based channel path
+    /// instead of a single awaited request. Not a guarantee for a reply that
+    /// takes longer than iOS's background budget to land — same honest
+    /// limit as the chat case.
+    func catchUpChannelsInBackground() {
+        BackgroundExecution.extend("channel-catchup") { [weak self] in
+            for _ in 0..<10 {
+                try? await Task.sleep(for: .seconds(2.5))
+                guard let self else { return }
+                await self.refreshChannels()
+            }
+        }
+    }
+
     func startConversation(memberIds: [String], name: String?, then open: @escaping (String) -> Void) {
         Task {
             let kind = memberIds.count > 1 || name != nil ? "group" : "dm"

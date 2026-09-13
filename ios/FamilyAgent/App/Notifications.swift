@@ -14,6 +14,55 @@ private enum NotifKey {
     static let channel = "channel"
 }
 
+/// Buys a little extra run time after the user switches away from the app,
+/// specifically so an in-flight chat/channel turn has a chance to actually
+/// finish and post its "reply is ready" notification — without this, a plain
+/// `Task` started before backgrounding gets essentially no CPU time at all
+/// once the app suspends (typically within a few seconds of leaving it, well
+/// short of a real planner turn's ~30-110s+), so the notification code never
+/// runs and the user sees nothing until they reopen the app themselves and
+/// find it already answered. iOS still caps this at roughly 30s regardless
+/// (`beginBackgroundTask`'s own budget, not something this app controls) —
+/// enough for a typical turn, not a guarantee for a slow one (a "near me"
+/// question that also does a web search, say). There is no stronger
+/// mechanism available without a push-notification server relaying from the
+/// household's own machine, which this app deliberately doesn't have (see
+/// CLAUDE.md — nothing leaves the box except the opt-in web/MCP capabilities,
+/// neither of which is "a cloud service this app's own notifications depend
+/// on"). See docs/DECISIONS.md → "Chat replies never notified while
+/// backgrounded".
+@MainActor
+enum BackgroundExecution {
+    /// Runs `work` with a background task assertion held for its duration —
+    /// call this instead of a bare `Task { ... }` for anything that should
+    /// keep going, and still be able to post a notification, after the user
+    /// backgrounds the app mid-turn.
+    static func extend(_ label: String, _ work: @escaping @MainActor () async -> Void) {
+        var taskId: UIBackgroundTaskIdentifier = .invalid
+        taskId = UIApplication.shared.beginBackgroundTask(withName: label) {
+            // The system calls this synchronously on the main thread when
+            // time is about to run out — end promptly, don't try to cancel
+            // `work` itself (it has no cooperative cancellation to offer,
+            // same as the chat turn it's wrapping never having one server-side).
+            if taskId != .invalid {
+                UIApplication.shared.endBackgroundTask(taskId)
+                taskId = .invalid
+            }
+        }
+        // Run `work` regardless of whether the assertion above actually
+        // secured background time (it can fail to — too many already held,
+        // or the system just declining) — the send has to happen either way;
+        // the assertion is purely insurance for the notification afterward.
+        Task {
+            await work()
+            if taskId != .invalid {
+                UIApplication.shared.endBackgroundTask(taskId)
+                taskId = .invalid
+            }
+        }
+    }
+}
+
 /// Posts (and helps navigate from) the "assistant reply is ready" local
 /// notification — Chat, or a family channel's @agent reply. The Android
 /// counterpart is `ReplyNotifications` in `Notifications.kt`.

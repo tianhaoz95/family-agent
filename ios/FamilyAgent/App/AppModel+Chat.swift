@@ -113,7 +113,12 @@ extension AppModel {
         chatLiveStepsByKey[key] = []
         let turnId = UUID().uuidString
 
-        Task {
+        // A plain `Task` here gets essentially no CPU time once the user
+        // backgrounds the app mid-turn — BackgroundExecution.extend buys a
+        // little (iOS-capped) extra time so a typical turn can still finish
+        // and post its "reply is ready" notification instead of silently
+        // going quiet until the app is reopened. See Notifications.swift.
+        BackgroundExecution.extend("chat-turn") { [self] in
             // live step polling for the duration of the turn
             let poller = Task { [weak self] in
                 while !Task.isCancelled {
