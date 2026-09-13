@@ -401,6 +401,24 @@ export function buildServer(
     }
   }, 60_000).unref?.();
 
+  // Chat/activity retention: enforces each user's own limit (PUT /settings)
+  // even if they never touch the setting again — a "count" limit is already
+  // kept exact by the immediate prune in the settings route, but "days"
+  // decays purely with time and needs a periodic re-check. See
+  // docs/DECISIONS.md → "Chat/activity retention limits".
+  setInterval(() => {
+    for (const user of store.listUsers()) {
+      if (user.chatRetentionMode === "off" && user.activityRetentionMode === "off") continue;
+      const scoped = store.scoped(user.id);
+      if (user.chatRetentionMode !== "off" && user.chatRetentionValue) {
+        scoped.pruneChatSessions(user.chatRetentionMode, user.chatRetentionValue);
+      }
+      if (user.activityRetentionMode !== "off" && user.activityRetentionValue) {
+        scoped.pruneActivity(user.activityRetentionMode, user.activityRetentionValue);
+      }
+    }
+  }, config.retentionSweepMs).unref?.();
+
   // A /chat turn's HTTP request always terminates, even if the underlying
   // model/tool call never does — see config.chatTimeoutMs. This races the
   // promise, it doesn't cancel it: deepagents' invoke() has no cooperative
@@ -2693,9 +2711,15 @@ export function buildServer(
 
   // ---- settings ----
   // model / ollamaBaseUrl / ocrModel / serverName are machine-wide (admin
-  // only). inboxDir is this user's own watched folder.
+  // only). inboxDir is this user's own watched folder; the retention fields
+  // below are this user's own too — see docs/DECISIONS.md → "Chat/activity
+  // retention limits".
   const settingsPayload = (user: UserRecord) => ({
     inboxDir: userInboxDir(user),
+    chatRetentionMode: user.chatRetentionMode,
+    chatRetentionValue: user.chatRetentionValue,
+    activityRetentionMode: user.activityRetentionMode,
+    activityRetentionValue: user.activityRetentionValue,
     model: config.model,
     ollamaBaseUrl: config.ollamaBaseUrl,
     ocrModel: config.ocrModel,
@@ -2734,6 +2758,10 @@ export function buildServer(
 
   const UpdateSettingsBody = z.object({
     inboxDir: z.string().min(1).optional(),
+    chatRetentionMode: z.enum(["off", "count", "days"]).optional(),
+    chatRetentionValue: z.number().int().min(1).max(100_000).optional(),
+    activityRetentionMode: z.enum(["off", "count", "days"]).optional(),
+    activityRetentionValue: z.number().int().min(1).max(100_000).optional(),
     model: z.string().min(1).optional(),
     ollamaBaseUrl: z
       .string()
@@ -2770,6 +2798,24 @@ export function buildServer(
     const adminFields = ["model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "vaultEnabled", "autoUpdateEnabled", "webSearchProvider", "webSearchUrl", "webSearchApiKey", "modelProvider", "openaiBaseUrl", "openaiApiKey", "openaiModel", "mistralrsModelId", "mistralrsGgufFile", "mistralrsIsqBits"] as const;
     if (req.authUser.role !== "admin" && adminFields.some((f) => patch[f] !== undefined)) {
       return reply.code(403).send({ error: "Only an admin can change machine settings." });
+    }
+
+    // A "count"/"days" mode needs an actual number to prune by — either in
+    // this same request, or already on file from a previous one (so "just
+    // change the number, keep count mode" doesn't have to resend the mode).
+    if (
+      (patch.chatRetentionMode === "count" || patch.chatRetentionMode === "days") &&
+      patch.chatRetentionValue === undefined &&
+      req.authUser.chatRetentionValue === null
+    ) {
+      return reply.code(400).send({ error: "Set how many (or how many days) of chat history to keep." });
+    }
+    if (
+      (patch.activityRetentionMode === "count" || patch.activityRetentionMode === "days") &&
+      patch.activityRetentionValue === undefined &&
+      req.authUser.activityRetentionValue === null
+    ) {
+      return reply.code(400).send({ error: "Set how many (or how many days) of activity to keep." });
     }
 
     for (const key of ["inboxDir", "model", "ollamaBaseUrl", "ocrModel", "asrModel", "ttsVoice", "embedModel", "serverName", "cardsEnabled", "vaultEnabled", "autoUpdateEnabled"] as const) {
@@ -2932,6 +2978,31 @@ export function buildServer(
       store.updateUser(req.authUser.id, { inboxDir: patch.inboxDir });
       req.authUser.inboxDir = patch.inboxDir;
       await hooks.onUserInboxChange?.(req.authUser.id, patch.inboxDir);
+    }
+    if (patch.chatRetentionMode !== undefined || patch.chatRetentionValue !== undefined) {
+      const updated = store.updateUser(req.authUser.id, {
+        chatRetentionMode: patch.chatRetentionMode,
+        chatRetentionValue: patch.chatRetentionValue,
+      })!;
+      req.authUser.chatRetentionMode = updated.chatRetentionMode;
+      req.authUser.chatRetentionValue = updated.chatRetentionValue;
+      // Apply immediately — a shorter limit shouldn't wait for the next
+      // periodic sweep (see the retention setInterval near agentTurns) to
+      // take effect.
+      if (updated.chatRetentionMode !== "off" && updated.chatRetentionValue) {
+        req.userStore.pruneChatSessions(updated.chatRetentionMode, updated.chatRetentionValue);
+      }
+    }
+    if (patch.activityRetentionMode !== undefined || patch.activityRetentionValue !== undefined) {
+      const updated = store.updateUser(req.authUser.id, {
+        activityRetentionMode: patch.activityRetentionMode,
+        activityRetentionValue: patch.activityRetentionValue,
+      })!;
+      req.authUser.activityRetentionMode = updated.activityRetentionMode;
+      req.authUser.activityRetentionValue = updated.activityRetentionValue;
+      if (updated.activityRetentionMode !== "off" && updated.activityRetentionValue) {
+        req.userStore.pruneActivity(updated.activityRetentionMode, updated.activityRetentionValue);
+      }
     }
     if (chatModelChanged) {
       rebuildModelClients();

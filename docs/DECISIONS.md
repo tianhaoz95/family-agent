@@ -3233,3 +3233,53 @@ at once. Regression test asserts `title` on all four.
 Files: `agent-core/src/db.ts` (`ChannelDetail`, `getChannelForUser`). Tests:
 `agent-core/test/server.routes.test.ts` ("every channel response shape
 includes 'title'").
+
+## Chat/activity retention limits
+
+A person can now cap how much of their own 1:1 chat history and activity log
+`agent-core` keeps, so it doesn't grow forever — either "keep the N most
+recent" or "keep the last N days," per category, independently.
+
+**Self-service, not an admin setting.** Chat history and the activity log
+are entirely one person's own data (unlike, say, the OCR model or web-search
+provider, which are genuinely machine-wide). Modeled exactly like `inboxDir`
+already is: a field on the `users` table, changeable by any signed-in user
+for themselves via the existing `PUT /settings` (not gated behind
+`adminFields`), read back on `GET /settings` alongside the machine config.
+`chat_retention_mode`/`activity_retention_mode` are nullable TEXT columns —
+`NULL` means "off" (keep forever, i.e. every existing account's actual
+behavior today; this migration changes nothing until someone opts in) rather
+than storing the literal string, so a lingering count/day number can never
+be silently read back under a mode that no longer means anything.
+
+**Applied two ways, deliberately not just one.** Setting a count-based limit
+(`PUT /settings` with `chatRetentionMode: "count"`) prunes immediately, in
+the same request — a limit is either already true or one write away from
+being true, there's nothing to wait for. A "days" limit is different: it's
+true on the day it's set and decays purely with the passage of time, so it
+also needs a periodic sweep (`config.retentionSweepMs`, default 6h, next to
+the `agentTurns` GC interval in `server.ts`) to actually notice a session
+that's aged past the cutoff since the setting was last touched. Both paths
+call the same `ScopedStore.pruneChatSessions` / `pruneActivity` — the
+immediate prune isn't a special case, it's just the sweep running early.
+
+**Deleting past the limit is a real delete, not an archive** — cascades
+`chat_messages` the same way `deleteChatSession` already does, and plain
+`DELETE FROM activity WHERE id IN (...)` for the log. No undo, matching
+every other delete in this app (a chat session, a document, a task).
+
+Not implemented: iOS/Android Settings UI for this (desktop only, for now) —
+the feature is fully functional and testable via the API and desktop's
+Settings page; the mobile clients would need their own "keep the most
+recent / keep the last N days" controls added to their own Settings screens
+as a fast-follow.
+
+Files: `agent-core/src/db.ts` (`UserRecord.chatRetentionMode` /
+`activityRetentionMode`, `ScopedStore.pruneChatSessions` / `pruneActivity`),
+`agent-core/src/config.ts` (`retentionSweepMs`), `agent-core/src/server.ts`
+(`PUT /settings`, the periodic sweep). Desktop: `desktop/src/api.ts`
+(`RetentionMode`), `desktop/src/main.ts` (the "Chat & activity history"
+Settings section). Tests: `agent-core/test/db.test.ts` ("ScopedStore —
+chat sessions" prune cases, "ScopedStore — activity retention"),
+`agent-core/test/server.routes.test.ts` ("chat/activity retention is
+self-service").

@@ -727,6 +727,36 @@
             </form>
             <p id="settings-status" class="settings-hint" role="status"></p>
 
+            <h3>Chat &amp; activity history</h3>
+            <p class="settings-hint">
+              Keep everything (the default), or automatically clean up your own older
+              chat sessions and activity log entries to save space. This only affects
+              your own account.
+            </p>
+            <form id="settings-chat-retention-form" class="inline-form">
+              <span>Chat sessions:</span>
+              <select id="settings-chat-retention-mode">
+                <option value="off">Keep everything</option>
+                <option value="count">Keep the most recent</option>
+                <option value="days">Keep the last</option>
+              </select>
+              <input id="settings-chat-retention-value" type="number" min="1" max="100000" placeholder="e.g. 50" hidden />
+              <span id="settings-chat-retention-unit" class="settings-hint" hidden></span>
+              <button type="submit">Save</button>
+            </form>
+            <form id="settings-activity-retention-form" class="inline-form">
+              <span>Activity log:</span>
+              <select id="settings-activity-retention-mode">
+                <option value="off">Keep everything</option>
+                <option value="count">Keep the most recent</option>
+                <option value="days">Keep the last</option>
+              </select>
+              <input id="settings-activity-retention-value" type="number" min="1" max="100000" placeholder="e.g. 90" hidden />
+              <span id="settings-activity-retention-unit" class="settings-hint" hidden></span>
+              <button type="submit">Save</button>
+            </form>
+            <p id="settings-retention-status" class="settings-hint" role="status"></p>
+
             <h3>Document OCR</h3>
             <p class="settings-hint">
               Currently: <strong id="settings-ocr-active">built-in engine</strong>.

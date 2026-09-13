@@ -14,6 +14,7 @@ import {
   type ActivityEntry,
   type Settings,
   type SettingsPatch,
+  type RetentionMode,
   type Tool,
   type ToolDbColumn,
   type ToolOperation,
@@ -4101,6 +4102,15 @@ const settingsInboxDirInput = document.getElementById("settings-inbox-dir") as H
 const settingsInboxBrowseBtn = document.getElementById("settings-inbox-browse") as HTMLButtonElement;
 const settingsForm = document.getElementById("settings-form") as HTMLFormElement;
 const settingsStatusEl = document.getElementById("settings-status")!;
+const settingsChatRetentionForm = document.getElementById("settings-chat-retention-form") as HTMLFormElement;
+const settingsChatRetentionMode = document.getElementById("settings-chat-retention-mode") as HTMLSelectElement;
+const settingsChatRetentionValue = document.getElementById("settings-chat-retention-value") as HTMLInputElement;
+const settingsChatRetentionUnit = document.getElementById("settings-chat-retention-unit")!;
+const settingsActivityRetentionForm = document.getElementById("settings-activity-retention-form") as HTMLFormElement;
+const settingsActivityRetentionMode = document.getElementById("settings-activity-retention-mode") as HTMLSelectElement;
+const settingsActivityRetentionValue = document.getElementById("settings-activity-retention-value") as HTMLInputElement;
+const settingsActivityRetentionUnit = document.getElementById("settings-activity-retention-unit")!;
+const settingsRetentionStatusEl = document.getElementById("settings-retention-status")!;
 const settingsOcrModelSelect = document.getElementById("settings-ocr-model-select") as HTMLSelectElement;
 const settingsOcrForm = document.getElementById("settings-ocr-form") as HTMLFormElement;
 const settingsOcrStatusEl = document.getElementById("settings-ocr-status")!;
@@ -4513,6 +4523,17 @@ async function refreshSettings() {
     inboxPathEl.textContent = settings.inboxDir;
     inboxPathEl.title = settings.inboxDir;
 
+    if (document.activeElement !== settingsChatRetentionValue) {
+      settingsChatRetentionMode.value = settings.chatRetentionMode;
+      settingsChatRetentionValue.value = settings.chatRetentionValue ? String(settings.chatRetentionValue) : "";
+      updateRetentionRow(settingsChatRetentionMode, settingsChatRetentionValue, settingsChatRetentionUnit, "sessions");
+    }
+    if (document.activeElement !== settingsActivityRetentionValue) {
+      settingsActivityRetentionMode.value = settings.activityRetentionMode;
+      settingsActivityRetentionValue.value = settings.activityRetentionValue ? String(settings.activityRetentionValue) : "";
+      updateRetentionRow(settingsActivityRetentionMode, settingsActivityRetentionValue, settingsActivityRetentionUnit, "entries");
+    }
+
     accountNameEl.textContent = currentUser?.displayName ?? "";
     accountRoleEl.textContent = currentUser?.role ?? "";
 
@@ -4591,6 +4612,58 @@ settingsForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const inboxDir = settingsInboxDirInput.value.trim();
   if (inboxDir) void saveSetting({ inboxDir }, settingsStatusEl, (s) => `Saved — now watching ${s.inboxDir}`);
+});
+
+// Shows/hides the number input + unit label for a retention row based on the
+// selected mode — "off" needs no number, "count"/"days" do. `noun` is what a
+// "count" mode counts ("sessions" / "entries"); "days" always reads "days".
+function updateRetentionRow(mode: HTMLSelectElement, value: HTMLInputElement, unit: HTMLElement, noun: string) {
+  const needsValue = mode.value === "count" || mode.value === "days";
+  value.hidden = !needsValue;
+  unit.hidden = !needsValue;
+  unit.textContent = mode.value === "days" ? "days" : noun;
+}
+settingsChatRetentionMode.addEventListener("change", () =>
+  updateRetentionRow(settingsChatRetentionMode, settingsChatRetentionValue, settingsChatRetentionUnit, "sessions")
+);
+settingsActivityRetentionMode.addEventListener("change", () =>
+  updateRetentionRow(settingsActivityRetentionMode, settingsActivityRetentionValue, settingsActivityRetentionUnit, "entries")
+);
+
+settingsChatRetentionForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const mode = settingsChatRetentionMode.value as RetentionMode;
+  const value = Number(settingsChatRetentionValue.value);
+  if (mode !== "off" && (!value || value < 1)) {
+    settingsRetentionStatusEl.textContent = "Enter how many (or how many days) to keep.";
+    return;
+  }
+  void saveSetting(
+    mode === "off" ? { chatRetentionMode: "off" } : { chatRetentionMode: mode, chatRetentionValue: value },
+    settingsRetentionStatusEl,
+    (s) =>
+      s.chatRetentionMode === "off"
+        ? "Saved — chat history is kept forever."
+        : `Saved — keeping ${s.chatRetentionMode === "count" ? `the last ${s.chatRetentionValue} sessions` : `the last ${s.chatRetentionValue} days`} of chat history.`
+  );
+});
+
+settingsActivityRetentionForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const mode = settingsActivityRetentionMode.value as RetentionMode;
+  const value = Number(settingsActivityRetentionValue.value);
+  if (mode !== "off" && (!value || value < 1)) {
+    settingsRetentionStatusEl.textContent = "Enter how many (or how many days) to keep.";
+    return;
+  }
+  void saveSetting(
+    mode === "off" ? { activityRetentionMode: "off" } : { activityRetentionMode: mode, activityRetentionValue: value },
+    settingsRetentionStatusEl,
+    (s) =>
+      s.activityRetentionMode === "off"
+        ? "Saved — activity log is kept forever."
+        : `Saved — keeping ${s.activityRetentionMode === "count" ? `the last ${s.activityRetentionValue} entries` : `the last ${s.activityRetentionValue} days`} of activity.`
+  );
 });
 
 // A dropdown, not free text — see settingsModelSelect above.

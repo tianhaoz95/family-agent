@@ -183,6 +183,12 @@ export const config = {
   // A routine that came due more than this long ago (laptop was asleep) is too
   // stale to catch up on — it's skipped forward to its next occurrence instead.
   routineCatchUpGraceMs: Number(process.env.FAMILY_AGENT_ROUTINE_CATCHUP_MS ?? 6 * 60 * 60_000),
+  // How often the chat-history/activity retention sweep re-checks every
+  // user's own limit (see db.ts's pruneChatSessions/pruneActivity). A
+  // "count" limit is already kept exact the moment it's set (PUT /settings
+  // prunes immediately) — this periodic pass is really for "days", which
+  // decays purely with the passage of time and needs someone to notice.
+  retentionSweepMs: Number(process.env.FAMILY_AGENT_RETENTION_SWEEP_MS ?? 6 * 60 * 60_000),
 
   // ---- Web access (web/*, agents/webTools.ts) ----
   // The deliberate, bounded exception to "nothing leaves the machine" (see

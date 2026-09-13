@@ -613,8 +613,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export type RetentionMode = "off" | "count" | "days";
+
 export interface Settings {
   inboxDir: string;
+  /** This user's own chat-history/activity-log cleanup limit — self-service,
+   *  like inboxDir. "off" (the default) keeps everything forever. See
+   *  docs/DECISIONS.md → "Chat/activity retention limits". */
+  chatRetentionMode: RetentionMode;
+  chatRetentionValue: number | null;
+  activityRetentionMode: RetentionMode;
+  activityRetentionValue: number | null;
   model: string;
   ollamaBaseUrl: string;
   ocrModel: string;
@@ -687,6 +696,10 @@ export interface Settings {
 
 export interface SettingsPatch {
   inboxDir?: string;
+  chatRetentionMode?: RetentionMode;
+  chatRetentionValue?: number;
+  activityRetentionMode?: RetentionMode;
+  activityRetentionValue?: number;
   model?: string;
   ollamaBaseUrl?: string;
   ocrModel?: string;

@@ -235,6 +235,83 @@ describe("ScopedStore — chat sessions", () => {
     expect(otherStore.deleteChatSession(session.id)).toBe(false);
     expect(store.getChatSession(session.id)).toBeDefined();
   });
+
+  it("pruneChatSessions('count') keeps only the N most recently active, cascading their messages", () => {
+    const sessions = [1, 2, 3, 4].map((n) => store.createChatSession(`session ${n}`));
+    store.addChatMessage(sessions[0].id, "user", "hi");
+    // Backdate updated_at (after the message above, which itself bumps it)
+    // so recency order is deterministic and independent of how fast this
+    // test runs.
+    sessions.forEach((s, i) => {
+      raw.handle
+        .prepare("UPDATE chat_sessions SET updated_at = ? WHERE id = ?")
+        .run(new Date(2024, 0, i + 1).toISOString(), s.id);
+    });
+
+    const deleted = store.pruneChatSessions("count", 2);
+    expect(deleted).toBe(2);
+    const remaining = store.listChatSessions().map((s) => s.id);
+    expect(remaining).toEqual([sessions[3].id, sessions[2].id]);
+    expect(store.getChatSession(sessions[0].id)).toBeUndefined();
+    expect(store.listChatMessages(sessions[0].id)).toEqual([]); // cascaded
+  });
+
+  it("pruneChatSessions('days') deletes anything not touched in N days", () => {
+    const stale = store.createChatSession("old");
+    const fresh = store.createChatSession("new");
+    raw.handle
+      .prepare("UPDATE chat_sessions SET updated_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 10 * 86_400_000).toISOString(), stale.id);
+
+    const deleted = store.pruneChatSessions("days", 7);
+    expect(deleted).toBe(1);
+    expect(store.getChatSession(stale.id)).toBeUndefined();
+    expect(store.getChatSession(fresh.id)).toBeDefined();
+  });
+
+  it("pruneChatSessions never touches another user's sessions", () => {
+    const other = raw.createUser({ username: "other2", displayName: "Other", password: "sekret123" });
+    const otherStore = raw.scoped(other.id);
+    const otherSession = otherStore.createChatSession("not yours");
+    store.createChatSession("mine");
+
+    store.pruneChatSessions("count", 0);
+    expect(otherStore.getChatSession(otherSession.id)).toBeDefined();
+  });
+});
+
+describe("ScopedStore — activity retention", () => {
+  let raw: Store;
+  let store: ScopedStore;
+
+  beforeEach(() => {
+    raw = new Store(":memory:");
+    const user = raw.createUser({ username: "owner", displayName: "Owner", password: "sekret123", role: "admin" });
+    store = raw.scoped(user.id);
+  });
+
+  it("pruneActivity('count') keeps only the N most recent rows", () => {
+    const rows = [1, 2, 3].map((n) => store.logActivity("user", "test.event", `event ${n}`));
+    rows.forEach((r, i) => {
+      raw.handle.prepare("UPDATE activity SET ts = ? WHERE id = ?").run(new Date(2024, 0, i + 1).toISOString(), r.id);
+    });
+
+    const deleted = store.pruneActivity("count", 1);
+    expect(deleted).toBe(2);
+    expect(store.listActivity().map((a) => a.id)).toEqual([rows[2].id]);
+  });
+
+  it("pruneActivity('days') deletes rows older than N days", () => {
+    const old = store.logActivity("user", "test.event", "old one");
+    store.logActivity("user", "test.event", "recent one");
+    raw.handle
+      .prepare("UPDATE activity SET ts = ? WHERE id = ?")
+      .run(new Date(Date.now() - 40 * 86_400_000).toISOString(), old.id);
+
+    const deleted = store.pruneActivity("days", 30);
+    expect(deleted).toBe(1);
+    expect(store.listActivity().some((a) => a.id === old.id)).toBe(false);
+  });
 });
 
 describe("Store — users, sessions, isolation", () => {

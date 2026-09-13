@@ -698,6 +698,59 @@ describe("HTTP API", () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it("chat/activity retention is self-service — no admin gate, defaults to off, applies immediately", async () => {
+    const member = seedUser(store, { username: "kid", role: "member" });
+    const asMember = authInject(app, member.token);
+
+    const initial = await asMember({ method: "GET", url: "/settings" });
+    expect(initial.json().chatRetentionMode).toBe("off");
+    expect(initial.json().activityRetentionMode).toBe("off");
+
+    // A count/days mode with no value, and none on file, is rejected.
+    const noValue = await asMember({ method: "PUT", url: "/settings", payload: { chatRetentionMode: "count" } });
+    expect(noValue.statusCode).toBe(400);
+
+    // Seed 3 sessions, then set a limit of 1 — the extra two are pruned right away.
+    const scoped = store.scoped(member.user.id);
+    scoped.createChatSession("one");
+    scoped.createChatSession("two");
+    scoped.createChatSession("three");
+
+    const put = await asMember({
+      method: "PUT",
+      url: "/settings",
+      payload: { chatRetentionMode: "count", chatRetentionValue: 1 },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json().chatRetentionMode).toBe("count");
+    expect(put.json().chatRetentionValue).toBe(1);
+    expect(scoped.listChatSessions()).toHaveLength(1);
+
+    // Changing just the number (mode already "count") doesn't need to resend it.
+    scoped.createChatSession("four");
+    scoped.createChatSession("five");
+    const put2 = await asMember({ method: "PUT", url: "/settings", payload: { chatRetentionValue: 2 } });
+    expect(put2.statusCode).toBe(200);
+    expect(scoped.listChatSessions()).toHaveLength(2);
+
+    // Turning it back off doesn't delete anything.
+    const off = await asMember({ method: "PUT", url: "/settings", payload: { chatRetentionMode: "off" } });
+    expect(off.json().chatRetentionMode).toBe("off");
+    expect(off.json().chatRetentionValue).toBeNull();
+    expect(scoped.listChatSessions()).toHaveLength(2);
+
+    // activityRetention behaves the same way, independently.
+    scoped.logActivity("user", "test.event", "one");
+    scoped.logActivity("user", "test.event", "two");
+    const putActivity = await asMember({
+      method: "PUT",
+      url: "/settings",
+      payload: { activityRetentionMode: "count", activityRetentionValue: 1 },
+    });
+    expect(putActivity.statusCode).toBe(200);
+    expect(scoped.listActivity()).toHaveLength(1);
+  });
+
   it("PUT /settings changes this user's watched folder and restarts their watcher", async () => {
     let calledWith: { userId: string; dir: string } | undefined;
     const s = new Store(":memory:");

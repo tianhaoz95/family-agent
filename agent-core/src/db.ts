@@ -140,6 +140,10 @@ export const PAIRING_TOKEN_TTL_MS = 5 * 60 * 1000;
 
 export type UserRole = "admin" | "member";
 
+/** "off" = keep everything forever (the historical default — no data is ever
+ *  deleted just by the passage of time or a growing count). */
+export type RetentionMode = "off" | "count" | "days";
+
 export interface UserRecord {
   id: string;
   username: string;
@@ -147,6 +151,16 @@ export interface UserRecord {
   role: UserRole;
   /** Per-user watched folder; null means "use the derived default". */
   inboxDir: string | null;
+  /** How much of this user's own chat history / activity log to keep —
+   *  self-service, like inboxDir, not an admin setting: it's entirely this
+   *  person's own data. "count" keeps the N most recent (sessions by
+   *  updated_at, activity rows by ts); "days" keeps anything touched/logged
+   *  within the last N days. See ScopedStore.pruneChatSessions /
+   *  pruneActivity and docs/DECISIONS.md → "Chat/activity retention limits". */
+  chatRetentionMode: RetentionMode;
+  chatRetentionValue: number | null;
+  activityRetentionMode: RetentionMode;
+  activityRetentionValue: number | null;
   createdAt: string;
 }
 
@@ -879,6 +893,14 @@ const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   // with no image, which the DEFAULT + nullable column already gives them.
   { table: "sticky_notes", column: "kind", ddl: "ALTER TABLE sticky_notes ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'" },
   { table: "sticky_notes", column: "image", ddl: "ALTER TABLE sticky_notes ADD COLUMN image TEXT" },
+  // Chat/activity retention limits: self-service, per user (see UserRecord).
+  // null mode = "off" (keep forever), matching every existing DB's actual
+  // behavior today — this migration changes nothing for anyone until they
+  // opt in.
+  { table: "users", column: "chat_retention_mode", ddl: "ALTER TABLE users ADD COLUMN chat_retention_mode TEXT" },
+  { table: "users", column: "chat_retention_value", ddl: "ALTER TABLE users ADD COLUMN chat_retention_value INTEGER" },
+  { table: "users", column: "activity_retention_mode", ddl: "ALTER TABLE users ADD COLUMN activity_retention_mode TEXT" },
+  { table: "users", column: "activity_retention_value", ddl: "ALTER TABLE users ADD COLUMN activity_retention_value INTEGER" },
 ];
 
 export class Store {
@@ -1098,6 +1120,10 @@ export class Store {
       displayName: input.displayName.trim(),
       role: input.role ?? "member",
       inboxDir: input.inboxDir ?? null,
+      chatRetentionMode: "off",
+      chatRetentionValue: null,
+      activityRetentionMode: "off",
+      activityRetentionValue: null,
       createdAt: new Date().toISOString(),
     };
     this.db
@@ -1143,7 +1169,16 @@ export class Store {
 
   updateUser(
     id: string,
-    patch: { displayName?: string; password?: string; role?: UserRole; inboxDir?: string | null }
+    patch: {
+      displayName?: string;
+      password?: string;
+      role?: UserRole;
+      inboxDir?: string | null;
+      chatRetentionMode?: RetentionMode;
+      chatRetentionValue?: number | null;
+      activityRetentionMode?: RetentionMode;
+      activityRetentionValue?: number | null;
+    }
   ): UserRecord | undefined {
     const user = this.getUser(id);
     if (!user) return undefined;
@@ -1155,6 +1190,29 @@ export class Store {
       this.db.prepare("UPDATE users SET role = ? WHERE id = ?").run(patch.role, id);
     if (patch.inboxDir !== undefined)
       this.db.prepare("UPDATE users SET inbox_dir = ? WHERE id = ?").run(patch.inboxDir, id);
+    // "off" is stored as NULL (mode) — a cleared value alongside it, since a
+    // stale count/day number sitting under "off" would be confusing to read
+    // straight out of the DB later.
+    if (patch.chatRetentionMode !== undefined) {
+      const mode = patch.chatRetentionMode === "off" ? null : patch.chatRetentionMode;
+      const value = mode === null ? null : (patch.chatRetentionValue ?? user.chatRetentionValue);
+      this.db
+        .prepare("UPDATE users SET chat_retention_mode = ?, chat_retention_value = ? WHERE id = ?")
+        .run(mode, value, id);
+    } else if (patch.chatRetentionValue !== undefined) {
+      this.db.prepare("UPDATE users SET chat_retention_value = ? WHERE id = ?").run(patch.chatRetentionValue, id);
+    }
+    if (patch.activityRetentionMode !== undefined) {
+      const mode = patch.activityRetentionMode === "off" ? null : patch.activityRetentionMode;
+      const value = mode === null ? null : (patch.activityRetentionValue ?? user.activityRetentionValue);
+      this.db
+        .prepare("UPDATE users SET activity_retention_mode = ?, activity_retention_value = ? WHERE id = ?")
+        .run(mode, value, id);
+    } else if (patch.activityRetentionValue !== undefined) {
+      this.db
+        .prepare("UPDATE users SET activity_retention_value = ? WHERE id = ?")
+        .run(patch.activityRetentionValue, id);
+    }
     return this.getUser(id);
   }
 
@@ -1781,6 +1839,24 @@ export class ScopedStore {
       .prepare("SELECT * FROM activity WHERE user_id = ? ORDER BY ts DESC LIMIT ?")
       .all(this.userId, limit) as any[];
     return rows.map((r) => ({ id: r.id, ts: r.ts, actor: r.actor, action: r.action, detail: r.detail }));
+  }
+
+  /** Same shape as pruneChatSessions, for the activity log — "count" keeps
+   *  the N most recent rows (by ts), "days" keeps the last N days. */
+  pruneActivity(mode: "count" | "days", value: number): number {
+    const ids = (
+      mode === "count"
+        ? this.db
+            .prepare("SELECT id FROM activity WHERE user_id = ? ORDER BY ts DESC LIMIT -1 OFFSET ?")
+            .all(this.userId, value)
+        : this.db
+            .prepare("SELECT id FROM activity WHERE user_id = ? AND ts < ?")
+            .all(this.userId, new Date(Date.now() - value * 86_400_000).toISOString())
+    ).map((r: any) => r.id as string);
+    if (ids.length === 0) return 0;
+    const placeholders = ids.map(() => "?").join(",");
+    this.db.prepare(`DELETE FROM activity WHERE id IN (${placeholders})`).run(...ids);
+    return ids.length;
   }
 
   // ---- tasks ----
@@ -3079,6 +3155,30 @@ export class ScopedStore {
     return true;
   }
 
+  /** Deletes chat sessions past this user's own retention setting — "count"
+   *  keeps the N most recently active (by updated_at), "days" keeps anything
+   *  touched in the last N days. Returns how many were deleted. Called by
+   *  the periodic sweep (server.ts) and once right after the setting itself
+   *  changes, so a shorter limit takes effect immediately rather than
+   *  waiting for the next tick. See docs/DECISIONS.md → "Chat/activity
+   *  retention limits". */
+  pruneChatSessions(mode: "count" | "days", value: number): number {
+    const ids = (
+      mode === "count"
+        ? this.db
+            .prepare("SELECT id FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT -1 OFFSET ?")
+            .all(this.userId, value)
+        : this.db
+            .prepare("SELECT id FROM chat_sessions WHERE user_id = ? AND updated_at < ?")
+            .all(this.userId, new Date(Date.now() - value * 86_400_000).toISOString())
+    ).map((r: any) => r.id as string);
+    for (const id of ids) {
+      this.db.prepare("DELETE FROM chat_messages WHERE session_id = ? AND user_id = ?").run(id, this.userId);
+      this.db.prepare("DELETE FROM chat_sessions WHERE id = ? AND user_id = ?").run(id, this.userId);
+    }
+    return ids.length;
+  }
+
   /** [] for a session that doesn't exist or isn't this user's — same "missed
    *  check surfaces as empty" shape as the channel methods use for membership. */
   listChatMessages(sessionId: string): ChatSessionMessageRecord[] {
@@ -3373,6 +3473,10 @@ function rowToUser(r: any): UserRecord {
     displayName: r.display_name,
     role: (r.role as UserRole) ?? "member",
     inboxDir: r.inbox_dir ?? null,
+    chatRetentionMode: (r.chat_retention_mode as RetentionMode) ?? "off",
+    chatRetentionValue: r.chat_retention_value ?? null,
+    activityRetentionMode: (r.activity_retention_mode as RetentionMode) ?? "off",
+    activityRetentionValue: r.activity_retention_value ?? null,
     createdAt: r.created_at,
   };
 }
