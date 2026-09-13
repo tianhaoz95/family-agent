@@ -7017,8 +7017,7 @@ const wikiNewBtn = document.getElementById("wiki-new-btn") as HTMLButtonElement;
 const wikiEmptyEl = document.getElementById("wiki-empty")!;
 const wikiEditorEl = document.getElementById("wiki-editor")!;
 const wikiTitleInput = document.getElementById("wiki-title-input") as HTMLInputElement;
-const wikiBodyInput = document.getElementById("wiki-body-input") as HTMLTextAreaElement;
-const wikiPreviewEl = document.getElementById("wiki-preview")!;
+const wikiBodyEditor = document.getElementById("wiki-body-editor") as HTMLDivElement;
 const wikiStatusEl = document.getElementById("wiki-status")!;
 const wikiUndoBtn = document.getElementById("wiki-undo-btn") as HTMLButtonElement;
 const wikiDeleteBtn = document.getElementById("wiki-delete-btn") as HTMLButtonElement;
@@ -7028,10 +7027,101 @@ let wikiPages: WikiPage[] = [];
 let activeWikiPageId: string | null = null;
 let wikiDirty = false;
 
+// ---- rich text <-> Markdown ----
+// The editor is a `contenteditable` surface, not a textarea — a family
+// member formats with the toolbar (Bold, headings, lists) instead of typing
+// "**"/"#", and the page is still stored (and read by every other client)
+// as plain Markdown. `renderMarkdown()` (marked + DOMPurify, already used
+// for chat/board) turns the loaded page into the editable HTML; this is the
+// inverse, walking the edited DOM back into that same Markdown subset —
+// headings, bold/italic, bullet/numbered lists, links, inline code,
+// paragraphs. See docs/DECISIONS.md → "Family wiki".
+function wikiInlineToMarkdown(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+  if (node.nodeType !== Node.ELEMENT_NODE) return "";
+  const el = node as HTMLElement;
+  const inner = Array.from(el.childNodes).map(wikiInlineToMarkdown).join("");
+  switch (el.tagName) {
+    case "B":
+    case "STRONG":
+      return inner.trim() ? `**${inner}**` : inner;
+    case "I":
+    case "EM":
+      return inner.trim() ? `*${inner}*` : inner;
+    case "CODE":
+      return `\`${inner}\``;
+    case "A":
+      return `[${inner}](${el.getAttribute("href") ?? ""})`;
+    case "BR":
+      return "\n";
+    default:
+      return inner;
+  }
+}
+function wikiBlockToMarkdown(el: HTMLElement): string[] {
+  const inline = () => Array.from(el.childNodes).map(wikiInlineToMarkdown).join("").trim();
+  const listItems = () => Array.from(el.children).filter((c) => c.tagName === "LI") as HTMLElement[];
+  switch (el.tagName) {
+    case "H1":
+      return [`# ${inline()}`];
+    case "H2":
+      return [`## ${inline()}`];
+    case "H3":
+      return [`### ${inline()}`];
+    case "UL":
+      return listItems().map((li) => `- ${Array.from(li.childNodes).map(wikiInlineToMarkdown).join("").trim()}`);
+    case "OL":
+      return listItems().map((li, i) => `${i + 1}. ${Array.from(li.childNodes).map(wikiInlineToMarkdown).join("").trim()}`);
+    default:
+      // Chromium's contenteditable wraps loose lines in <p> (or <div> —
+      // `defaultParagraphSeparator` is set to "p" below, but paste/undo can
+      // still leave a stray <div>); both just become a plain line.
+      return [inline()];
+  }
+}
+/** Chromium's `execCommand("insertUnorderedList"/"insertOrderedList")`
+ *  doesn't reliably replace the `<p>` the selection started in — it can
+ *  leave the new `<ul>`/`<ol>` (or, after `formatBlock`, an `<h1>`) as that
+ *  `<p>`'s only child instead, which `wikiBlockToMarkdown` would otherwise
+ *  treat as one plain paragraph and silently drop the list/heading markup
+ *  from. Hoists any such lone block child up to replace its wrapper, on a
+ *  clone (never the live, currently-focused editor). */
+function wikiNormalizeBlocks(root: HTMLElement): HTMLElement {
+  const clone = root.cloneNode(true) as HTMLElement;
+  const blocky = new Set(["H1", "H2", "H3", "UL", "OL"]);
+  for (const child of Array.from(clone.children)) {
+    if (child.tagName !== "P" && child.tagName !== "DIV") continue;
+    const meaningful = Array.from(child.childNodes).filter(
+      (n) => !(n.nodeType === Node.TEXT_NODE && !(n.textContent ?? "").trim())
+    );
+    if (meaningful.length === 1 && meaningful[0].nodeType === Node.ELEMENT_NODE && blocky.has((meaningful[0] as HTMLElement).tagName)) {
+      child.replaceWith(meaningful[0]);
+    }
+  }
+  return clone;
+}
+function htmlToMarkdown(rawRoot: HTMLElement): string {
+  const root = wikiNormalizeBlocks(rawRoot);
+  const lines: string[] = [];
+  for (const child of Array.from(root.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      const t = (child.textContent ?? "").trim();
+      if (t) lines.push(t);
+      continue;
+    }
+    if (child.nodeType !== Node.ELEMENT_NODE) continue;
+    lines.push(...wikiBlockToMarkdown(child as HTMLElement));
+  }
+  return lines.join("\n");
+}
+function wikiCurrentBody(): string {
+  return htmlToMarkdown(wikiBodyEditor);
+}
+
 function wikiHasUnsavedChanges(): boolean {
   const page = wikiPages.find((p) => p.id === activeWikiPageId);
   if (!page) return false;
-  return page.title !== wikiTitleInput.value || page.body !== wikiBodyInput.value;
+  return page.title !== wikiTitleInput.value || page.body !== wikiCurrentBody();
 }
 
 function renderWikiPageList() {
@@ -7071,7 +7161,7 @@ async function refreshWikiPages() {
     const fresh = wikiPages.find((p) => p.id === activeWikiPageId);
     if (fresh) {
       wikiTitleInput.value = fresh.title;
-      wikiBodyInput.value = fresh.body;
+      wikiBodyEditor.innerHTML = renderMarkdown(fresh.body);
       wikiUndoBtn.hidden = !fresh.prevBody;
     }
   }
@@ -7089,31 +7179,58 @@ async function openWikiPage(id: string) {
   activeWikiPageId = id;
   wikiDirty = false;
   wikiTitleInput.value = page.title;
-  wikiBodyInput.value = page.body;
+  wikiBodyEditor.innerHTML = renderMarkdown(page.body);
   wikiUndoBtn.hidden = !page.prevBody;
   wikiStatusEl.textContent = "";
   wikiEmptyEl.hidden = true;
   wikiEditorEl.hidden = false;
-  setWikiMode("edit");
   renderWikiPageList();
 }
 
-function setWikiMode(mode: "edit" | "preview") {
-  for (const b of document.querySelectorAll<HTMLButtonElement>("[data-wikimode]")) {
-    b.classList.toggle("is-active", b.dataset.wikimode === mode);
-  }
-  wikiBodyInput.hidden = mode !== "edit";
-  wikiPreviewEl.hidden = mode !== "preview";
-  if (mode === "preview") wikiPreviewEl.innerHTML = renderMarkdown(wikiBodyInput.value);
-}
-document.querySelectorAll<HTMLButtonElement>("[data-wikimode]").forEach((b) => {
-  b.addEventListener("click", () => setWikiMode(b.dataset.wikimode as "edit" | "preview"));
+// Chromium's contenteditable defaults new paragraphs to `<div>` unless told
+// otherwise — forcing `<p>` keeps a freshly-typed page's HTML shaped the
+// same way `renderMarkdown()` shapes a *loaded* one, so `htmlToMarkdown`
+// only needs to handle one paragraph tag.
+document.execCommand("defaultParagraphSeparator", false, "p");
+
+document.querySelectorAll<HTMLButtonElement>("[data-wikicmd]").forEach((b) => {
+  // Keep the editor's text selection alive across the click — a plain
+  // button click first fires mousedown, which blurs the contenteditable
+  // and collapses the selection formatting would otherwise apply to.
+  b.addEventListener("mousedown", (e) => e.preventDefault());
+  b.addEventListener("click", () => {
+    wikiBodyEditor.focus();
+    switch (b.dataset.wikicmd) {
+      case "h1":
+        document.execCommand("formatBlock", false, "h1");
+        break;
+      case "h2":
+        document.execCommand("formatBlock", false, "h2");
+        break;
+      case "p":
+        document.execCommand("formatBlock", false, "p");
+        break;
+      case "bold":
+        document.execCommand("bold");
+        break;
+      case "italic":
+        document.execCommand("italic");
+        break;
+      case "bullet":
+        document.execCommand("insertUnorderedList");
+        break;
+      case "number":
+        document.execCommand("insertOrderedList");
+        break;
+    }
+    wikiDirty = wikiHasUnsavedChanges();
+  });
 });
 
 wikiTitleInput.addEventListener("input", () => {
   wikiDirty = wikiHasUnsavedChanges();
 });
-wikiBodyInput.addEventListener("input", () => {
+wikiBodyEditor.addEventListener("input", () => {
   wikiDirty = wikiHasUnsavedChanges();
 });
 
@@ -7135,7 +7252,7 @@ wikiSaveBtn.addEventListener("click", async () => {
   wikiStatusEl.textContent = "Saving…";
   try {
     const page = (
-      await api.updateWikiPage(activeWikiPageId, { title: wikiTitleInput.value, body: wikiBodyInput.value })
+      await api.updateWikiPage(activeWikiPageId, { title: wikiTitleInput.value, body: wikiCurrentBody() })
     ).page;
     wikiDirty = false;
     wikiUndoBtn.hidden = !page.prevBody;
@@ -7152,11 +7269,10 @@ wikiUndoBtn.addEventListener("click", async () => {
   try {
     const page = (await api.revertWikiPage(activeWikiPageId)).page;
     wikiTitleInput.value = page.title;
-    wikiBodyInput.value = page.body;
+    wikiBodyEditor.innerHTML = renderMarkdown(page.body);
     wikiDirty = false;
     wikiUndoBtn.hidden = !page.prevBody;
     wikiStatusEl.textContent = "Reverted to the previous version.";
-    if (wikiPreviewEl.hidden === false) wikiPreviewEl.innerHTML = renderMarkdown(page.body);
     void refreshWikiPages();
   } catch (err) {
     wikiStatusEl.textContent = `Couldn't undo: ${err instanceof Error ? err.message : String(err)}`;
@@ -7199,9 +7315,14 @@ const galleryAddBtn = document.getElementById("gallery-add-btn") as HTMLButtonEl
 const galleryPhotoInput = document.getElementById("gallery-photo-input") as HTMLInputElement;
 const galleryViewerEl = document.getElementById("gallery-viewer")!;
 const galleryViewerImg = document.getElementById("gallery-viewer-img") as HTMLImageElement;
+const galleryViewerTitleEl = document.getElementById("gallery-viewer-title")!;
+const galleryViewerCaptionStatic = document.getElementById("gallery-viewer-caption-static") as HTMLParagraphElement;
+const galleryViewerCaptionEdit = document.getElementById("gallery-viewer-caption-edit") as HTMLDivElement;
 const galleryViewerCaption = document.getElementById("gallery-viewer-caption") as HTMLInputElement;
 const galleryViewerSaveCaptionBtn = document.getElementById("gallery-viewer-save-caption") as HTMLButtonElement;
-const galleryViewerDeleteBtn = document.getElementById("gallery-viewer-delete") as HTMLButtonElement;
+const galleryViewerCaptionToggleBtn = document.getElementById("gallery-viewer-caption-toggle") as HTMLButtonElement;
+const galleryViewerDownloadBtn = document.getElementById("gallery-viewer-download") as HTMLButtonElement;
+const galleryViewerMenuBtn = document.getElementById("gallery-viewer-menu") as HTMLButtonElement;
 const galleryViewerCloseBtn = document.getElementById("gallery-viewer-close") as HTMLButtonElement;
 
 let galleryScope: NoteScope = "shared";
@@ -7267,12 +7388,32 @@ galleryPhotoInput.addEventListener("change", async () => {
   await refreshGallery();
 });
 
+// Chrome mirrors the native (iOS/system) photo-viewer: an inline top bar
+// (back chevron, the date as the title, an overflow "…" menu for delete)
+// and a bottom toolbar (download, a caption toggle) rather than a bare
+// dark-scrim lightbox with an inline caption field always showing. See
+// docs/DECISIONS.md → "Family gallery".
+let activeGalleryPhoto: GalleryPhoto | null = null;
+
+function renderGalleryViewerCaption() {
+  const caption = activeGalleryPhoto?.caption ?? "";
+  galleryViewerCaptionEdit.hidden = true;
+  galleryViewerCaptionStatic.hidden = !caption;
+  galleryViewerCaptionStatic.textContent = caption;
+}
+
 async function openGalleryViewer(id: string) {
   try {
     const photo = (await api.getGalleryPhoto(id)).photo;
     activeGalleryPhotoId = id;
+    activeGalleryPhoto = photo;
     galleryViewerImg.src = photo.image;
     galleryViewerCaption.value = photo.caption ?? "";
+    const d = new Date(photo.createdAt);
+    galleryViewerTitleEl.textContent = Number.isNaN(d.getTime())
+      ? "Photo"
+      : `${friendlyDate(photo.createdAt)} · ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+    renderGalleryViewerCaption();
     galleryViewerEl.hidden = false;
   } catch (err) {
     galleryStatusEl.textContent = `Couldn't open that photo: ${err instanceof Error ? err.message : String(err)}`;
@@ -7281,31 +7422,67 @@ async function openGalleryViewer(id: string) {
 function closeGalleryViewer() {
   galleryViewerEl.hidden = true;
   activeGalleryPhotoId = null;
+  activeGalleryPhoto = null;
   galleryViewerImg.src = "";
 }
 galleryViewerCloseBtn.addEventListener("click", closeGalleryViewer);
 galleryViewerEl.addEventListener("click", (e) => {
   if (e.target === galleryViewerEl) closeGalleryViewer();
 });
+galleryViewerCaptionToggleBtn.addEventListener("click", () => {
+  const showingEdit = !galleryViewerCaptionEdit.hidden;
+  if (showingEdit) {
+    renderGalleryViewerCaption();
+    return;
+  }
+  galleryViewerCaptionStatic.hidden = true;
+  galleryViewerCaptionEdit.hidden = false;
+  galleryViewerCaption.value = activeGalleryPhoto?.caption ?? "";
+  galleryViewerCaption.focus();
+});
 galleryViewerSaveCaptionBtn.addEventListener("click", async () => {
   if (!activeGalleryPhotoId) return;
+  const caption = galleryViewerCaption.value.trim() || null;
   try {
-    await api.updateGalleryPhotoCaption(activeGalleryPhotoId, galleryViewerCaption.value.trim() || null);
+    const updated = (await api.updateGalleryPhotoCaption(activeGalleryPhotoId, caption)).photo;
+    activeGalleryPhoto = updated;
+    renderGalleryViewerCaption();
     void refreshGallery();
   } catch (err) {
     galleryStatusEl.textContent = `Couldn't save the caption: ${err instanceof Error ? err.message : String(err)}`;
   }
 });
-galleryViewerDeleteBtn.addEventListener("click", async () => {
-  if (!activeGalleryPhotoId) return;
-  if (!confirm("Delete this photo? This can't be undone.")) return;
-  try {
-    await api.deleteGalleryPhoto(activeGalleryPhotoId);
-    closeGalleryViewer();
-    void refreshGallery();
-  } catch (err) {
-    galleryStatusEl.textContent = `Couldn't delete that photo: ${err instanceof Error ? err.message : String(err)}`;
-  }
+galleryViewerCaption.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") galleryViewerSaveCaptionBtn.click();
+});
+galleryViewerDownloadBtn.addEventListener("click", () => {
+  if (!activeGalleryPhoto?.image) return;
+  const a = document.createElement("a");
+  a.href = activeGalleryPhoto.image;
+  const ext = activeGalleryPhoto.image.match(/^data:image\/(\w+);/)?.[1] ?? "jpg";
+  a.download = `photo-${activeGalleryPhoto.id}.${ext}`;
+  a.click();
+});
+galleryViewerMenuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const rect = galleryViewerMenuBtn.getBoundingClientRect();
+  openContextMenu(rect.right, rect.bottom, [
+    {
+      label: "Delete",
+      danger: true,
+      onSelect: async () => {
+        if (!activeGalleryPhotoId) return;
+        if (!confirm("Delete this photo? This can't be undone.")) return;
+        try {
+          await api.deleteGalleryPhoto(activeGalleryPhotoId);
+          closeGalleryViewer();
+          void refreshGallery();
+        } catch (err) {
+          galleryStatusEl.textContent = `Couldn't delete that photo: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+  ]);
 });
 
 // ---------- side panel (document preview + chat references) ----------

@@ -3444,15 +3444,83 @@ Files: `agent-core/src/db.ts` (`gallery_photos`, `GalleryPhotoRecord`,
 
 ## Scope notes (Wiki + Gallery)
 
-Agent-core, desktop, and iOS all shipped in this pass. Desktop was verified
-with a real headless-Chromium render (page create/edit/preview/save/undo for
-Wiki; upload/grid/viewer/caption/delete, and private-vs-shared isolation, for
-Gallery); iOS was verified interactively on a real simulator the same way
-(page create/edit/preview/save/undo pushed via `WikiView`/`WikiPageEditorView`;
-photo upload/grid/full-screen viewer/caption via `GalleryView`/
-`GalleryPhotoViewer`) — plus the full server test suite for both.
+Agent-core, desktop, iOS, and Android all shipped. Desktop was verified with
+a real headless-Chromium render; iOS and Android were each verified
+interactively on a real simulator/emulator (page create/edit/undo, photo
+upload/grid/viewer/caption, scope isolation) — plus the full server test
+suite.
 
-Android UI is the one deliberate fast-follow — the backend is complete and
-platform-agnostic (plain JSON + data-URI images, no desktop- or iOS-specific
-mechanism), so it needs only its own screens (mirroring `WikiScreen.kt` /
-`GalleryScreen.kt` off the iOS views above), not any server change.
+## The wiki editor is rich text, not a Markdown textarea
+
+A family member formats with a toolbar (headings, bold/italic, lists)
+instead of typing "#"/"**" by hand — the page is still stored, and read by
+every other client, as plain Markdown; each client converts at its own
+edit-surface boundary.
+
+**Desktop**: a `contenteditable` div. `renderMarkdown()` (already used for
+chat/board — `marked` + DOMPurify) turns the loaded page into editable HTML;
+toolbar buttons call `document.execCommand` (`bold`/`italic`/`formatBlock`/
+`insertUnorderedList`/`insertOrderedList`); `htmlToMarkdown()` walks the
+edited DOM back to Markdown on save. `document.execCommand`'s output is
+inconsistently shaped across situations — a fresh list can end up nested
+inside a leftover `<p>` — so `htmlToMarkdown` normalizes that one specific
+shape (a heading/list as a `<p>`'s sole child) before walking it, rather than
+trusting the DOM at face value.
+
+**iOS**: a real `UITextView`/`NSAttributedString`, matching the platform's
+own rich-text idiom. `MarkdownRichText.swift` converts both ways: loading
+leans on Foundation's own `AttributedString(markdown:)` inline parser
+(bold/italic/code/links come for free) plus hand-rolled heading/list
+handling (realized as real font size/weight and a literal "•"/"1." prefix,
+not a hidden attribute — keeps the Markdown serializer simple: read a line's
+first character's font to recover its heading level). A `RichTextController`
+mutates the `UITextView`'s `textStorage` directly for toolbar actions and
+manually re-fires `UITextViewDelegate.textViewDidChange` (a direct
+`textStorage` edit doesn't trigger it on its own), which is what keeps the
+SwiftUI binding in sync.
+
+**Android — a real limitation, not a style choice.** Compose has no
+UITextView/contenteditable equivalent: `BasicTextField(value: TextFieldValue,
+onValueChange)` reconstructs its `AnnotatedString` from its own internal
+plain-text `EditingBuffer` on every real IME keystroke, discarding any
+`SpanStyle`s applied to it from outside `onValueChange` — confirmed on a live
+emulator, not assumed: a heading applied by the toolbar rendered correctly
+right up until the next keystroke anywhere in the field, at which point it
+silently reverted to plain text. This is a genuine gap in Compose's text
+APIs, old and new alike (`TextFieldState` is equally plain-text-only at its
+core) — not a bug in this app's first attempt at mirroring the iOS/desktop
+"persistent style buffer" shape. The fix is a different, robust-by-construction
+architecture: the field's value is always exactly the page's plain Markdown
+text (toolbar actions insert/remove real "#"/"**" characters around the
+selection or current line — see `RichTextController` in
+`ui/MarkdownRichText.kt`), and a `VisualTransformation` re-derives the
+*display* styling fresh from that text on every recomposition. There is no
+separate style state to ever drift from what's stored or get wiped by a
+keystroke, because styling is a pure function of the current text. The
+honest cost: unlike iOS/desktop, a heading's "# " and bold's "**" stay
+visible on screen rather than hiding — the trade for that robustness on this
+platform.
+
+## The floating menu button hides behind a wiki page, like an open artifact
+
+`WikiPageEditorView` (iOS) / the `wikipage/{id}` route (Android) are always
+*pushed*, never a sheet — same as `ArtifactViewerView`/`ArtifactViewScreen`
+— so each relies on the platform's own back chevron rather than a custom
+button, and each sets a flag (`AppModel.wikiPageOpen` / the `showMenuButton`
+route exclusion list) telling the shell to hide its floating hamburger while
+that chevron is showing in the same top-left corner.
+
+## The gallery photo viewer mirrors the system Photos app
+
+Redesigned on all three clients to match the native Photos single-image
+view rather than a bare full-bleed lightbox: an inline top bar (back
+chevron, the photo's date as the title, an overflow "…" menu for delete)
+and a bottom toolbar (download/share, a caption toggle) — desktop
+(`.gallery-viewer-panel`, a light card rather than a dark scrim, since this
+app is deliberately light-themed everywhere else), iOS (native
+`.toolbar`/`.navigationTitle`, so it's really the system nav bar), Android
+(`GalleryPhotoScreen`'s hand-rolled top/bottom bars, mirroring
+`ArtifactViewScreen`'s chrome). Android's share button round-trips the
+photo's data URI through a real file under `cache/gallery/` (see
+`res/xml/file_paths.xml`) and a `FileProvider` content URI, the same
+mechanism `createChatPhotoUri` already used for camera capture.

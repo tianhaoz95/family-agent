@@ -374,6 +374,51 @@ class FamilyAgentApi(
         sendNoBody("DELETE", "/notes/$id")
     }
 
+    // ---- family wiki ----
+    suspend fun listWikiPages(): List<WikiPage> =
+        json.decodeFromString<WikiPagesResponse>(get("/wiki")).pages
+
+    suspend fun getWikiPage(id: String): WikiPage =
+        json.decodeFromString<WikiPageResponse>(get("/wiki/$id")).page
+
+    suspend fun createWikiPage(title: String, body: String = ""): WikiPage =
+        json.decodeFromString<WikiPageResponse>(
+            send("POST", "/wiki", json.encodeToString(CreateWikiPageRequest(title, body)))
+        ).page
+
+    suspend fun updateWikiPage(id: String, title: String? = null, body: String? = null): WikiPage =
+        json.decodeFromString<WikiPageResponse>(
+            send("PATCH", "/wiki/$id", json.encodeToString(UpdateWikiPageRequest(title, body)))
+        ).page
+
+    suspend fun revertWikiPage(id: String): WikiPage =
+        json.decodeFromString<WikiPageResponse>(sendNoBody("POST", "/wiki/$id/revert")).page
+
+    suspend fun deleteWikiPage(id: String) {
+        sendNoBody("DELETE", "/wiki/$id")
+    }
+
+    // ---- family gallery ----
+    suspend fun listGalleryPhotos(scope: String): List<GalleryPhoto> =
+        json.decodeFromString<GalleryPhotosResponse>(get("/gallery?scope=${scope.encodeQuery()}")).photos
+
+    suspend fun getGalleryPhoto(id: String): GalleryPhoto =
+        json.decodeFromString<GalleryPhotoResponse>(get("/gallery/$id")).photo
+
+    suspend fun createGalleryPhoto(scope: String, image: String, thumb: String, caption: String? = null): GalleryPhoto =
+        json.decodeFromString<GalleryPhotoResponse>(
+            send("POST", "/gallery", json.encodeToString(CreateGalleryPhotoRequest(scope, caption, image, thumb)))
+        ).photo
+
+    suspend fun updateGalleryPhotoCaption(id: String, caption: String?): GalleryPhoto =
+        json.decodeFromString<GalleryPhotoResponse>(
+            send("PATCH", "/gallery/$id", json.encodeToString(UpdateGalleryPhotoCaptionRequest(caption)))
+        ).photo
+
+    suspend fun deleteGalleryPhoto(id: String) {
+        sendNoBody("DELETE", "/gallery/$id")
+    }
+
     // ---- scheduled routines ----
     suspend fun listRoutines(): List<Routine> =
         json.decodeFromString<RoutinesResponse>(get("/routines")).routines

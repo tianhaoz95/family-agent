@@ -43,6 +43,8 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.MenuBook
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.Settings
@@ -84,6 +86,10 @@ import app.familyagent.android.ui.ConversationScreen
 import app.familyagent.android.ui.DiscoveryScreen
 import app.familyagent.android.ui.DocumentsScreen
 import app.familyagent.android.ui.FamilyScreen
+import app.familyagent.android.ui.GalleryScreen
+import app.familyagent.android.ui.GalleryPhotoScreen
+import app.familyagent.android.ui.WikiScreen
+import app.familyagent.android.ui.WikiPageScreen
 import app.familyagent.android.ui.LoginScreen
 import app.familyagent.android.ui.MessagesScreen
 import app.familyagent.android.ui.RoutinesScreen
@@ -102,6 +108,8 @@ private enum class Destination(val route: String, val label: String, val icon: a
     Messages("messages", "Messages", Icons.Rounded.Forum),
     Events("tasks", "Events", Icons.Rounded.CheckCircle),
     Board("board", "Board", Icons.Rounded.GridView),
+    Wiki("wiki", "Wiki", Icons.Rounded.MenuBook),
+    Gallery("gallery", "Gallery", Icons.Rounded.PhotoLibrary),
     Documents("documents", "Documents", Icons.Rounded.Description),
     Tools("tools", "Tools", Icons.Rounded.Build),
     Artifacts("artifacts", "Artifacts", Icons.Rounded.Article),
@@ -116,6 +124,8 @@ private enum class Destination(val route: String, val label: String, val icon: a
 
 private const val TOOL_VIEW_ROUTE = "toolview/{url}"
 private const val ARTIFACT_VIEW_ROUTE = "artifactview/{id}"
+private const val WIKI_PAGE_ROUTE = "wikipage/{id}"
+private const val GALLERY_PHOTO_ROUTE = "galleryphoto/{id}"
 private const val CONVERSATION_ROUTE = "conversation/{id}"
 private const val CHAT_SESSIONS_ROUTE = "chatsessions"
 
@@ -316,7 +326,9 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
         // see ArtifactViewerView.swift / AppModel.artifactViewerPushed).
         val showMenuButton = !onToolView &&
             currentDestination?.route != CONVERSATION_ROUTE &&
-            currentDestination?.route != ARTIFACT_VIEW_ROUTE
+            currentDestination?.route != ARTIFACT_VIEW_ROUTE &&
+            currentDestination?.route != WIKI_PAGE_ROUTE &&
+            currentDestination?.route != GALLERY_PHOTO_ROUTE
         Scaffold(
             containerColor = Color.Transparent,
         ) { padding ->
@@ -431,6 +443,49 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onMove = viewModel::moveNote,
                         onDelete = viewModel::deleteNote,
                         onRefresh = { viewModel.refreshNotes() },
+                    )
+                }
+                composable(Destination.Wiki.route) {
+                    WikiScreen(
+                        pages = state.wikiPages,
+                        onRefresh = viewModel::refreshWikiPages,
+                        onCreate = { title ->
+                            viewModel.createWikiPage(title) { page -> navController.navigate("wikipage/${page.id}") }
+                        },
+                        onOpen = { id -> navController.navigate("wikipage/$id") },
+                        onDelete = { id -> viewModel.deleteWikiPage(id) {} },
+                    )
+                }
+                composable(WIKI_PAGE_ROUTE) { entry ->
+                    val id = entry.arguments?.getString("id") ?: ""
+                    WikiPageScreen(
+                        pageId = id,
+                        load = viewModel::loadWikiPage,
+                        onSave = viewModel::saveWikiPage,
+                        onRevert = viewModel::revertWikiPage,
+                        onDelete = { pid -> viewModel.deleteWikiPage(pid) { navController.popBackStack() } },
+                        onClose = { navController.popBackStack() },
+                    )
+                }
+                composable(Destination.Gallery.route) {
+                    GalleryScreen(
+                        photos = state.galleryPhotos,
+                        scope = state.galleryScope,
+                        uploading = state.galleryUploading,
+                        onScope = viewModel::setGalleryScope,
+                        onUpload = viewModel::uploadGalleryPhoto,
+                        onRefresh = { viewModel.refreshGallery() },
+                        onOpen = { id -> navController.navigate("galleryphoto/$id") },
+                    )
+                }
+                composable(GALLERY_PHOTO_ROUTE) { entry ->
+                    val id = entry.arguments?.getString("id") ?: ""
+                    GalleryPhotoScreen(
+                        photoId = id,
+                        load = viewModel::loadGalleryPhoto,
+                        onSaveCaption = viewModel::saveGalleryCaption,
+                        onDelete = { pid -> viewModel.deleteGalleryPhoto(pid) { navController.popBackStack() } },
+                        onClose = { navController.popBackStack() },
                     )
                 }
                 composable(Destination.Events.route) {

@@ -602,6 +602,79 @@ data class UpdateNoteRequest(
     val y: Float? = null,
 )
 
+// ---- family wiki ----
+// Every page is shared — no private/shared toggle, any signed-in member can
+// edit or delete any page. One-step undo (prevBody/revision) mirrors an
+// artifact's revert. createdBy/updatedBy stay raw user ids on the record;
+// createdByName/updatedByName are resolved server-side at read time (same
+// idea as an artifact-comment author) so this client never has to join
+// ids to names itself. See docs/DECISIONS.md → "Family wiki".
+@Serializable
+data class WikiPage(
+    val id: String,
+    val title: String,
+    val body: String,
+    val prevBody: String? = null,
+    val revision: Int = 0,
+    val createdBy: String,
+    val updatedBy: String,
+    val createdByName: String = "Someone",
+    val updatedByName: String = "Someone",
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class WikiPagesResponse(val pages: List<WikiPage>)
+
+@Serializable
+data class WikiPageResponse(val page: WikiPage)
+
+@Serializable
+data class CreateWikiPageRequest(val title: String, val body: String = "")
+
+@Serializable
+data class UpdateWikiPageRequest(val title: String? = null, val body: String? = null)
+
+// ---- family gallery ----
+// "private" (this user's own) vs "shared" (the family gallery) — same split
+// as sticky notes. No server-side image processing: `image` (full display
+// size) and `thumb` (grid size) are two separately client-downscaled data:
+// URIs, uploaded as-is. A list response omits `image` (grid only needs
+// `thumb`); the full image is fetched on demand via GET /gallery/:id. See
+// docs/DECISIONS.md → "Family gallery".
+@Serializable
+data class GalleryPhoto(
+    val id: String,
+    val scope: String,
+    val userId: String,
+    val caption: String? = null,
+    val image: String = "",
+    val thumb: String,
+    val createdAt: String,
+)
+
+@Serializable
+data class GalleryPhotosResponse(val photos: List<GalleryPhoto>)
+
+@Serializable
+data class GalleryPhotoResponse(val photo: GalleryPhoto)
+
+@Serializable
+data class CreateGalleryPhotoRequest(
+    val scope: String,
+    val caption: String? = null,
+    val image: String,
+    val thumb: String,
+)
+
+/** No default on `caption` — always serialized, including an explicit
+ *  `null` (to clear a caption), unlike a field with a `= null` default,
+ *  which kotlinx.serialization would omit when it equals that default.
+ *  Same concern the iOS/desktop clients handle for this same endpoint. */
+@Serializable
+data class UpdateGalleryPhotoCaptionRequest(val caption: String?)
+
 // ---- scheduled routines ----
 // The server's RoutineTrigger is a discriminated union {kind: cron|once|every, …};
 // modelled flat here (only the field for `kind` is populated) rather than as a

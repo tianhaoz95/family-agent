@@ -74,43 +74,95 @@ struct GalleryView: View {
 
 /// Fetches the full-size image on open (the grid only ever holds the
 /// thumbnail) — same "list is light, one item is heavy" shape as the wiki
-/// page editor re-fetching its own fresh copy.
+/// page editor re-fetching its own fresh copy. Chrome mirrors the system
+/// Photos viewer: an inline nav bar (back chevron, the date as the title,
+/// an overflow menu for delete) plus a native bottom toolbar (share, a
+/// caption toggle) rather than a custom full-screen overlay.
 struct GalleryPhotoViewer: View {
     let photoId: String
     var onClose: () -> Void
     @Environment(AppModel.self) private var model
     @State private var photo: GalleryPhoto?
     @State private var caption = ""
+    @State private var editingCaption = false
     @State private var showDeleteConfirm = false
+    @FocusState private var captionFocused: Bool
+
+    private var titleText: String {
+        // Server sends fractional-second ISO 8601 ("…08:43:56.342Z"); the
+        // plain ISO8601DateFormatter() rejects that and returns nil, so the
+        // fractional-seconds formatter has to be tried first (same fallback
+        // ArtifactsView / Calendar+.swift's `friendlyTimestamp` already use).
+        let fractional = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()
+        guard let photo, let date = fractional.date(from: photo.createdAt) ?? ISO8601DateFormatter().date(from: photo.createdAt) else { return "Photo" }
+        let df = DateFormatter()
+        if Calendar.current.isDateInToday(date) { df.dateFormat = "'Today,' h:mm a" }
+        else if Calendar.current.isDateInYesterday(date) { df.dateFormat = "'Yesterday,' h:mm a" }
+        else { df.dateFormat = "MMM d, yyyy" }
+        return df.string(from: date)
+    }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 16) {
-                Spacer()
+        NavigationStack {
+            Group {
                 if let photo, let ui = ImageAttach.image(fromDataURI: photo.image) {
-                    Image(uiImage: ui).resizable().scaledToFit().frame(maxHeight: 500)
+                    Image(uiImage: ui)
+                        .resizable().scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    ProgressView().tint(.white)
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                Spacer()
-                HStack(spacing: 8) {
-                    TextField("Add a caption\u{2026}", text: $caption)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Save") {
-                        model.saveGalleryCaption(photoId, caption: caption.isEmpty ? nil : caption) { updated in
-                            if let updated { photo = updated }
+            }
+            .background(Theme.canvas)
+            .navigationTitle(titleText)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { onClose() } label: { Image(systemName: "chevron.left") }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button(role: .destructive) { showDeleteConfirm = true } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                }
+                ToolbarItemGroup(placement: .bottomBar) {
+                    if let photo, let ui = ImageAttach.image(fromDataURI: photo.image) {
+                        ShareLink(item: Image(uiImage: ui), preview: SharePreview(photo.caption?.isEmpty == false ? photo.caption! : "Photo", image: Image(uiImage: ui))) {
+                            Image(systemName: "square.and.arrow.up")
                         }
                     }
-                    .buttonStyle(.soft)
-                    Button("Delete", role: .destructive) { showDeleteConfirm = true }
-                        .buttonStyle(.soft)
+                    Spacer()
+                    Button {
+                        editingCaption.toggle()
+                        captionFocused = editingCaption
+                    } label: {
+                        Image(systemName: (photo?.caption?.isEmpty == false) ? "text.bubble.fill" : "text.bubble")
+                    }
                 }
-                .padding(.horizontal, 20)
-                Button("Close") { onClose() }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    .padding(.bottom, 20)
+            }
+            .safeAreaInset(edge: .bottom) {
+                if editingCaption {
+                    HStack(spacing: 8) {
+                        TextField("Add a caption\u{2026}", text: $caption)
+                            .focused($captionFocused)
+                            .textFieldStyle(.plain)
+                            .padding(10)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .onSubmit { saveCaption() }
+                        Button("Save") { saveCaption() }.buttonStyle(.primary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                } else if let c = photo?.caption, !c.isEmpty {
+                    Text(c)
+                        .appBodySmall()
+                        .foregroundStyle(Theme.textMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                }
             }
         }
         .alert("Delete this photo?", isPresented: $showDeleteConfirm) {
@@ -123,5 +175,12 @@ struct GalleryPhotoViewer: View {
                 caption = p.caption ?? ""
             }
         }
+    }
+
+    private func saveCaption() {
+        model.saveGalleryCaption(photoId, caption: caption.isEmpty ? nil : caption) { updated in
+            if let updated { photo = updated }
+        }
+        editingCaption = false
     }
 }

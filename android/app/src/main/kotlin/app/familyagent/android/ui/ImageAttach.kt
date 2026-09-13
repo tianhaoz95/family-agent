@@ -18,23 +18,32 @@ private const val MAX_EDGE = 1536
 private const val JPEG_QUALITY = 85
 
 /**
- * Reads an image [uri], downscales it to at most [MAX_EDGE] on the long side,
- * and returns it as a `data:image/jpeg;base64,…` URI. Null if it can't be read.
+ * Reads an image [uri], downscales it to at most [maxEdge] on the long side,
+ * and returns it as a `data:image/jpeg;base64,…` URI. Null if it can't be
+ * read. [maxEdge]/[quality] default to the chat-attachment sizing; the
+ * gallery calls this twice per upload with two different sizes (a display
+ * copy and a separately-downscaled thumbnail) — no server-side image
+ * processing at all. See docs/DECISIONS.md → "Family gallery".
  */
-suspend fun uriToScaledJpegDataUri(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
+suspend fun uriToScaledJpegDataUri(
+    context: Context,
+    uri: Uri,
+    maxEdge: Int = MAX_EDGE,
+    quality: Int = JPEG_QUALITY,
+): String? = withContext(Dispatchers.IO) {
     val raw = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(raw, 0, raw.size, bounds)
     val longest = maxOf(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
     var sample = 1
-    while (longest / sample > MAX_EDGE * 2) sample *= 2
+    while (longest / sample > maxEdge * 2) sample *= 2
 
     val decoded = BitmapFactory.decodeByteArray(
         raw, 0, raw.size,
         BitmapFactory.Options().apply { inSampleSize = sample },
     ) ?: return@withContext null
 
-    val scale = minOf(1f, MAX_EDGE.toFloat() / maxOf(decoded.width, decoded.height))
+    val scale = minOf(1f, maxEdge.toFloat() / maxOf(decoded.width, decoded.height))
     val bmp = if (scale < 1f) {
         Bitmap.createScaledBitmap(decoded, (decoded.width * scale).toInt(), (decoded.height * scale).toInt(), true)
     } else {
@@ -42,7 +51,7 @@ suspend fun uriToScaledJpegDataUri(context: Context, uri: Uri): String? = withCo
     }
 
     val out = ByteArrayOutputStream()
-    bmp.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+    bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
     "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 }
 

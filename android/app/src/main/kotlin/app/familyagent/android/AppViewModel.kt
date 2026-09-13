@@ -30,6 +30,8 @@ import app.familyagent.android.data.RoutineInput
 import app.familyagent.android.data.RoutineRun
 import app.familyagent.android.data.SettingsStore
 import app.familyagent.android.data.StickyNote
+import app.familyagent.android.data.WikiPage
+import app.familyagent.android.data.GalleryPhoto
 import app.familyagent.android.data.Task
 import app.familyagent.android.data.Tool
 import app.familyagent.android.data.UnauthorizedException
@@ -171,6 +173,12 @@ data class AppUiState(
     val channelTranscribing: Boolean = false,
     val notes: List<StickyNote> = emptyList(),
     val noteScope: String = "shared",
+    // ---- family wiki ----
+    val wikiPages: List<WikiPage> = emptyList(),
+    // ---- family gallery ----
+    val galleryPhotos: List<GalleryPhoto> = emptyList(),
+    val galleryScope: String = "shared",
+    val galleryUploading: Boolean = false,
     // ---- scheduled routines ----
     /** Server has routines enabled (from /health) — hides the Routines drawer item. */
     val routinesEnabled: Boolean = true,
@@ -1291,6 +1299,99 @@ class AppViewModel(
         _state.value = _state.value.copy(notes = _state.value.notes.filterNot { it.id == id })
         viewModelScope.launch {
             apiCall { api.deleteNote(id) }.onSuccess { refreshNotes() }
+        }
+    }
+
+    // ---- family wiki ---- (see docs/DECISIONS.md → "Family wiki")
+
+    /** Loads one page's own fresh copy — the list row's `WikiPage` may be
+     *  stale — same "list is light, one item is fetched fresh" shape as
+     *  `loadArtifact`. */
+    suspend fun loadWikiPage(id: String): WikiPage? = apiCall { api.getWikiPage(id) }.getOrNull()
+
+    fun refreshWikiPages() {
+        viewModelScope.launch {
+            apiCall { api.listWikiPages() }.onSuccess { _state.value = _state.value.copy(wikiPages = it) }
+        }
+    }
+
+    fun createWikiPage(title: String, onCreated: (WikiPage) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.createWikiPage(title) }.onSuccess { page ->
+                refreshWikiPages()
+                onCreated(page)
+            }
+        }
+    }
+
+    fun saveWikiPage(id: String, title: String, body: String, onDone: (WikiPage?) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.updateWikiPage(id, title = title, body = body) }
+                .onSuccess { page -> refreshWikiPages(); onDone(page) }
+                .onFailure { onDone(null) }
+        }
+    }
+
+    fun revertWikiPage(id: String, onDone: (WikiPage?) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.revertWikiPage(id) }
+                .onSuccess { page -> refreshWikiPages(); onDone(page) }
+                .onFailure { onDone(null) }
+        }
+    }
+
+    fun deleteWikiPage(id: String, onDone: () -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.deleteWikiPage(id) }
+            refreshWikiPages()
+            onDone()
+        }
+    }
+
+    // ---- family gallery ---- (see docs/DECISIONS.md → "Family gallery")
+
+    /** Fetches the full-size image on open — the grid only ever holds the
+     *  thumbnail. Same shape as `loadWikiPage`/`loadArtifact`. */
+    suspend fun loadGalleryPhoto(id: String): GalleryPhoto? = apiCall { api.getGalleryPhoto(id) }.getOrNull()
+
+    fun refreshGallery(scope: String = _state.value.galleryScope) {
+        viewModelScope.launch {
+            apiCall { api.listGalleryPhotos(scope) }.onSuccess {
+                _state.value = _state.value.copy(galleryPhotos = it, galleryScope = scope)
+            }
+        }
+    }
+
+    fun setGalleryScope(scope: String) {
+        _state.value = _state.value.copy(galleryScope = scope)
+        refreshGallery(scope)
+    }
+
+    /** [image]/[thumb] are already downscaled to their own target sizes by
+     *  the caller (two different max-edge values) — no server-side image
+     *  processing at all. See docs/DECISIONS.md → "Family gallery". */
+    fun uploadGalleryPhoto(image: String, thumb: String) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(galleryUploading = true)
+            apiCall { api.createGalleryPhoto(_state.value.galleryScope, image, thumb) }
+            _state.value = _state.value.copy(galleryUploading = false)
+            refreshGallery()
+        }
+    }
+
+    fun saveGalleryCaption(id: String, caption: String?, onDone: (GalleryPhoto?) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.updateGalleryPhotoCaption(id, caption) }
+                .onSuccess { photo -> refreshGallery(); onDone(photo) }
+                .onFailure { onDone(null) }
+        }
+    }
+
+    fun deleteGalleryPhoto(id: String, onDone: () -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.deleteGalleryPhoto(id) }
+            refreshGallery()
+            onDone()
         }
     }
 

@@ -205,6 +205,8 @@ final class AppModel {
     // this is true, since the pushed viewer's own system back button then
     // sits in the same top-left corner the floating button otherwise owns.
     var artifactViewerPushed = false
+    // Same idea, for WikiPageEditorView.
+    var wikiPageOpen = false
 
     // ---- family chat + board ----
     var familyMembers: [FamilyMember] = []

@@ -62,82 +62,86 @@ struct WikiView: View {
     }
 }
 
-/// Edit/preview a single page. Loads its own fresh copy on appear (the list
-/// row's `WikiPage` may be stale) — same "list is light, one item is fetched
+/// One page, edited as rich text — a family member formats with the
+/// toolbar (Bold, headings, lists) rather than typing Markdown syntax; the
+/// page is still stored (and read by every other client) as plain Markdown,
+/// converted at load/save via `MarkdownRichText`. See docs/DECISIONS.md →
+/// "Family wiki". Loads its own fresh copy on appear (the list row's
+/// `WikiPage` may be stale) — same "list is light, one item is fetched
 /// fresh" shape the gallery viewer uses.
+///
+/// Pushed (never a sheet), so — exactly like `ArtifactViewerView` — it
+/// relies on `NavigationStack`'s own back chevron rather than a custom
+/// button, and sets `model.wikiPageOpen` so `MainShell` hides its floating
+/// menu button while that chevron is showing in the same top-left corner.
 struct WikiPageEditorView: View {
     let pageId: String
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
-    @State private var body_ = ""
+    @State private var bodyAttributed = NSAttributedString(string: "")
     @State private var canUndo = false
-    @State private var mode: Mode = .edit
     @State private var status = ""
     @State private var showDeleteConfirm = false
     @State private var loaded = false
-
-    enum Mode { case edit, preview }
+    @State private var richController = RichTextController()
 
     var body: some View {
-        ScreenScaffold(title: "Page", subtitle: "", hasMenuButton: false) {
-            VStack(alignment: .leading, spacing: 12) {
-                TextField("Page title", text: $title)
-                    .font(.inter(18, .bold))
-                    .textFieldStyle(.plain)
+        VStack(alignment: .leading, spacing: 0) {
+            TextField("Page title", text: $title)
+                .font(.inter(18, .bold))
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
 
-                Picker("", selection: $mode) {
-                    Text("Edit").tag(Mode.edit)
-                    Text("Preview").tag(Mode.preview)
-                }
-                .pickerStyle(.segmented)
+            RichTextToolbar(controller: richController)
+            Divider()
 
-                if mode == .edit {
-                    TextEditor(text: $body_)
-                        .font(.system(.body, design: .monospaced))
-                        .frame(minHeight: 300)
-                        .padding(8)
-                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-                } else {
-                    ScrollView {
-                        AgentMarkdown(text: body_)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(minHeight: 300)
-                    .padding(8)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-                }
+            RichTextEditor(attributedText: $bodyAttributed, controller: richController)
+                .padding(.horizontal, 10)
 
-                if !status.isEmpty {
-                    Text(status).appBodySmall().foregroundStyle(Theme.textMuted)
-                }
+            if !status.isEmpty {
+                Text(status).appBodySmall().foregroundStyle(Theme.textMuted)
+                    .padding(.horizontal, 16).padding(.top, 4)
+            }
 
-                HStack(spacing: 10) {
-                    if canUndo {
-                        Button("Undo last edit") {
-                            model.revertWikiPage(pageId) { page in
-                                guard let page else { return }
-                                title = page.title; body_ = page.body; canUndo = page.prevBody != nil
-                                status = "Reverted to the previous version."
-                            }
-                        }
-                        .buttonStyle(.soft)
-                    }
-                    Button("Delete", role: .destructive) { showDeleteConfirm = true }
-                        .buttonStyle(.soft)
-                    Spacer()
-                    Button("Save") {
-                        status = "Saving\u{2026}"
-                        model.saveWikiPage(pageId, title: title, body: body_) { page in
-                            guard let page else { status = "Couldn't save."; return }
-                            canUndo = page.prevBody != nil
-                            status = "Saved \u{2014} last edited by \(page.updatedByName)."
+            HStack(spacing: 10) {
+                if canUndo {
+                    Button("Undo last edit") {
+                        model.revertWikiPage(pageId) { page in
+                            guard let page else { return }
+                            title = page.title; bodyAttributed = MarkdownRichText.toAttributed(page.body); canUndo = page.prevBody != nil
+                            status = "Reverted to the previous version."
                         }
                     }
-                    .buttonStyle(.primary)
+                    .buttonStyle(.soft)
                 }
+                Spacer()
+                Button("Save") {
+                    status = "Saving\u{2026}"
+                    let markdown = MarkdownRichText.toMarkdown(bodyAttributed)
+                    model.saveWikiPage(pageId, title: title, body: markdown) { page in
+                        guard let page else { status = "Couldn't save."; return }
+                        canUndo = page.prevBody != nil
+                        status = "Saved \u{2014} last edited by \(page.updatedByName)."
+                    }
+                }
+                .buttonStyle(.primary)
             }
             .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+        .navigationTitle(title.isEmpty ? "Page" : title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button(role: .destructive) { showDeleteConfirm = true } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+            }
         }
         .alert("Delete this page?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) { model.deleteWikiPage(pageId) { dismiss() } }
@@ -145,11 +149,13 @@ struct WikiPageEditorView: View {
         } message: {
             Text("This can't be undone.")
         }
+        .onAppear { model.wikiPageOpen = true }
+        .onDisappear { model.wikiPageOpen = false }
         .task {
             guard !loaded else { return }
             loaded = true
             if let page = await model.perform({ try await model.api.getWikiPage(pageId) }) {
-                title = page.title; body_ = page.body; canUndo = page.prevBody != nil
+                title = page.title; bodyAttributed = MarkdownRichText.toAttributed(page.body); canUndo = page.prevBody != nil
             }
         }
     }

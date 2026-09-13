@@ -5,4 +5,7 @@
          — never the shared gallery. -->
     <cache-path name="scans" path="scans/" />
     <cache-path name="chat" path="chat/" />
+    <!-- A gallery photo decoded back to a real file just long enough to hand
+         off to a share-sheet Intent — see GalleryScreen.kt. -->
+    <cache-path name="gallery" path="gallery/" />
 </paths>
