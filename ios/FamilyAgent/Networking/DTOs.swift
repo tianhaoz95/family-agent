@@ -247,6 +247,11 @@ struct ChatLocation: Codable, Sendable {
 struct ChatRequest: Codable, Sendable {
     let message: String
     var images: [String] = []
+    /// Ids of documents (PDF, text, markdown, a photo/scan) already uploaded
+    /// via POST /documents/upload — the server prepends each one's extracted
+    /// text to its own copy of the message. Desktop-only until now; see
+    /// docs/DECISIONS.md → "Chat attachments: camera, photo library, files".
+    var documentIds: [String] = []
     var sessionId: String? = nil
     var turnId: String? = nil
     var location: ChatLocation? = nil

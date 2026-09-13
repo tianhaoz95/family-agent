@@ -3283,3 +3283,63 @@ Settings section). Tests: `agent-core/test/db.test.ts` ("ScopedStore —
 chat sessions" prune cases, "ScopedStore — activity retention"),
 `agent-core/test/server.routes.test.ts` ("chat/activity retention is
 self-service").
+
+## Chat attachments: camera, photo library, files (iOS)
+
+iOS Chat could only attach a photo (`PhotosPicker`, images only) — desktop's
+composer has long been able to attach a real document (PDF, scan, `.txt`/
+`.md`) too, uploaded via `POST /documents/upload` with its id riding along
+in `POST /chat`'s `documentIds`, letting the server prepend that document's
+own extracted text to the model's copy of the message. iOS just never grew
+the same "+" menu desktop already renders as separate mic/attach/send
+affordances. Brought iOS to parity: the single photo icon became a "+"
+`Menu` with three options (Camera, Photos, Files), matching the layout
+already familiar from Claude's own iOS app.
+
+**The exact same `Menu`-swallows-the-picker bug as Board's "Photo" button,
+hit again and fixed the same way.** A `PhotosPicker` (or `.fileImporter`, or
+a `fullScreenCover`) triggered directly from *inside* a SwiftUI `Menu`'s
+content silently doesn't present — a `Menu` renders as a native `UIMenu` and
+swallows the presentation trigger. Each menu row is a plain `Button` that
+flips a `@State` boolean; `.photosPicker(isPresented:)` / `.fileImporter` /
+`.fullScreenCover` are attached to the enclosing view *outside* the `Menu`'s
+own content builder. See "iOS: fix Board's 'Photo' menu item not opening
+the picker" above — same root cause, same fix, different screen. Verified
+interactively on a real simulator this time (not just by inspection after
+getting burned once already): the "+" menu opens with all three rows, and
+tapping "Files" opens the real system document picker.
+
+**A camera shot joins the image tray, not the document tray.** Camera
+capture reuses the existing `CameraPicker` (already used by Documents' own
+"scan a document" button) — but the result is scaled to a JPEG data URI and
+appended to `attached` (the same array `PhotosPicker` fills), *not* uploaded
+as a document. A phone photo of, say, a receipt is something the multimodal
+model should *look at*, exactly like a library photo; routing it through
+the document-upload/text-extraction pipeline instead would be a strictly
+worse answer for the common case (a picture, not a scan meant to be read as
+text) — the "Files" option is there for when a person genuinely wants OCR
+or text extraction (a PDF, a saved scan) rather than the assistant just
+seeing the image.
+
+**New state is intentionally separate from the image tray**, not folded into
+the existing `attached: [String]` array: `AppModel.ChatAttachedDoc` (id +
+filename) and a small `DocTray` (name chips, not thumbnails — there's
+nothing to thumbnail, and showing the filename is more useful for a
+document anyway) mirror `ImageTray`'s shape without disturbing it. `sendChat`
+gained `documentIds`/`docNames` parameters (defaulted to `[]`, so every
+existing call site is unaffected) — the shown transcript bubble gets a
+"📎 filename" note appended exactly the way desktop's composer already does,
+while the model-facing message text is untouched; the server does the actual
+text-prepending, same as it always has for desktop's own document uploads.
+
+**Not implemented: Android.** Same underlying capability (`POST
+/documents/upload` + `documentIds`) would work identically there — Android's
+composer needs its own "+" menu (camera / gallery / a `GetContent`-style file
+picker, mirroring the pattern `DocumentsScreen.kt` already uses for its own
+uploads) as a fast-follow, not done in this pass.
+
+Files: `ios/FamilyAgent/Networking/DTOs.swift` (`ChatRequest.documentIds`),
+`FamilyAgentAPI.swift` (`chat(documentIds:)`), `App/AppModel.swift`
+(`ChatAttachedDoc`), `AppModel+Chat.swift` (`attachDocumentToChat`,
+`sendChat`), `Features/Chat/ChatView.swift` (the "+" `Menu`, camera/photos/
+files wiring), `Features/Shared/ImageAttach.swift` (`DocTray`).

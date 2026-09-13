@@ -129,6 +129,13 @@ final class AppModel {
     var chatLiveSteps: [ToolStep] { chatLiveStepsByKey[activeChatKey] ?? [] }
     var chatSessions: [ChatSession] = []
     var chatTranscribing = false
+    /// A non-image file (PDF, scan, .txt/.md) attached via the composer's "+"
+    /// menu — already uploaded (POST /documents/upload); only its id and a
+    /// display name are kept here. See docs/DECISIONS.md → "Chat attachments:
+    /// camera, photo library, files".
+    struct ChatAttachedDoc: Identifiable, Hashable { let id: String; let filename: String }
+    var chatAttachedDocs: [ChatAttachedDoc] = []
+    var chatDocUploading = false
 
     // ---- speech ----
     var speakingText: String?

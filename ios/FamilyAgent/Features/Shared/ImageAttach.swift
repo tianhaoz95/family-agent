@@ -61,3 +61,43 @@ struct ImageTray: View {
         }
     }
 }
+
+/// A horizontal tray of attached-file chips (name only, no thumbnail — unlike
+/// ImageTray, these are already-uploaded documents whose *text* the model
+/// reads, not images it looks at) with a remove button. A trailing spinner
+/// chip shows while one more is still uploading.
+struct DocTray: View {
+    let docs: [AppModel.ChatAttachedDoc]
+    var uploading: Bool = false
+    var onRemove: (String) -> Void
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(docs) { doc in
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.text").font(.system(size: 13))
+                        Text(doc.filename).font(.inter(13)).lineLimit(1)
+                        Button { onRemove(doc.id) } label: {
+                            Image(systemName: "xmark.circle.fill").font(.system(size: 14))
+                        }
+                    }
+                    .foregroundStyle(Theme.textMuted)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Theme.surface, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Theme.border, lineWidth: 1))
+                }
+                if uploading {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Uploading…").font(.inter(13))
+                    }
+                    .foregroundStyle(Theme.textMuted)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Theme.surface, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Theme.border, lineWidth: 1))
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+}

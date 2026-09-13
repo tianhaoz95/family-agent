@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 
 /// Keep in sync with `SLASH_COMMANDS` in `android/.../ui/ChatScreen.kt` and
 /// `FORCED_AGENT_KEYWORDS` in agent-core.
@@ -22,6 +23,17 @@ struct ChatView: View {
     @State private var input = ""
     @State private var attached: [String] = []
     @State private var photoItem: PhotosPickerItem?
+    // Plain Bool flags flipped by a Button *inside* the "+" Menu below, with
+    // the picker/importer/camera attached to the Menu view itself (outside
+    // its content builder) — a PhotosPicker (or any other presentation)
+    // triggered directly from inside a SwiftUI Menu's content silently
+    // doesn't present; a Menu renders as a native UIMenu and swallows the
+    // trigger. Same fix as BoardView's own "+ Add" menu; see
+    // docs/DECISIONS.md → "iOS: fix Board's 'Photo' menu item not opening
+    // the picker".
+    @State private var showPhotosPicker = false
+    @State private var showCamera = false
+    @State private var showFileImporter = false
     @State private var showHistory = false
     @State private var showSlashHelp = false
     @FocusState private var composerFocused: Bool
@@ -88,6 +100,11 @@ struct ChatView: View {
             if !attached.isEmpty {
                 ImageTray(images: $attached).padding(.horizontal, 16).padding(.bottom, 4)
             }
+            if !model.chatAttachedDocs.isEmpty || model.chatDocUploading {
+                DocTray(docs: model.chatAttachedDocs, uploading: model.chatDocUploading,
+                        onRemove: { model.removeChatAttachedDoc($0) })
+                    .padding(.horizontal, 16).padding(.bottom, 4)
+            }
             if let matches = slashMatches {
                 slashAutocomplete(matches)
             }
@@ -113,6 +130,26 @@ struct ChatView: View {
                 }
                 photoItem = nil
             }
+        }
+        .photosPicker(isPresented: $showPhotosPicker, selection: $photoItem, matching: .images)
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+            guard case let .success(urls) = result, let url = urls.first else { return }
+            let ok = url.startAccessingSecurityScopedResource()
+            defer { if ok { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else { return }
+            model.attachDocumentToChat(filename: url.lastPathComponent, bytes: data,
+                                       mime: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType)
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { data in
+                // A camera shot is a photo the model should *look at*, same as
+                // one picked from the library — not a document to extract text
+                // from, so it joins `attached` (images), not chatAttachedDocs.
+                if let uri = ImageAttach.scaledJpegDataURI(data), attached.count < 4 {
+                    attached.append(uri)
+                }
+            }
+            .ignoresSafeArea()
         }
     }
 
@@ -193,7 +230,7 @@ struct ChatView: View {
     // MARK: composer
 
     private var canSend: Bool {
-        !input.trimmingCharacters(in: .whitespaces).isEmpty || !attached.isEmpty
+        !input.trimmingCharacters(in: .whitespaces).isEmpty || !attached.isEmpty || !model.chatAttachedDocs.isEmpty
     }
 
     private var composer: some View {
@@ -223,13 +260,19 @@ struct ChatView: View {
 
                 // Actions row — attach / mic / send, Claude-app style.
                 HStack(spacing: 4) {
-                    PhotosPicker(selection: $photoItem, matching: .images) {
-                        Image(systemName: "photo").font(.system(size: 18))
+                    Menu {
+                        // Plain Buttons, not PhotosPicker/fileImporter triggers
+                        // directly inside the Menu — see the @State flags'
+                        // doc comment above for why.
+                        Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
+                        Button { showPhotosPicker = true } label: { Label("Photos", systemImage: "photo.on.rectangle") }
+                        Button { showFileImporter = true } label: { Label("Files", systemImage: "doc") }
+                    } label: {
+                        Image(systemName: "plus").font(.system(size: 18, weight: .medium))
                             .foregroundStyle(Theme.accentInk)
                             .frame(width: 34, height: 34)
                     }
-                    .disabled(attached.count >= 4)
-                    .opacity(attached.count >= 4 ? 0.35 : 1)
+                    .disabled(attached.count >= 4 && model.chatAttachedDocs.count >= 5)
 
                     if model.voiceEnabled && model.micOnLeft { mic }
 
@@ -253,9 +296,12 @@ struct ChatView: View {
 
     private func send() {
         guard !model.chatSending, canSend else { return }
-        model.sendChat(input.trimmingCharacters(in: .whitespacesAndNewlines), images: attached)
+        let docs = model.chatAttachedDocs
+        model.sendChat(input.trimmingCharacters(in: .whitespacesAndNewlines), images: attached,
+                       documentIds: docs.map(\.id), docNames: docs.map(\.filename))
         input = ""
         attached = []
+        model.chatAttachedDocs = []
     }
 }
 

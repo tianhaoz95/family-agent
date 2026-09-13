@@ -96,7 +96,26 @@ extension AppModel {
         )
     }
 
-    func sendChat(_ text: String, images: [String] = [], speakReply: Bool = false) {
+    /// Uploads a non-image file (PDF, scan, .txt/.md — from the composer's
+    /// "+" menu's "Files" option) and adds it to the tray shown above the
+    /// composer, the same way an attached image is. Never blocks typing —
+    /// the file finishes uploading in the background; sendChat only needs
+    /// the id by the time the message actually goes out.
+    func attachDocumentToChat(filename: String, bytes: Data, mime: String?) {
+        guard chatAttachedDocs.count < 5 else { return } // matches ChatBody.documentIds' server-side cap
+        Task {
+            chatDocUploading = true
+            if let doc = await perform({ try await api.uploadDocument(filename: filename, bytes: bytes, mime: mime) }) {
+                chatAttachedDocs.append(ChatAttachedDoc(id: doc.id, filename: doc.filename))
+            }
+            chatDocUploading = false
+        }
+    }
+    func removeChatAttachedDoc(_ id: String) {
+        chatAttachedDocs.removeAll { $0.id == id }
+    }
+
+    func sendChat(_ text: String, images: [String] = [], documentIds: [String] = [], docNames: [String] = [], speakReply: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // The key identifying *this* conversation for as long as this send
         // takes — its real session id, or `chatDraftKey` if it doesn't have
@@ -106,9 +125,15 @@ extension AppModel {
         // switch gets its own key, and this send's completion below only
         // touches the screen if `key` is still what's active.
         let key = activeChatKey
-        guard !trimmed.isEmpty, !chatPendingKeys.contains(key) else { return }
+        guard !trimmed.isEmpty || !documentIds.isEmpty, !chatPendingKeys.contains(key) else { return }
         let startedFromSessionID = activeChatSessionID // nil for a brand-new chat
-        chatMessages.append(ChatMessage(role: "user", text: trimmed, images: images))
+        // Shown text keeps the attached filenames visible in the transcript,
+        // like desktop's composer does — the model-facing text (sent below)
+        // is unchanged; the server prepends each document's own extracted
+        // text to its copy of the message.
+        let shown = docNames.isEmpty ? trimmed : "\(trimmed)\(trimmed.isEmpty ? "" : "\n\n")\u{1F4CE} \(docNames.joined(separator: ", "))"
+        let messageText = trimmed.isEmpty ? "Please look at the attached document." : trimmed
+        chatMessages.append(ChatMessage(role: "user", text: shown, images: images))
         chatPendingKeys.insert(key)
         chatLiveStepsByKey[key] = []
         let turnId = UUID().uuidString
@@ -136,7 +161,7 @@ extension AppModel {
                 // Private Chat only — never attached to a family Messages
                 // send (see agent-core's get_current_location).
                 let location = await currentChatLocation()
-                let resp = try await api.chat(trimmed, images: images,
+                let resp = try await api.chat(messageText, images: images, documentIds: documentIds,
                                               sessionId: startedFromSessionID, turnId: turnId,
                                               location: location)
                 chatPendingKeys.remove(key)
