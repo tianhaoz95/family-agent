@@ -69,6 +69,56 @@ describe("chat — per-turn device location", () => {
     ]);
   });
 
+  it("keeps two concurrent turns for the SAME user from seeing each other's location", async () => {
+    // Regression test for the bug behind "opening a new chat session showed
+    // the other session's 'generating' state" — server.ts used to keep this
+    // in a plain Map<userId, …>, which a second overlapping turn for the
+    // same user (two of their own chat sessions, or two devices) would race:
+    // turn A's location could leak into turn B's get_current_location call.
+    // AsyncLocalStorage (chatTurnContext) scopes it to each call's own async
+    // chain instead. Turn A's askFamilyAgent call pauses mid-flight —
+    // standing in for a real slow model call — until turn B's own /chat
+    // request has started *and finished* entirely inside that pause, so the
+    // two genuinely overlap rather than merely running back-to-back.
+    const idx = await import("../src/agents/index.js");
+    let capturedGetLocation: (() => unknown) | undefined;
+    vi.spyOn(idx, "buildFamilyAgent").mockImplementation((_store, deps) => {
+      capturedGetLocation = deps?.getLocation;
+      return { invoke: async () => ({ messages: [{ content: "ok" }] }) } as any;
+    });
+    let releaseA: () => void = () => {};
+    const aPaused = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const seen: Record<string, unknown> = {};
+    vi.spyOn(idx, "askFamilyAgent").mockImplementation(async (_agent, message: unknown) => {
+      if (message === "restaurants near turn A") {
+        await aPaused;
+        seen.a = capturedGetLocation?.();
+        return "ok a";
+      }
+      seen.b = capturedGetLocation?.();
+      return "ok b";
+    });
+
+    const reqA = inject({
+      method: "POST",
+      url: "/chat",
+      payload: { message: "restaurants near turn A", location: { latitude: 1, longitude: 1 } },
+    });
+    await new Promise((r) => setTimeout(r, 10)); // let turn A reach `await aPaused`
+    await inject({
+      method: "POST",
+      url: "/chat",
+      payload: { message: "restaurants near turn B", location: { latitude: 2, longitude: 2 } },
+    });
+    releaseA();
+    await reqA;
+
+    expect(seen.a).toEqual({ latitude: 1, longitude: 1 });
+    expect(seen.b).toEqual({ latitude: 2, longitude: 2 });
+  });
+
   it("rejects an out-of-range coordinate", async () => {
     const res = await inject({
       method: "POST",

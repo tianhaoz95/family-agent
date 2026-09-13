@@ -98,10 +98,35 @@ final class AppModel {
     var viewingArtifact: ArtifactPresentation?
 
     // ---- chat ----
+    // A chat "session" keeps generating even when it isn't the one on screen
+    // — switching to another conversation, or starting a brand-new one, must
+    // never show *that* screen as "the assistant is replying" just because a
+    // different session's turn is still running in the background (the bug
+    // behind a report of a freshly-opened, never-sent-to chat showing the
+    // typing indicator). So "is generating" and "live tool steps" are keyed
+    // per session rather than being one flat flag/array for whatever's
+    // currently on screen. The key is the session's real id once it has
+    // one, or `chatDraftKey` before that (a brand-new, not-yet-sent-to
+    // conversation) — see `activeChatKey`. `chatMessages` stays a single
+    // array (unlike the two maps below) because it's only ever read for the
+    // session actually on screen; a background session's reply is written
+    // back into it only if that session is *still* the one on screen when
+    // the reply lands (see AppModel+Chat.swift), and reopening any other
+    // session always re-fetches its transcript from the server anyway.
     var chatMessages: [ChatMessage] = []
-    var chatSending = false
-    var chatLiveSteps: [ToolStep] = []
+    var chatPendingKeys: Set<String> = []
+    var chatLiveStepsByKey: [String: [ToolStep]] = [:]
     var activeChatSessionID: String?
+    /// Identifies the current blank/unsent "new chat" instance, distinct
+    /// from any previous one whose first message might still be in flight
+    /// in the background — see `startNewChatSession()`.
+    var chatDraftKey = UUID().uuidString
+    /// What "the session currently on screen" means for `chatPendingKeys` /
+    /// `chatLiveStepsByKey` — a real session id once one exists, else the
+    /// current draft key.
+    var activeChatKey: String { activeChatSessionID ?? chatDraftKey }
+    var chatSending: Bool { chatPendingKeys.contains(activeChatKey) }
+    var chatLiveSteps: [ToolStep] { chatLiveStepsByKey[activeChatKey] ?? [] }
     var chatSessions: [ChatSession] = []
     var chatTranscribing = false
 

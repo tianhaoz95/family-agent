@@ -1,6 +1,7 @@
 import Fastify, { type FastifyRequest, type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import {
   Store,
@@ -310,23 +311,35 @@ export function buildServer(
       clear: () => cache.clear(),
     };
   }
-  // Per-user sink for "the agent looked this up" hints — a fresh array is set
-  // just before each /chat turn and read back after, so the reply can carry
-  // clickable task / document references. Declared before the caches below
-  // since every builder's onReference closes over it.
-  const chatRefs = new Map<
-    string,
-    (
-      | { type: "document" | "task" | "tool" | "artifact"; id: string }
-      | { type: "link"; id: string; label: string }
-    )[]
-  >();
-  // The device location the client attached to THIS turn's /chat call, if
-  // any — set right before invoking the agent, read through get_current_location
-  // (agents/locationTool.ts), never persisted. Same "fresh per turn, closed
-  // over by the cached agent's tools" shape as chatRefs above, needed because
-  // the agent object itself is built once and reused across many turns.
-  const chatLocations = new Map<string, LocationInfo | undefined>();
+  // Per-turn context for "the agent looked this up" hints and the caller's
+  // device location — the reply's reference chips and get_current_location
+  // (agents/locationTool.ts) both need a value that's fresh for THIS turn
+  // only, even though the agent/tool objects themselves are built once per
+  // user and reused across every turn that user ever sends.
+  //
+  // This used to be a pair of `Map<userId, …>`, set right before invoking the
+  // agent and read/cleared right after — fine as long as a user only ever had
+  // one turn in flight at a time. It stopped being fine once chat sessions
+  // became independent (see docs/DECISIONS.md → "Chat sessions generate
+  // independently"): two turns for the *same* user, running concurrently
+  // (two of their own chat sessions, or two of their devices), would race on
+  // the same map entry — turn A's location leaking into turn B's
+  // get_current_location call, or a reference landing in the wrong turn's
+  // reply. `AsyncLocalStorage` instead scopes this to the actual async call
+  // chain of the invocation that's asking, however deep a tool call nests
+  // (a subagent invoked mid-turn is still the same call chain), so two
+  // concurrent turns — even for the same user — never see each other's
+  // context. A turn that never opts in (the family-channel `@agent`/forced
+  // path, which never attaches a location and has never surfaced reference
+  // chips) just sees an empty store, same as before.
+  type ChatRefHint =
+    | { type: "document" | "task" | "tool" | "artifact"; id: string }
+    | { type: "link"; id: string; label: string };
+  interface ChatTurnStore {
+    location: LocationInfo | undefined;
+    refs: ChatRefHint[];
+  }
+  const chatTurnContext = new AsyncLocalStorage<ChatTurnStore>();
   // Generated HTML cards the model rendered this turn (render_card). One
   // collector array per in-flight turn, keyed by user (a set of them, so two
   // concurrent turns for one user can't stomp each other — same shape as the
@@ -353,7 +366,7 @@ export function buildServer(
       const a = store.scoped(userId).createArtifact({ title, html, source: "chat" });
       return { id: a.id, title: a.title };
     },
-    onReference: (ref: ReferenceHint) => chatRefs.get(userId)?.push(ref),
+    onReference: (ref: ReferenceHint) => chatTurnContext.getStore()?.refs.push(ref),
     logActivity: (a: string, ac: string, d: string) => store.scoped(userId).logActivity(a, ac, d),
   });
   // Live tool-call visibility: a turn's steps, keyed by a client-supplied
@@ -387,6 +400,29 @@ export function buildServer(
       if (e.done && (e.finishedAt ?? 0) < cutoff) agentTurns.delete(id);
     }
   }, 60_000).unref?.();
+
+  // A /chat turn's HTTP request always terminates, even if the underlying
+  // model/tool call never does — see config.chatTimeoutMs. This races the
+  // promise, it doesn't cancel it: deepagents' invoke() has no cooperative
+  // abort hook, so a timed-out turn keeps running in the background and its
+  // eventual result (if any) is simply discarded by the caller.
+  class ChatTimeoutError extends Error {}
+  function withChatTimeout<T>(p: Promise<T>): Promise<T> {
+    return Promise.race([
+      p,
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () =>
+            reject(
+              new ChatTimeoutError(
+                `The assistant took longer than ${Math.round(config.chatTimeoutMs / 1000)}s to respond.`
+              )
+            ),
+          config.chatTimeoutMs
+        ).unref?.();
+      }),
+    ]);
+  }
 
   const familyToolsDeps = (userId: string) => ({
     getCatalog: () => familyToolCatalog(userId),
@@ -521,8 +557,8 @@ export function buildServer(
       startToolBuild: (p) => startToolBuild(userId, p),
       startToolIterate: (toolId, instruction) => startToolIterate(userId, toolId, instruction),
       listTools: () => toolsBrief(userId),
-      onReference: (ref) => chatRefs.get(userId)?.push(ref),
-      getLocation: () => chatLocations.get(userId),
+      onReference: (ref) => chatTurnContext.getStore()?.refs.push(ref),
+      getLocation: () => chatTurnContext.getStore()?.location,
       getEmbedder: () => embedder,
       familyTools: config.toolsEnabled ? familyToolsDeps(userId) : undefined,
       web: webDeps(userId),
@@ -538,16 +574,16 @@ export function buildServer(
   // types "/note" never pays for a notes-only agent.
   const toolsAgents = makeAgentCache((userId) =>
     buildFamilyToolsAgent(store.scoped(userId), {
-      onReference: (ref) => chatRefs.get(userId)?.push(ref),
+      onReference: (ref) => chatTurnContext.getStore()?.refs.push(ref),
       familyTools: familyToolsDeps(userId),
     })
   );
   const taskAgents = makeAgentCache((userId) =>
-    buildFamilyTaskAgent(store.scoped(userId), { onReference: (ref) => chatRefs.get(userId)?.push(ref) })
+    buildFamilyTaskAgent(store.scoped(userId), { onReference: (ref) => chatTurnContext.getStore()?.refs.push(ref) })
   );
   const documentAgents = makeAgentCache((userId) =>
     buildFamilyDocumentAgent(store.scoped(userId), {
-      onReference: (ref) => chatRefs.get(userId)?.push(ref),
+      onReference: (ref) => chatTurnContext.getStore()?.refs.push(ref),
       getEmbedder: () => embedder,
     })
   );
@@ -564,13 +600,13 @@ export function buildServer(
     buildFamilyResearchAgent(
       {
         logActivity: (a, ac, d) => store.scoped(userId).logActivity(a, ac, d),
-        onReference: (ref) => chatRefs.get(userId)?.push(ref),
+        onReference: (ref) => chatTurnContext.getStore()?.refs.push(ref),
       },
-      () => chatLocations.get(userId)
+      () => chatTurnContext.getStore()?.location
     )
   );
   const workshopAgents = makeAgentCache((userId) =>
-    buildFamilyWorkshopAgent({ ...shellDeps(userId)!, onReference: (ref) => chatRefs.get(userId)?.push(ref) })
+    buildFamilyWorkshopAgent({ ...shellDeps(userId)!, onReference: (ref) => chatTurnContext.getStore()?.refs.push(ref) })
   );
   const calcAgents = makeAgentCache((userId) => buildFamilyCalcAgent(store.scoped(userId)));
   const skillAgents = makeAgentCache((userId) => buildFamilySkillAgent(skillsDeps(userId)!));
@@ -621,9 +657,7 @@ export function buildServer(
   const skillAgentFor = (userId: string) => skillAgents.get(userId);
   const connectAgentFor = (userId: string) => connectAgents.get(userId);
   // Resolve collected hints to {type, id, label}, deduped and capped.
-  const resolveReferences = (userStore: ScopedStore, userId: string) => {
-    const collected = chatRefs.get(userId) ?? [];
-    chatRefs.delete(userId);
+  const resolveReferences = (userStore: ScopedStore, collected: ChatRefHint[]) => {
     const seen = new Set<string>();
     const out: { type: "document" | "task" | "tool" | "link" | "artifact"; id: string; label: string }[] = [];
     for (const r of collected) {
@@ -1176,23 +1210,25 @@ export function buildServer(
     const revealCollector = new Set<string>();
     const cardCollector: CardRecord[] = [];
     const recorder = turnId ? startTurn(turnId, req.authUser.id) : undefined;
+    // Attached documents show up as chips under the reply, like a retrieval hit.
+    const refs: ChatRefHint[] = attachedDocs.map((d) => ({ type: "document" as const, id: d.id }));
     try {
-      chatRefs.set(req.authUser.id, []);
-      chatLocations.set(req.authUser.id, location);
       addRevealCollector(req.authUser.id, revealCollector);
       addCardCollector(req.authUser.id, cardCollector);
       const history = priorMessages.map((m) => ({ role: m.role, content: m.body }));
-      // Attached documents show up as chips under the reply, like a retrieval hit.
-      for (const d of attachedDocs) chatRefs.get(req.authUser.id)?.push({ type: "document", id: d.id });
       // A leading "/" (typed by hand, or via the client's command/tool
       // autocomplete) skips the planner's own delegation decision — unreliable
       // on a small model — and runs one specialist agent directly.
       const forced = parseForcedAgentCommand(message);
       if (forced && docBlock) forced.text = docBlock + forced.text;
-      const responseText = forced
-        ? await runForcedAgentTurn(req.authUser.id, forced, images, history, false, recorder)
-        : await askFamilyAgent(agentFor(req.authUser.id), modelMessage, images, history, recorder);
-      const references = resolveReferences(req.userStore, req.authUser.id);
+      const responseText = await withChatTimeout(
+        chatTurnContext.run({ location, refs }, () =>
+          forced
+            ? runForcedAgentTurn(req.authUser.id, forced, images, history, false, recorder)
+            : askFamilyAgent(agentFor(req.authUser.id), modelMessage, images, history, recorder)
+        )
+      );
+      const references = resolveReferences(req.userStore, refs);
       const steps = recorder?.steps ?? [];
       if (turnId) finishTurn(turnId);
       // A "/vault" turn may put a real password or 2FA code in `responseText`.
@@ -1209,13 +1245,6 @@ export function buildServer(
         "chat.reply",
         storedText === responseText ? responseText : "(a vault lookup — the answer isn't stored)"
       );
-      // Unlike chatRefs (harmless if a stale value lingers — every /chat call
-      // overwrites it before use), a location must never survive past its own
-      // turn: the planner/research-agent instances this closes over are
-      // shared with the family-channel @agent path too, which never sets
-      // this map at all and must never see a leftover location from an
-      // earlier private chat turn.
-      chatLocations.delete(req.authUser.id);
       return {
         reply: responseText,
         references,
@@ -1224,13 +1253,18 @@ export function buildServer(
         sessionId: session.id,
       };
     } catch (err) {
-      chatRefs.delete(req.authUser.id);
-      chatLocations.delete(req.authUser.id);
       removeRevealCollector(req.authUser.id, revealCollector);
       removeCardCollector(req.authUser.id, cardCollector);
       if (turnId) finishTurn(turnId);
       req.log?.error?.(err);
       const detail = err instanceof Error ? err.message : String(err);
+      if (err instanceof ChatTimeoutError) {
+        return reply.code(504).send({
+          error:
+            "The assistant is taking much longer than usual — it may still be working, but this request gave up waiting. Try again in a bit, or ask something simpler.",
+          detail,
+        });
+      }
       // Only blame Ollama when the failure actually looks like a connection /
       // model problem — otherwise the message misdirects (a bug in a tool, a
       // bad delegation, an out-of-memory in the sandbox, …).

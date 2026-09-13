@@ -361,8 +361,25 @@ let slashTools: Tool[] = [];
 // The empty-state block, kept so "New chat" can put it back after it's removed.
 const chatEmptyEl = document.getElementById("chat-empty")!;
 
-// Set while a reply is in flight so the Stop button can cancel it.
-let chatAbort: AbortController | null = null;
+// A chat "session" keeps generating even when it isn't the one on screen —
+// switching to another conversation, or starting a brand-new one, must never
+// show *that* screen as "the assistant is replying" just because a different
+// session's turn is still running in the background. So "is generating" is
+// tracked per session key rather than one flat flag for whatever's on
+// screen. The key is a session's real id once it has one, or `chatDraftKey`
+// before that (a brand-new, not-yet-sent-to conversation) — see
+// `activeChatKey()`. `chatPendingKeys` covers both an actual live send from
+// this tab AND a reconnect-poll for a turn orphaned by a page reload
+// (watchForPendingReply) — either way, that session is "generating" for
+// display purposes. `chatAbortByKey` only ever holds the former (a
+// reconnect-poll has nothing to abort), so the Stop button only appears —
+// and only ever does something — for a session this tab is actually sending.
+const chatPendingKeys = new Set<string>();
+const chatAbortByKey = new Map<string, AbortController>();
+let chatDraftKey = crypto.randomUUID?.() ?? `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+function activeChatKey(): string {
+  return activeChatSessionId ?? chatDraftKey;
+}
 
 // Images staged for the next message, as JPEG data URIs. Managed by an
 // imageTray (see makeImageTray) — the same composer attachment behaviour is
@@ -1514,23 +1531,12 @@ async function refreshChatSessions() {
   }
 }
 
-async function openChatSession(id: string) {
-  if (id === activeChatSessionId) return;
-  chatAbort?.abort();
-  chatAbort = null;
-  let messages: ChatSessionMessage[];
-  try {
-    messages = (await api.getChatSessionMessages(id)).messages;
-  } catch (err) {
-    appendBubble("system", `Couldn't open that conversation: ${err instanceof Error ? err.message : String(err)}`);
-    return;
-  }
-  activeChatSessionId = id;
-  chatTray.clear();
-  chatInput.value = "";
-  chatGrow.reset();
-  setChatPending(false);
-  chatSlash.clear();
+/** Wipes and repaints the whole chat log from a session's message list. A
+ *  full rebuild rather than an incremental append — used both when opening a
+ *  session and when a reconnect-poll's reply lands — so it can't leave a
+ *  stray typing indicator behind from an earlier reopen of the same
+ *  still-pending session (see watchForPendingReply). */
+function renderChatTranscript(messages: ChatSessionMessage[]) {
   chatLog.innerHTML = "";
   chatLog.appendChild(chatEmptyEl);
   for (const m of messages) {
@@ -1543,15 +1549,39 @@ async function openChatSession(id: string) {
       appendBubbleActions(bubble, m.body);
     }
   }
+}
+
+async function openChatSession(id: string) {
+  if (id === activeChatSessionId) return;
+  let messages: ChatSessionMessage[];
+  try {
+    messages = (await api.getChatSessionMessages(id)).messages;
+  } catch (err) {
+    appendBubble("system", `Couldn't open that conversation: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  activeChatSessionId = id;
+  chatTray.clear();
+  chatInput.value = "";
+  chatGrow.reset();
+  chatSlash.clear();
+  renderChatTranscript(messages);
   renderChatSessionList();
   chatInput.focus();
-  // The session's own last word is the user's, with no reply after it — a
-  // turn may still be running server-side (this tab was closed, or lost its
-  // connection, mid-turn; /chat persists the user's message before it even
-  // calls the model, so the reply can land long after the request that
-  // started it is gone). Poll quietly for it instead of leaving the
-  // conversation looking abandoned.
-  if (messages.length && messages[messages.length - 1].role === "user") {
+  // The Stop button only ever appears for a session this tab is actually
+  // sending (chatAbortByKey) — a reconnect-poll below has nothing to abort.
+  setChatPending(chatAbortByKey.has(id));
+  if (chatPendingKeys.has(id)) {
+    // Either a live send from this tab, or an already-running
+    // reconnect-poll (below) — either way, still generating.
+    appendTypingIndicator();
+  } else if (messages.length && messages[messages.length - 1].role === "user") {
+    // The session's own last word is the user's, with no reply after it — a
+    // turn may still be running server-side (this tab was closed, or lost
+    // its connection, mid-turn; /chat persists the user's message before it
+    // even calls the model, so the reply can land long after the request
+    // that started it is gone). Poll quietly for it instead of leaving the
+    // conversation looking abandoned.
     void watchForPendingReply(id);
   }
 }
@@ -1559,36 +1589,39 @@ async function openChatSession(id: string) {
 /** Re-poll a session's own message list until the pending reply resolves (or
  *  a generous timeout passes) — see openChatSession. No live tool-call steps
  *  here; the turnId that would carry those died with whatever launched the
- *  original request. */
+ *  original request. Keeps polling even if the user switches to a different
+ *  conversation in the meantime — the point is to know *this* session is
+ *  still pending so reopening it later shows the right state — only the DOM
+ *  update below is gated on it still being the one on screen. */
 async function watchForPendingReply(sessionId: string) {
-  const pending = appendTypingIndicator();
-  const deadline = Date.now() + 210_000; // worst-case turn (~110s) plus margin
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 3000));
-    if (activeChatSessionId !== sessionId) {
-      pending.remove();
-      return; // navigated elsewhere
+  if (chatPendingKeys.has(sessionId)) return; // already tracked
+  chatPendingKeys.add(sessionId);
+  try {
+    const deadline = Date.now() + 210_000; // worst-case turn (~110s) plus margin
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 3000));
+      let messages: ChatSessionMessage[];
+      try {
+        messages = (await api.getChatSessionMessages(sessionId)).messages;
+      } catch {
+        continue;
+      }
+      const last = messages[messages.length - 1];
+      if (last && last.role !== "user") {
+        // A full repaint (not an incremental append) so this can't leave a
+        // stray typing indicator from an earlier reopen of this session —
+        // see openChatSession, which appends a fresh one every time it's
+        // (re)opened while still pending.
+        if (activeChatSessionId === sessionId) renderChatTranscript(messages);
+        return;
+      }
     }
-    let messages: ChatSessionMessage[];
-    try {
-      messages = (await api.getChatSessionMessages(sessionId)).messages;
-    } catch {
-      continue;
+    if (activeChatSessionId === sessionId) {
+      chatLog.querySelector(".bubble-typing")?.remove();
+      appendBubble("system", "No reply came back for that message. You can try sending it again.");
     }
-    const last = messages[messages.length - 1];
-    if (last && last.role !== "user") {
-      pending.remove();
-      const bubble = appendBubble("assistant", last.body);
-      if (last.steps?.length) attachStepsStrip(bubble, last.steps);
-      attachCards(bubble, last.cards);
-      if (last.refs.length) appendReferences(bubble, last.refs);
-      appendBubbleActions(bubble, last.body);
-      return;
-    }
-  }
-  pending.remove();
-  if (activeChatSessionId === sessionId) {
-    appendBubble("system", "No reply came back for that message. You can try sending it again.");
+  } finally {
+    chatPendingKeys.delete(sessionId);
   }
 }
 
@@ -1604,18 +1637,22 @@ async function deleteChatSessionRow(id: string) {
   renderChatSessionList();
 }
 
-// Clear the transcript and cancel anything in flight — a fresh conversation.
-// Nothing is created server-side until the first message actually sends.
+// Clear the transcript for a fresh conversation — a session generating in
+// the background (this one, or a different one) keeps running; see
+// chatPendingKeys above. Nothing is created server-side until the first
+// message of this new one actually sends.
 function startNewChat() {
-  chatAbort?.abort();
-  chatAbort = null;
   activeChatSessionId = null;
+  // A fresh key for this blank composer — distinct from whatever key a
+  // *previous* blank composer's still-in-flight first message is using, so
+  // this screen never inherits that one's "…".
+  chatDraftKey = crypto.randomUUID?.() ?? `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   chatLog.innerHTML = "";
   chatLog.appendChild(chatEmptyEl);
   chatTray.clear();
   chatInput.value = "";
   chatGrow.reset();
-  setChatPending(false);
+  setChatPending(false); // the new draft key can never already be pending
   chatSlash.clear();
   chatInput.focus();
   renderChatSessionList();
@@ -1645,11 +1682,22 @@ function slashHelpHtml(opts: { mention?: boolean } = {}): string {
   `;
 }
 chatHelpBtn.addEventListener("click", () => openSidePanel("Slash commands", slashHelpHtml()));
-chatStopBtn.addEventListener("click", () => chatAbort?.abort());
+// Stop only ever cancels the conversation actually on screen — see
+// chatAbortByKey above.
+chatStopBtn.addEventListener("click", () => chatAbortByKey.get(activeChatKey())?.abort());
 
 chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (chatAbort) return; // a reply is already in flight
+  // The key identifying *this* conversation for as long as this send takes —
+  // its real session id, or the current draft key if it doesn't have one yet
+  // (a brand-new chat's first message). Captured now, before anything async:
+  // if the user switches to a different conversation (or starts another
+  // brand-new one) before this reply lands, that switch gets its own key,
+  // and this send's completion below only touches the screen if `key` is
+  // still what's active.
+  const key = activeChatKey();
+  if (chatAbortByKey.has(key)) return; // a reply is already in flight for this conversation
+  const startedFromSessionId = activeChatSessionId; // null for a brand-new chat
   const typed = chatInput.value.trim();
   const cmd = chatSlash.getCommand();
   const images = chatTray.images.slice();
@@ -1678,14 +1726,19 @@ chatForm.addEventListener("submit", async (e) => {
   renderStepsStrip(strip, [], true);
   chatLog.appendChild(strip);
   const pending = appendTypingIndicator();
-  chatAbort = new AbortController();
+  const abort = new AbortController();
+  chatAbortByKey.set(key, abort);
+  chatPendingKeys.add(key);
   setChatPending(true);
   let stopPoll = false;
   const poll = async () => {
     while (!stopPoll) {
       try {
         const { steps, done } = await api.turnSteps(turnId);
-        if (!stopPoll && steps.length) renderStepsStrip(strip, steps, !done);
+        // Only paint into the strip while this conversation is still the one
+        // on screen — a background turn's steps aren't shown anywhere once
+        // the user has navigated away from it.
+        if (!stopPoll && steps.length && activeChatKey() === key) renderStepsStrip(strip, steps, !done);
         if (done) return;
       } catch {
         /* turn not registered yet, or already swept — keep trying briefly */
@@ -1694,6 +1747,15 @@ chatForm.addEventListener("submit", async (e) => {
     }
   };
   void poll();
+  // True only if this conversation is still the one on screen right now —
+  // recomputed at completion, since the user may have switched away (to a
+  // different session, or a brand-new one) while this was in flight.
+  const stillOnScreen = () => activeChatKey() === key;
+  // Whichever typing indicator is currently showing for this conversation —
+  // possibly a *different* DOM node than `pending` above, if the user left
+  // and came back (openChatSession repaints the whole log and appends its
+  // own fresh one; see watchForPendingReply).
+  const clearTypingIndicator = () => chatLog.querySelectorAll(".bubble-typing").forEach((el) => el.remove());
   try {
     // Private Chat only — never attached to a family Messages send (see
     // agent-core's get_current_location). Cheap when off or cached.
@@ -1701,41 +1763,59 @@ chatForm.addEventListener("submit", async (e) => {
     const { reply, references, steps, cards, sessionId } = await api.chat(
       message,
       images,
-      activeChatSessionId ?? undefined,
-      chatAbort.signal,
+      startedFromSessionId ?? undefined,
+      abort.signal,
       turnId,
       documentIds,
       location
     );
     stopPoll = true;
-    pending.remove();
-    if (steps && steps.length) renderStepsStrip(strip, steps, false);
-    else strip.remove();
-    const bubble = appendBubble("assistant", reply);
-    attachCards(bubble, cards);
-    if (references?.length) appendReferences(bubble, references);
-    const speakBtn = appendBubbleActions(bubble, reply);
-    if ((autoRead || speakReply) && speakBtn) speakBtn.click();
-    activeChatSessionId = sessionId;
+    chatAbortByKey.delete(key);
+    chatPendingKeys.delete(key);
+    if (stillOnScreen()) {
+      clearTypingIndicator();
+      if (steps && steps.length) {
+        if (strip.isConnected) renderStepsStrip(strip, steps, false);
+        else {
+          const freshStrip = makeStepsStrip();
+          renderStepsStrip(freshStrip, steps, false);
+          chatLog.appendChild(freshStrip);
+        }
+      } else if (strip.isConnected) strip.remove();
+      const bubble = appendBubble("assistant", reply);
+      attachCards(bubble, cards);
+      if (references?.length) appendReferences(bubble, references);
+      const speakBtn = appendBubbleActions(bubble, reply);
+      if ((autoRead || speakReply) && speakBtn) speakBtn.click();
+      if (startedFromSessionId === null) activeChatSessionId = sessionId;
+    }
     void refreshChatSessions();
-    // Skip the notification if the user is right here watching it arrive.
-    const chatAlreadyOpen = document.getElementById("view-chat")!.classList.contains("is-active") && document.hasFocus();
+    // Skip the notification if the user is right here watching *this*
+    // conversation arrive — not just Chat in general, since another one of
+    // their sessions may have finished while a different one is on screen.
+    const chatAlreadyOpen =
+      document.getElementById("view-chat")!.classList.contains("is-active") && document.hasFocus() && stillOnScreen();
     if (!chatAlreadyOpen) {
       void notifyReplyReady({ title: "Family Agent", body: reply, nav: { kind: "chat", sessionId } });
     }
   } catch (err) {
     stopPoll = true;
-    strip.remove();
-    pending.remove();
-    if (err instanceof DOMException && err.name === "AbortError") {
-      appendBubble("system", "Stopped.");
-    } else {
-      appendBubble("system", `Error: ${err instanceof Error ? err.message : String(err)}`);
+    chatAbortByKey.delete(key);
+    chatPendingKeys.delete(key);
+    if (stillOnScreen()) {
+      clearTypingIndicator();
+      if (strip.isConnected) strip.remove();
+      if (err instanceof DOMException && err.name === "AbortError") {
+        appendBubble("system", "Stopped.");
+      } else {
+        appendBubble("system", `Error: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   } finally {
-    chatAbort = null;
-    setChatPending(false);
-    chatInput.focus();
+    if (stillOnScreen()) {
+      setChatPending(false);
+      chatInput.focus();
+    }
   }
 });
 

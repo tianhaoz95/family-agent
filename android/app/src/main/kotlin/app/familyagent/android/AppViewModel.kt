@@ -97,12 +97,25 @@ data class AppUiState(
     val serverUrl: String = "",
     val connection: ConnectionStatus = ConnectionStatus.Connecting,
     val chatMessages: List<ChatMessage> = emptyList(),
-    val chatSending: Boolean = false,
-    /** Tool calls made so far by the in-flight chat turn (live, while sending). */
-    val chatLiveSteps: List<app.familyagent.android.data.ToolStep> = emptyList(),
+    /** Which conversation(s) currently have a turn in flight, keyed by
+     *  [activeChatKey] — a session's real id once it has one, or
+     *  [chatDraftKey] before that. Per-key (not one flat flag) so switching
+     *  to a different conversation, or starting a brand-new one, never shows
+     *  *that* screen as "the assistant is replying" just because a
+     *  different session's turn is still running in the background (the bug
+     *  behind a report of a freshly-opened, never-sent-to chat showing the
+     *  typing indicator). */
+    val chatPendingKeys: Set<String> = emptySet(),
+    /** Tool calls made so far by each in-flight turn, keyed the same way as
+     *  [chatPendingKeys]. */
+    val chatLiveStepsByKey: Map<String, List<app.familyagent.android.data.ToolStep>> = emptyMap(),
     /** The persisted session behind [chatMessages]; null until the first turn of a
      *  fresh conversation gets a reply and the server hands one back. */
     val activeChatSessionId: String? = null,
+    /** Identifies the current blank/unsent "new chat" instance, distinct
+     *  from any previous one whose first message might still be in flight
+     *  in the background — see `startNewChatSession()`. */
+    val chatDraftKey: String = java.util.UUID.randomUUID().toString(),
     val chatSessions: List<app.familyagent.android.data.ChatSession> = emptyList(),
     /** Server offers speech-to-text (from /health) — gates the chat mic button. */
     val voiceEnabled: Boolean = false,
@@ -211,6 +224,13 @@ data class AppUiState(
 ) {
     /** Total unread across every conversation — drives the nav badge. */
     val totalUnread: Int get() = channels.sumOf { it.unreadCount }
+
+    /** What "the session currently on screen" means for [chatPendingKeys] /
+     *  [chatLiveStepsByKey] — a real session id once one exists, else the
+     *  current draft key. */
+    val activeChatKey: String get() = activeChatSessionId ?: chatDraftKey
+    val chatSending: Boolean get() = chatPendingKeys.contains(activeChatKey)
+    val chatLiveSteps: List<app.familyagent.android.data.ToolStep> get() = chatLiveStepsByKey[activeChatKey] ?: emptyList()
 }
 
 class AppViewModel(
@@ -511,19 +531,32 @@ class AppViewModel(
 
     fun sendChat(message: String, images: List<String> = emptyList(), speakReply: Boolean = false) {
         if (message.isBlank() && images.isEmpty()) return
+        // The key identifying *this* conversation for as long as this send
+        // takes — its real session id, or the current draft key if it
+        // doesn't have one yet (a brand-new chat's first message). Captured
+        // now, before anything suspends: if the user switches to a
+        // different conversation (or starts another brand-new one) before
+        // this reply lands, that switch gets its own key, and this send's
+        // completion below only touches the screen if `key` is still active.
+        val key = _state.value.activeChatKey
+        if (_state.value.chatPendingKeys.contains(key)) return
+        val startedFromSessionId = _state.value.activeChatSessionId // null for a brand-new chat
         // The model needs a prompt; supply a default when it's an image only.
         val prompt = message.ifBlank { "What's in this image?" }
         viewModelScope.launch {
             val withUser = _state.value.chatMessages + ChatMessage("user", message, images)
-            _state.value = _state.value.copy(chatMessages = withUser, chatSending = true, chatLiveSteps = emptyList())
-            val sessionId = _state.value.activeChatSessionId
+            _state.value = _state.value.copy(
+                chatMessages = withUser,
+                chatPendingKeys = _state.value.chatPendingKeys + key,
+                chatLiveStepsByKey = _state.value.chatLiveStepsByKey + (key to emptyList()),
+            )
             val turnId = java.util.UUID.randomUUID().toString()
             // Poll tool calls while the reply is in flight, for live visibility.
             val poll = launch {
                 while (isActive) {
                     val r = runCatching { api.turnSteps(turnId) }.getOrNull()
                     if (r != null && r.steps.isNotEmpty()) {
-                        _state.value = _state.value.copy(chatLiveSteps = r.steps)
+                        _state.value = _state.value.copy(chatLiveStepsByKey = _state.value.chatLiveStepsByKey + (key to r.steps))
                     }
                     if (r?.done == true) break
                     delay(1000)
@@ -532,31 +565,39 @@ class AppViewModel(
             // Private Chat only — never attached to a family Messages send
             // (see agent-core's get_current_location).
             val location = currentChatLocation()
-            val assistant = apiCall { api.chat(prompt, images, sessionId, turnId, location) }
-                .fold(
-                    onSuccess = {
-                        _state.value = _state.value.copy(activeChatSessionId = it.sessionId)
-                        ChatMessage("assistant", it.reply, references = it.references, steps = it.steps, cards = it.cards)
-                    },
-                    onFailure = { ChatMessage("assistant", "Error: ${it.message}") },
-                )
+            val result = apiCall { api.chat(prompt, images, startedFromSessionId, turnId, location) }
             poll.cancel()
             _state.value = _state.value.copy(
-                chatMessages = withUser + assistant,
-                chatSending = false,
-                chatLiveSteps = emptyList(),
+                chatPendingKeys = _state.value.chatPendingKeys - key,
+                chatLiveStepsByKey = _state.value.chatLiveStepsByKey - key,
             )
+            val stillOnScreen = _state.value.activeChatKey == key
+            val assistant = result.fold(
+                onSuccess = {
+                    ChatMessage("assistant", it.reply, references = it.references, steps = it.steps, cards = it.cards)
+                },
+                onFailure = { ChatMessage("assistant", "Error: ${it.message}") },
+            )
+            if (stillOnScreen) {
+                _state.value = _state.value.copy(
+                    activeChatSessionId = result.getOrNull()?.sessionId ?: _state.value.activeChatSessionId,
+                    chatMessages = _state.value.chatMessages + assistant,
+                )
+            }
             val isGoodReply = assistant.role == "assistant" && !assistant.text.startsWith("Error:")
             // Speak the reply when auto-read is on, or when this turn came in by
             // voice (push-to-talk) — the user chose to talk, so talk back.
-            if (isGoodReply && _state.value.ttsEnabled && (speakReply || _state.value.autoRead)) {
+            if (stillOnScreen && isGoodReply && _state.value.ttsEnabled && (speakReply || _state.value.autoRead)) {
                 speak(assistant.text)
             }
-            // Skip the notification if the user is right here watching it arrive.
+            // Skip the notification if the user is right here watching this
+            // exact conversation arrive — not just Chat in general, since
+            // another one of their sessions may have finished while a
+            // different one is on screen.
             if (isGoodReply) {
-                val alreadyOpen = AppForegroundTracker.isForeground && AppForegroundTracker.isChatScreenActive
+                val alreadyOpen = AppForegroundTracker.isForeground && AppForegroundTracker.isChatScreenActive && stillOnScreen
                 if (_state.value.notifyOnReply && !alreadyOpen && ReplyNotifications.hasPermission(appContext)) {
-                    ReplyNotifications.postChatReply(appContext, _state.value.activeChatSessionId ?: "", assistant.text)
+                    ReplyNotifications.postChatReply(appContext, result.getOrNull()?.sessionId ?: "", assistant.text)
                 }
             }
             refreshActivity()
@@ -701,7 +742,15 @@ class AppViewModel(
     /** Start a brand-new conversation. Nothing is created server-side until the
      *  first message actually sends (see POST /chat's lazy session creation). */
     fun startNewChatSession() {
-        _state.value = _state.value.copy(chatMessages = emptyList(), activeChatSessionId = null)
+        _state.value = _state.value.copy(
+            chatMessages = emptyList(),
+            activeChatSessionId = null,
+            // A fresh key for this blank composer — distinct from whatever
+            // key a *previous* blank composer's still-in-flight first
+            // message is using (see sendChat), so this screen never
+            // inherits that one's "…".
+            chatDraftKey = java.util.UUID.randomUUID().toString(),
+        )
     }
 
     fun openChatSession(id: String) {
@@ -729,37 +778,42 @@ class AppViewModel(
      *  (or a generous timeout passes), rather than losing the "still
      *  working" state whenever this app instance wasn't the one waiting for
      *  it. No live tool-call steps here — the turnId that would carry those
-     *  died with whatever launched the original request. */
+     *  died with whatever launched the original request. Keeps polling even
+     *  if the user navigates to a different session in the meantime — the
+     *  point is to know *this* session is still pending so reopening it
+     *  later shows the right state — only the transcript update below is
+     *  gated on it still being the one on screen. */
     private fun watchForPendingReply(sessionId: String) {
-        if (_state.value.chatSending) return // this instance is already actively sending it
-        _state.value = _state.value.copy(chatSending = true, chatLiveSteps = emptyList())
+        if (_state.value.chatPendingKeys.contains(sessionId)) return // already tracked
+        _state.value = _state.value.copy(chatPendingKeys = _state.value.chatPendingKeys + sessionId)
         viewModelScope.launch {
             val deadline = System.currentTimeMillis() + 210_000L // worst-case turn (~110s) plus margin
             while (System.currentTimeMillis() < deadline) {
                 delay(3000)
-                if (_state.value.activeChatSessionId != sessionId) return@launch // navigated elsewhere
                 val messages = apiCall { api.getChatSessionMessages(sessionId) }.getOrNull() ?: continue
                 if (messages.lastOrNull()?.role != "user") {
                     _state.value = _state.value.copy(
-                        chatMessages = messages.map {
-                            ChatMessage(role = it.role, text = it.body, images = it.images, references = it.refs, steps = it.steps, cards = it.cards)
-                        },
-                        chatSending = false,
-                        chatLiveSteps = emptyList(),
+                        chatMessages = if (_state.value.activeChatSessionId == sessionId) {
+                            messages.map {
+                                ChatMessage(role = it.role, text = it.body, images = it.images, references = it.refs, steps = it.steps, cards = it.cards)
+                            }
+                        } else _state.value.chatMessages,
+                        chatPendingKeys = _state.value.chatPendingKeys - sessionId,
+                        chatLiveStepsByKey = _state.value.chatLiveStepsByKey - sessionId,
                     )
                     return@launch
                 }
             }
             // Gave up waiting — leave the transcript as-is rather than guess
             // whether it errored out or is just unusually slow.
-            if (_state.value.activeChatSessionId == sessionId) {
-                _state.value = _state.value.copy(
-                    chatMessages = _state.value.chatMessages +
-                        ChatMessage("assistant", "No reply came back for that message. You can try sending it again."),
-                    chatSending = false,
-                    chatLiveSteps = emptyList(),
-                )
-            }
+            _state.value = _state.value.copy(
+                chatMessages = if (_state.value.activeChatSessionId == sessionId) {
+                    _state.value.chatMessages +
+                        ChatMessage("assistant", "No reply came back for that message. You can try sending it again.")
+                } else _state.value.chatMessages,
+                chatPendingKeys = _state.value.chatPendingKeys - sessionId,
+                chatLiveStepsByKey = _state.value.chatLiveStepsByKey - sessionId,
+            )
         }
     }
 

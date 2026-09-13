@@ -2736,8 +2736,13 @@ to simply not attaching a location — the turn still sends normally, and
 `get_current_location` degrades to telling the model to ask instead of
 guessing.
 
+(As of the "Chat sessions generate independently" follow-up below, the
+per-turn `Map<userId, …>` this section originally described has been
+replaced by an `AsyncLocalStorage`-scoped context — the reasoning above for
+*why* it must be per-turn is unchanged, only the mechanism.)
+
 Files: `agent-core/src/agents/locationTool.ts`, `agent-core/src/server.ts`
-(`chatLocations`), `agent-core/src/agents/index.ts` (`FamilyAgentDeps.getLocation`,
+(`chatTurnContext`), `agent-core/src/agents/index.ts` (`FamilyAgentDeps.getLocation`,
 bound onto the planner, research-agent, and the `/web` forced-turn agent).
 Desktop: `desktop/src/main.ts` (`getChatLocation`), `desktop/src-tauri/Info.plist`.
 iOS: `ios/FamilyAgent/App/LocationProvider.swift`,
@@ -2798,3 +2803,134 @@ Files: `agent-core/src/desktopUpdate.ts`, `agent-core/src/server.ts`
 Android: `data/FamilyAgentApi.kt` (`requestDesktopRestart`),
 `AppViewModel.kt`, `ui/SettingsScreen.kt`. Tests:
 `agent-core/test/desktopUpdate.test.ts`.
+
+## Chat sessions generate independently
+
+Reported as: opening a brand-new chat session while a *different* one was
+still generating showed the new, never-sent-to session as "the assistant is
+replying" too. The user's own framing was the more important half of the
+report — Ollama can genuinely serve more than one request at a time, so two
+of a person's own chat sessions (or the same account open on two devices)
+having no way to generate concurrently was a real gap, not just a cosmetic
+glitch.
+
+**Client bug.** All three clients modeled "is a reply in flight" as one flat
+flag (`chatSending` / `AppUiState.chatSending`) for whatever conversation
+happened to be on screen, not per conversation. iOS and Android additionally
+never cancelled a session's request when you navigated away from it — so the
+flag (and the live tool-steps array) just kept reflecting whatever the
+*last* active send was, regardless of which conversation was actually shown.
+Desktop looked unaffected only because it took the opposite, more
+destructive shortcut: `openChatSession`/`startNewChat` called
+`chatAbort.abort()`, silently killing whatever the *previous* screen was
+waiting on. Neither is what "sessions are independent" means.
+
+The fix, mirrored across all three: replace the flat flag with **state keyed
+by conversation**, not a boolean. A session's key is its real id once the
+server has assigned one, or a locally-generated "draft key" before that (a
+brand-new, not-yet-sent-to conversation) — `activeChatKey` on iOS/Android,
+`activeChatKey()` on desktop. `chatPendingKeys` (a set) says which
+conversations have a turn in flight; a per-key map holds each one's live
+tool-call steps. Switching screens, or starting a new blank compose, only
+ever changes which key is *read* — it never touches another key's entry, so
+a background send keeps running (and desktop no longer aborts it). Sending a
+new message is now gated on "is *this* key already pending", not "is
+anything, anywhere, pending" — which is what actually lets two conversations
+generate at once, not just fixes the display.
+
+A send's own completion closure captures its key once, up front, and
+re-checks `activeChatKey() === key` before touching anything on screen: still
+the same conversation → update the transcript, maybe speak the reply, maybe
+skip the "reply ready" notification (now also skipped when a *different*
+session is on screen, not just when Chat is closed entirely); navigated away
+→ leave the screen alone, just refresh the session list (whose preview text
+picks up the new reply) and still fire the notification, since the user
+isn't watching this one. `chatLocations`/`chatRefs`'s per-turn-not-per-user
+requirement (see "Caller geolocation" above) already anticipated exactly this
+— it just hadn't been exploitable through the UI before.
+
+**A subtler bug caught only by testing the actual reopen path**: naively
+"remove the typing indicator, then append the reply bubble" breaks once a
+still-pending session can be *closed and reopened* while its reply is still
+in flight — reopening repaints the whole chat log from scratch and appends a
+fresh typing indicator (there's no live-steps reconnect, by design, mirroring
+the pre-existing orphaned-turn reconnect path), so the original send's
+closure is left holding a reference to an indicator/steps-strip DOM node
+that's no longer attached to anything. Its `.remove()` becomes a silent
+no-op, and the *fresh* indicator from the reopen is never cleaned up —
+verified with a real headless-Chromium repro (open A, switch away, switch
+back, let it resolve) before being caught in review. Fixed on desktop by
+clearing `chatLog.querySelectorAll(".bubble-typing")` (whichever node is
+actually live right now) rather than the captured reference, and by checking
+`.isConnected` before reusing vs. recreating the steps strip. iOS/Android
+don't hit this specific failure mode — their pending state is a set/map keyed
+by conversation, not a literal DOM node reference — but the same
+still-connected check doesn't apply there since there's no DOM at all; the
+per-key model itself is what avoids the class of bug.
+
+**Server-side race, found while fixing the client bug, not reported by the
+user.** Letting two of *the same user's* turns actually run concurrently
+(rather than the client merely queuing them one after another) exposed a
+latent bug in `chatLocations`/`chatRefs`: both were a single value/array per
+*user id*, set right before `askFamilyAgent()` was called and read right
+after — correct only as long as one user never had two turns in flight at
+once. Two concurrent turns for the same user (two sessions, or two devices)
+would race on the same map entry: turn A's location could leak into turn B's
+`get_current_location` call, or a reference collected by A could land in B's
+reply. Fixed by replacing both maps with a single `AsyncLocalStorage`
+(`chatTurnContext`, `server.ts`), which scopes a value to the actual async
+call chain of the invocation that's asking — however deep a tool call nests,
+a subagent invoked mid-turn is still the same call chain — so two concurrent
+turns, even for the same user, never see each other's context, with no
+manual set-before/delete-after bookkeeping needed at all (the scope just ends
+when the `.run()` callback returns or throws). The family-channel `@agent`
+path never opts into this context (it never attached a location or surfaced
+reference chips to begin with) and is unaffected. `resolveReferences` changed
+from `(userStore, userId)` — reading a shared map — to `(userStore, refs)` —
+reading the exact array this call's own context created — for the same
+reason. Verified with a test that pauses one turn's `askFamilyAgent` call
+mid-flight while a second, different-location turn for the same user runs to
+completion inside that pause, then asserts neither saw the other's location.
+
+Files: `agent-core/src/server.ts` (`chatTurnContext`, `resolveReferences`).
+Desktop: `desktop/src/main.ts` (`chatPendingKeys`, `chatAbortByKey`,
+`activeChatKey`, `renderChatTranscript`). iOS: `App/AppModel.swift`
+(`chatPendingKeys`, `chatLiveStepsByKey`, `activeChatKey`), `AppModel+Chat.swift`.
+Android: `AppViewModel.kt` (`AppUiState.chatPendingKeys`/`chatLiveStepsByKey`/
+`activeChatKey`). Tests: `agent-core/test/chatLocation.test.ts` (the
+concurrent-turn regression test).
+
+## Chat never hangs forever: a whole-turn timeout
+
+Follow-up to a report that a "near me" question on iOS hung Chat on "…"
+forever, even after the specific bug behind that report (`LocationProvider`
+having no timeout on its `CLLocationManager` callback) was already fixed and
+shipped. Nothing upstream of `POST /chat` enforces a ceiling on the
+model/tool-call chain it kicks off — not the raw Ollama HTTP call, not a
+small-model tool-call loop, not (before this) anything else — so any one of
+those genuinely hanging, on any platform, reproduces the identical symptom
+with no failure ever surfacing. Adding `get_current_location` made this more
+likely to show up in practice (a "near me" question is now a *longer* turn —
+a location lookup plus `web_search`, not just one round-trip) without
+actually being a location-specific bug at all.
+
+`config.chatTimeoutMs` (`FAMILY_AGENT_CHAT_TIMEOUT_MS`, default 240s —
+comfortably above the ~110s a real planner turn has taken on modest hardware,
+including the extra round-trip a location-aware turn adds, but short of the
+client's own 300s network timeout so the server's clean error always wins
+the race) races the whole `askFamilyAgent`/`runForcedAgentTurn` call in
+`POST /chat` via `withChatTimeout()` (`Promise.race`, same shape as the
+existing `withTimeout()` in `tools/builder.ts`). This **races the promise, it
+doesn't cancel it** — deepagents' `invoke()` has no cooperative abort hook to
+cancel through — so a turn that times out keeps running server-side and its
+eventual result, if any, is simply discarded; the point is the HTTP request
+in front of it always terminates, converting a silent, permanent, invisible
+hang into an ordinary, catchable, clearly-worded error (`504`, a distinct
+`ChatTimeoutError` so it isn't mistaken for a real Ollama-connection
+failure). This is a safety net, not a fix for any specific slow path — a
+turn that's merely slow (not stuck) still just takes as long as it takes,
+up to the ceiling.
+
+Files: `agent-core/src/config.ts` (`chatTimeoutMs`), `agent-core/src/server.ts`
+(`ChatTimeoutError`, `withChatTimeout`). Tests:
+`agent-core/test/chatTimeout.test.ts`.

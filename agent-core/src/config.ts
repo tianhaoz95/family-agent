@@ -69,6 +69,20 @@ export const config = {
   // unloads (RAM/VRAM pinned while idle), "0" unloads immediately.
   // Accepts a Go duration string or a number of seconds.
   ollamaKeepAlive: process.env.OLLAMA_KEEP_ALIVE ?? "30m",
+  // Whole-turn budget for POST /chat (planner + every subagent/tool call it
+  // makes) before the request gives up and returns a clean error instead of
+  // leaving a client's composer stuck on "…" forever. Generous — a real
+  // planner turn on modest hardware has taken up to ~110s already, and one
+  // that also calls get_current_location + web_search (a "near me" question)
+  // adds a full extra round-trip on top of that — but bounded, because
+  // nothing upstream of this (the Ollama HTTP call itself, a stuck web
+  // fetch, a small-model tool-call loop) enforces its own ceiling. The turn
+  // itself isn't cancelled — deepagents' invoke() has no cooperative abort
+  // hook to cancel through — so a very slow reply may still land in
+  // `activity`/logs after this fires; the point is the HTTP request in front
+  // of it always terminates. See docs/DECISIONS.md → "Chat never hangs
+  // forever: a whole-turn timeout".
+  chatTimeoutMs: Number(process.env.FAMILY_AGENT_CHAT_TIMEOUT_MS ?? 240_000),
   dataDir,
   // Display name for this master node, shown on the login screen and
   // advertised over mDNS so a phone can pick the right family server.

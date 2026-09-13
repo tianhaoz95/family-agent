@@ -7,7 +7,10 @@ extension AppModel {
     func startNewChatSession() {
         chatMessages = []
         activeChatSessionID = nil
-        chatLiveSteps = []
+        // A fresh key for this blank composer — distinct from whatever key a
+        // *previous* blank composer's still-in-flight first message is using
+        // (see sendChat), so this screen never inherits that one's "…".
+        chatDraftKey = UUID().uuidString
         stopSpeech()
     }
 
@@ -43,22 +46,29 @@ extension AppModel {
     /// (or a generous timeout passes), rather than losing the "still
     /// working" state whenever this app instance wasn't the one waiting for
     /// it. No live tool-call steps here — the turnId that would carry those
-    /// died with whatever launched the original request.
+    /// died with whatever launched the original request. Keeps polling even
+    /// if the user navigates to a different session in the meantime — the
+    /// point is to know *this* session is still pending so reopening it
+    /// later shows the right state — only the transcript update below is
+    /// gated on it still being the one on screen.
     private func watchForPendingReply(sessionId: String) {
-        guard !chatSending else { return } // this instance is already actively sending it
-        chatSending = true
-        chatLiveSteps = []
+        guard !chatPendingKeys.contains(sessionId) else { return } // already tracked
+        chatPendingKeys.insert(sessionId)
         Task {
-            defer { if activeChatSessionID == sessionId { chatSending = false } }
+            defer {
+                chatPendingKeys.remove(sessionId)
+                chatLiveStepsByKey[sessionId] = nil
+            }
             let deadline = Date().addingTimeInterval(210) // worst-case turn (~110s) plus margin
             while Date() < deadline {
                 try? await Task.sleep(for: .seconds(3))
-                guard activeChatSessionID == sessionId else { return } // navigated elsewhere
                 guard let msgs = await perform({ try await api.chatSessionMessages(sessionId) }) else { continue }
                 if msgs.last?.role != "user" {
-                    chatMessages = msgs.map { m in
-                        ChatMessage(role: m.role, text: m.body, images: m.images,
-                                    references: m.refs, steps: m.steps, cards: m.cards)
+                    if activeChatSessionID == sessionId {
+                        chatMessages = msgs.map { m in
+                            ChatMessage(role: m.role, text: m.body, images: m.images,
+                                        references: m.refs, steps: m.steps, cards: m.cards)
+                        }
                     }
                     return
                 }
@@ -88,10 +98,19 @@ extension AppModel {
 
     func sendChat(_ text: String, images: [String] = [], speakReply: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !chatSending else { return }
+        // The key identifying *this* conversation for as long as this send
+        // takes — its real session id, or `chatDraftKey` if it doesn't have
+        // one yet (a brand-new chat's first message). Captured now, before
+        // anything async: if the user switches to a different conversation
+        // (or starts another brand-new one) before this reply lands, that
+        // switch gets its own key, and this send's completion below only
+        // touches the screen if `key` is still what's active.
+        let key = activeChatKey
+        guard !trimmed.isEmpty, !chatPendingKeys.contains(key) else { return }
+        let startedFromSessionID = activeChatSessionID // nil for a brand-new chat
         chatMessages.append(ChatMessage(role: "user", text: trimmed, images: images))
-        chatSending = true
-        chatLiveSteps = []
+        chatPendingKeys.insert(key)
+        chatLiveStepsByKey[key] = []
         let turnId = UUID().uuidString
 
         Task {
@@ -101,7 +120,7 @@ extension AppModel {
                     try? await Task.sleep(for: .seconds(1))
                     guard let self else { return }
                     if let s = try? await self.api.turnSteps(turnId) {
-                        await MainActor.run { self.chatLiveSteps = s.steps }
+                        await MainActor.run { self.chatLiveStepsByKey[key] = s.steps }
                         if s.done { return }
                     }
                 }
@@ -113,16 +132,24 @@ extension AppModel {
                 // send (see agent-core's get_current_location).
                 let location = await currentChatLocation()
                 let resp = try await api.chat(trimmed, images: images,
-                                              sessionId: activeChatSessionID, turnId: turnId,
+                                              sessionId: startedFromSessionID, turnId: turnId,
                                               location: location)
-                activeChatSessionID = resp.sessionId
-                chatMessages.append(ChatMessage(role: "assistant", text: resp.reply,
-                                                references: resp.references, steps: resp.steps, cards: resp.cards))
-                if speakReply || autoRead {
-                    speak(resp.reply)
+                chatPendingKeys.remove(key)
+                chatLiveStepsByKey[key] = nil
+                let stillOnScreen = activeChatKey == key
+                if stillOnScreen {
+                    if startedFromSessionID == nil { activeChatSessionID = resp.sessionId }
+                    chatMessages.append(ChatMessage(role: "assistant", text: resp.reply,
+                                                    references: resp.references, steps: resp.steps, cards: resp.cards))
+                    if speakReply || autoRead {
+                        speak(resp.reply)
+                    }
                 }
-                // Skip the notification if the user is right here watching it arrive.
-                if notifyOnReply, !(isAppForeground && isChatScreenActive) {
+                // Skip the notification if the user is right here watching
+                // this exact conversation arrive — not just Chat in general,
+                // since another one of their sessions may have finished
+                // while a different one is on screen.
+                if notifyOnReply, !(isAppForeground && isChatScreenActive && stillOnScreen) {
                     let sessionId = resp.sessionId
                     ReplyNotifications.hasPermission { granted in
                         if granted { ReplyNotifications.postChatReply(sessionId: sessionId, body: resp.reply) }
@@ -130,13 +157,17 @@ extension AppModel {
                 }
                 await refreshChatSessions()
             } catch APIError.unauthorized {
+                chatPendingKeys.remove(key)
+                chatLiveStepsByKey[key] = nil
                 settings.clearSession()
                 auth = .needLogin(serverURL: serverURL, serverName: settings.session?.serverName ?? "", error: "Your session expired.")
             } catch {
-                chatMessages.append(ChatMessage(role: "error", text: error.localizedDescription))
+                chatPendingKeys.remove(key)
+                chatLiveStepsByKey[key] = nil
+                if activeChatKey == key {
+                    chatMessages.append(ChatMessage(role: "error", text: error.localizedDescription))
+                }
             }
-            chatSending = false
-            chatLiveSteps = []
         }
     }
 
