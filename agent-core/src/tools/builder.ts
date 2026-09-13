@@ -118,6 +118,12 @@ const HTML_SYSTEM = `You write one complete, self-contained HTML document for a 
 - Output ONLY the HTML, starting with <!doctype html>. No explanation, no markdown fences.
 - Everything inline: one <style> block, one <script> block. NO external URLs, CDNs, frameworks, fonts, or images.
 - Clean, modern, legible. Works offline.
+- Write every piece of user-facing text — the title, headings, labels, button
+  text, placeholders, empty states, confirmation/error messages — in the SAME
+  language as the request below. A request written in Chinese gets a page
+  entirely in Chinese; one written in English gets English. Never default to
+  English just because these instructions are in English — only the code
+  itself (tag names, attributes, variable names, comments) stays in English.
 - ${HOUSE_STYLE}
 - Persist the user's data with the built-in state API. Use the RELATIVE path "__state" (no leading slash):
   load with fetch('__state').then(r=>r.json()) (treat a null response as "no data yet") and save with
@@ -133,6 +139,12 @@ const HTML_WITH_OPS_SYSTEM = `You write one complete, self-contained HTML docume
 - Output ONLY the HTML, starting with <!doctype html>. No explanation, no markdown fences.
 - Everything inline: one <style> block, one <script> block. NO external URLs, CDNs, frameworks, fonts, or images.
 - Clean, modern, legible.
+- Write every piece of user-facing text — the title, headings, labels, button
+  text, placeholders, empty states, confirmation/error messages — in the SAME
+  language as the request below. A request written in Chinese gets a page
+  entirely in Chinese; one written in English gets English. Never default to
+  English just because these instructions are in English — only the code
+  itself (tag names, attributes, variable names, comments) stays in English.
 - ${HOUSE_STYLE}
 - This tool has a backend. Its operations are listed below. Call them with:
     fetch('api/<operation_name>', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(input) })

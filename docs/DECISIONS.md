@@ -3117,3 +3117,37 @@ desktop.sh`), which this sandbox can't produce or notarize; a plain
 Confirming this actually fixes the prompt needs the next real signed release.
 
 Files: `desktop/src-tauri/Entitlements.plist`.
+
+## Generated tools defaulted to English regardless of the request's language
+
+Reported as: asked the builder to make a tool with a Chinese description —
+the generated page's UI (labels, buttons, headings) came back in English.
+`ctx.originalPrompt` (the user's own request, in whatever language) was
+already passed to the model verbatim — the gap was that `HTML_SYSTEM` /
+`HTML_WITH_OPS_SYSTEM` (the system prompts that actually write the page)
+never said anything about language at all, and every worked example and
+instruction in them is written in English. A small model defaults to
+mirroring the SYSTEM prompt's language for its own output unless told
+otherwise, English request or not.
+
+Fixed with one explicit rule added to both prompts: user-facing text (title,
+headings, labels, buttons, placeholders, messages) must match the language
+the request itself is written in — code (tags, attributes, variable names,
+comments) stays English regardless, same as any generated codebase would.
+The tool's catalog name (`nameFromHtml`) needed no change — it already reads
+the generated `<title>` tag first, so it inherits the fix automatically once
+the page itself is in the right language. `OPERATIONS_SYSTEM` (the backend
+generator) was deliberately left untouched: operation names are a
+snake_case internal contract the assistant calls by name, and their
+one-line descriptions are read by the model, not shown in any user-facing
+list — there was nothing there actually reported as wrong.
+
+Same verification gap as the "near me" delegation fix above: this is a
+prompt-wording change aimed at a small model's own output-language choice,
+and this sandbox has no Ollama to confirm it against a real model — the fast
+suite (`toolBuilder.test.ts`, unaffected — it doesn't inspect prompt
+wording) passes, but whether the reworded prompt actually gets a configured
+model to switch languages reliably is unverified here.
+
+Files: `agent-core/src/tools/builder.ts` (`HTML_SYSTEM`,
+`HTML_WITH_OPS_SYSTEM`).
