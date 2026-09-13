@@ -234,11 +234,22 @@ struct BuildToolRequest: Codable, Sendable { let prompt: String }
 
 // MARK: - Chat
 
+/// This device's location, attached to one /chat turn — see agent-core's
+/// get_current_location tool. Never persisted beyond a short in-memory
+/// cache; see AppModel+Chat.swift's currentChatLocation().
+struct ChatLocation: Codable, Sendable {
+    let latitude: Double
+    let longitude: Double
+    var accuracyMeters: Double? = nil
+    var ageSeconds: Double? = nil
+}
+
 struct ChatRequest: Codable, Sendable {
     let message: String
     var images: [String] = []
     var sessionId: String? = nil
     var turnId: String? = nil
+    var location: ChatLocation? = nil
 }
 
 struct ChatReference: Codable, Sendable, Hashable, Identifiable {

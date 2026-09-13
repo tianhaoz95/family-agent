@@ -594,6 +594,8 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onSetMicOnLeft = viewModel::setMicOnLeft,
                         notifyOnReply = state.notifyOnReply,
                         onSetNotifyOnReply = viewModel::setNotifyOnReply,
+                        useLocation = state.useLocation,
+                        onSetUseLocation = viewModel::setUseLocation,
                         serverSettings = state.serverSettings,
                         onSetCardsEnabled = viewModel::setCardsEnabled,
                         onSetVaultEnabled = viewModel::setVaultEnabled,

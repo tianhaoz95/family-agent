@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var showAdvanced = false
     @State private var showUpdateConfirm = false
     @State private var notifyBlockedHint = false
+    @State private var locationBlockedHint = false
 
     var body: some View {
         ScreenScaffold(title: "Settings",
@@ -76,6 +77,32 @@ struct SettingsView: View {
                             ? "Notifications are blocked — allow them for Family Agent in Settings."
                             : "A system notification when the assistant finishes replying in Chat, or an @agent reply in a family channel, while you're not looking at it.")
                             .appLabelSmall().foregroundStyle(notifyBlockedHint ? Theme.dangerInk : Theme.textMuted)
+                    }
+                }
+                .padding(.vertical, 4)
+
+                section("Location")
+                Toggle(isOn: Binding(
+                    get: { model.useLocation },
+                    set: { want in
+                        guard want else {
+                            locationBlockedHint = false
+                            model.useLocation = false
+                            return
+                        }
+                        Task { @MainActor in
+                            let loc = await LocationProvider.shared.currentLocation()
+                            locationBlockedHint = loc == nil
+                            model.useLocation = loc != nil
+                        }
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Let the assistant use my location").appBody()
+                        Text(locationBlockedHint
+                            ? "Couldn't get a location — allow it for Family Agent in Settings."
+                            : "For \u{201C}near me\u{201D} questions only \u{2014} not a stored home address, and never shared in a family conversation.")
+                            .appLabelSmall().foregroundStyle(locationBlockedHint ? Theme.dangerInk : Theme.textMuted)
                     }
                 }
                 .padding(.vertical, 4)

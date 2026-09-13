@@ -24,6 +24,11 @@
          Only meaningful on API 33+ (runtime-requested at app start and from
          the Settings toggle); a no-op permission below that. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Settings → "Let the assistant use my location" (off by default).
+         COARSE only — city-block accuracy is plenty for a "near me" Chat
+         question, and it's a smaller ask than fine/precise. Runtime-requested
+         from that toggle, not at app start. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:allowBackup="true"

@@ -80,6 +80,12 @@
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Family Agent attaches photos you pick to a chat message or a document.</string>
 
+	<!-- Settings → "Let the assistant use my location" (off by default). Only
+	     used for a Chat "near me" question — never a background fetch, never
+	     shared with a family channel. -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Family Agent shares your approximate location with the assistant only when you ask a "near me" question, so it can search for nearby places.</string>
+
 	<!-- Bundled variable fonts (Resources/Fonts, auto-copied by the synchronized group). -->
 	<key>UIAppFonts</key>
 	<array>

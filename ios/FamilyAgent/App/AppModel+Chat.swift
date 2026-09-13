@@ -71,6 +71,21 @@ extension AppModel {
         }
     }
 
+    /// Best-effort: this device's location for a chat turn, or nil if the
+    /// setting is off or permission isn't granted. Never throws, never
+    /// blocks sending on failure — LocationProvider already degrades to nil
+    /// for every failure mode.
+    func currentChatLocation() async -> ChatLocation? {
+        guard useLocation else { return nil }
+        guard let loc = await LocationProvider.shared.currentLocation() else { return nil }
+        return ChatLocation(
+            latitude: loc.coordinate.latitude,
+            longitude: loc.coordinate.longitude,
+            accuracyMeters: loc.horizontalAccuracy >= 0 ? loc.horizontalAccuracy : nil,
+            ageSeconds: -loc.timestamp.timeIntervalSinceNow
+        )
+    }
+
     func sendChat(_ text: String, images: [String] = [], speakReply: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !chatSending else { return }
@@ -94,8 +109,12 @@ extension AppModel {
             defer { poller.cancel() }
 
             do {
+                // Private Chat only — never attached to a family Messages
+                // send (see agent-core's get_current_location).
+                let location = await currentChatLocation()
                 let resp = try await api.chat(trimmed, images: images,
-                                              sessionId: activeChatSessionID, turnId: turnId)
+                                              sessionId: activeChatSessionID, turnId: turnId,
+                                              location: location)
                 activeChatSessionID = resp.sessionId
                 chatMessages.append(ChatMessage(role: "assistant", text: resp.reply,
                                                 references: resp.references, steps: resp.steps, cards: resp.cards))

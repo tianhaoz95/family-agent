@@ -17,6 +17,8 @@ import app.familyagent.android.data.Channel
 import app.familyagent.android.data.Document
 import app.familyagent.android.data.DocumentSearchHit
 import app.familyagent.android.data.FamilyAgentApi
+import app.familyagent.android.data.ChatLocation
+import app.familyagent.android.data.LocationProvider
 import app.familyagent.android.data.FamilyMember
 import app.familyagent.android.data.McpServer
 import app.familyagent.android.data.Message
@@ -112,6 +114,9 @@ data class AppUiState(
     val micOnLeft: Boolean = false,
     /** Notify when a reply is ready and you're not looking at it (persisted in DataStore). */
     val notifyOnReply: Boolean = true,
+    /** Let the assistant use this device's location for a "near me" Chat
+     *  question (persisted in DataStore). Off by default. */
+    val useLocation: Boolean = false,
     /** The reply text currently being synthesized (null = none). */
     val speakLoadingText: String? = null,
     /** The reply text currently playing aloud (null = none). */
@@ -215,6 +220,7 @@ class AppViewModel(
 ) : ViewModel() {
     private val _state = MutableStateFlow(AppUiState())
     val state: StateFlow<AppUiState> = _state.asStateFlow()
+    private val locationProvider = LocationProvider(appContext)
 
     // ---- text-to-speech playback ----
     private var mediaPlayer: MediaPlayer? = null
@@ -239,6 +245,11 @@ class AppViewModel(
         viewModelScope.launch {
             settings.notifyOnReply.collect { on ->
                 _state.value = _state.value.copy(notifyOnReply = on)
+            }
+        }
+        viewModelScope.launch {
+            settings.useLocation.collect { on ->
+                _state.value = _state.value.copy(useLocation = on)
             }
         }
         viewModelScope.launch {
@@ -479,6 +490,25 @@ class AppViewModel(
         return r
     }
 
+    /** Best-effort: this device's location for a chat turn, or null if the
+     *  setting is off or permission isn't granted. Never throws, never
+     *  blocks sending on failure — LocationProvider already degrades to
+     *  null for every failure mode. */
+    private suspend fun currentChatLocation(): ChatLocation? {
+        if (!_state.value.useLocation) return null
+        val loc = locationProvider.currentLocation() ?: return null
+        return ChatLocation(
+            latitude = loc.latitude,
+            longitude = loc.longitude,
+            accuracyMeters = if (loc.hasAccuracy()) loc.accuracy else null,
+            ageSeconds = (System.currentTimeMillis() - loc.time) / 1000.0,
+        )
+    }
+
+    fun setUseLocation(on: Boolean) {
+        viewModelScope.launch { settings.setUseLocation(on) }
+    }
+
     fun sendChat(message: String, images: List<String> = emptyList(), speakReply: Boolean = false) {
         if (message.isBlank() && images.isEmpty()) return
         // The model needs a prompt; supply a default when it's an image only.
@@ -499,7 +529,10 @@ class AppViewModel(
                     delay(1000)
                 }
             }
-            val assistant = apiCall { api.chat(prompt, images, sessionId, turnId) }
+            // Private Chat only — never attached to a family Messages send
+            // (see agent-core's get_current_location).
+            val location = currentChatLocation()
+            val assistant = apiCall { api.chat(prompt, images, sessionId, turnId, location) }
                 .fold(
                     onSuccess = {
                         _state.value = _state.value.copy(activeChatSessionId = it.sessionId)

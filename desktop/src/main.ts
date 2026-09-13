@@ -29,6 +29,7 @@ import {
   type StickyNote,
   type NoteScope,
   type ChatReference,
+  type ChatLocation,
   type ChatSession,
   type ChatSessionMessage,
   type ToolStep,
@@ -449,6 +450,50 @@ try {
   autoRead = localStorage.getItem(AUTO_READ_KEY) === "1";
 } catch {
   /* private mode */
+}
+
+// ---------- "use my location" (Settings → Location) ----------
+// Off by default, client-local — same shape as autoRead above, not a server
+// setting (it's inherently a property of THIS machine, not the household).
+// Only ever attached to a private Chat turn (never family Messages) — see
+// agent-core's get_current_location for the full "why".
+const LOCATION_ENABLED_KEY = "familyAgent.locationEnabled";
+let locationEnabled = false;
+try {
+  locationEnabled = localStorage.getItem(LOCATION_ENABLED_KEY) === "1";
+} catch {
+  /* private mode */
+}
+// A fresh-enough fix is reused for a few minutes so every message doesn't
+// re-prompt/re-poll the OS location service — "near me" doesn't need
+// meter-level freshness.
+let cachedLocation: { fix: ChatLocation; capturedAtMs: number } | null = null;
+const LOCATION_CACHE_MS = 3 * 60 * 1000;
+
+/** Best-effort: returns this computer's current location for a chat turn, or
+ *  undefined if the setting is off, permission was denied, or it's
+ *  unsupported. Never throws, never blocks sending a message on failure. */
+async function getChatLocation(): Promise<ChatLocation | undefined> {
+  if (!locationEnabled || !("geolocation" in navigator)) return undefined;
+  if (cachedLocation && Date.now() - cachedLocation.capturedAtMs < LOCATION_CACHE_MS) {
+    return { ...cachedLocation.fix, ageSeconds: Math.round((Date.now() - cachedLocation.capturedAtMs) / 1000) };
+  }
+  try {
+    const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
+      navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 8000, maximumAge: LOCATION_CACHE_MS })
+    );
+    const fix: ChatLocation = {
+      latitude: pos.coords.latitude,
+      longitude: pos.coords.longitude,
+      accuracyMeters: pos.coords.accuracy ?? undefined,
+    };
+    cachedLocation = { fix, capturedAtMs: Date.now() };
+    return fix;
+  } catch {
+    // Permission denied, timed out, or no location service — the turn still
+    // sends, just without one. get_current_location degrades gracefully.
+    return undefined;
+  }
 }
 
 // ---------- "reply is ready" notifications ----------
@@ -1650,13 +1695,17 @@ chatForm.addEventListener("submit", async (e) => {
   };
   void poll();
   try {
+    // Private Chat only — never attached to a family Messages send (see
+    // agent-core's get_current_location). Cheap when off or cached.
+    const location = await getChatLocation();
     const { reply, references, steps, cards, sessionId } = await api.chat(
       message,
       images,
       activeChatSessionId ?? undefined,
       chatAbort.signal,
       turnId,
-      documentIds
+      documentIds,
+      location
     );
     stopPoll = true;
     pending.remove();
@@ -3985,6 +4034,8 @@ const settingsTtsVoiceSelect = document.getElementById("settings-tts-voice-selec
 const settingsTtsForm = document.getElementById("settings-tts-form") as HTMLFormElement;
 const settingsTtsStatusEl = document.getElementById("settings-tts-status")!;
 const settingsAutoReadCheckbox = document.getElementById("settings-auto-read") as HTMLInputElement;
+const settingsLocationCheckbox = document.getElementById("settings-location-checkbox") as HTMLInputElement;
+const settingsLocationStatusEl = document.getElementById("settings-location-status")!;
 const settingsNotifyCheckbox = document.getElementById("settings-notify-checkbox") as HTMLInputElement;
 const settingsNotifyStatusEl = document.getElementById("settings-notify-status")!;
 const settingsCardsCheckbox = document.getElementById("settings-cards-checkbox") as HTMLInputElement;
@@ -4252,6 +4303,7 @@ async function refreshSettings() {
       fillVoiceSelect(settingsTtsVoiceSelect, settings.ttsVoice);
     }
     settingsAutoReadCheckbox.checked = autoRead;
+    settingsLocationCheckbox.checked = locationEnabled;
     if (document.activeElement !== settingsNotifyCheckbox) {
       settingsNotifyCheckbox.checked = notifyOnReply;
     }
@@ -4492,6 +4544,34 @@ settingsAutoReadCheckbox.addEventListener("change", () => {
   } catch {
     /* private mode */
   }
+});
+
+settingsLocationCheckbox.addEventListener("change", () => {
+  void (async () => {
+    const wantOn = settingsLocationCheckbox.checked;
+    if (!wantOn) {
+      locationEnabled = false;
+      cachedLocation = null; // don't keep a fix around once the user opts out
+      settingsLocationStatusEl.textContent = "";
+    } else {
+      settingsLocationStatusEl.textContent = "Requesting location…";
+      locationEnabled = true; // getChatLocation checks this flag
+      const fix = await getChatLocation();
+      if (!fix) {
+        locationEnabled = false;
+        settingsLocationCheckbox.checked = false;
+        settingsLocationStatusEl.textContent =
+          "Couldn't get a location — check that this browser/OS allows Family Agent to access it.";
+      } else {
+        settingsLocationStatusEl.textContent = "Location shared. It's only sent with a chat message you send.";
+      }
+    }
+    try {
+      localStorage.setItem(LOCATION_ENABLED_KEY, locationEnabled ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
+  })();
 });
 
 settingsNotifyCheckbox.addEventListener("change", () => {

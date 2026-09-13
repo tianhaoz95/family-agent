@@ -19,6 +19,7 @@ private val TASK_VIEW_KEY = stringPreferencesKey("task_view")
 private val AUTO_READ_KEY = booleanPreferencesKey("auto_read_replies")
 private val MIC_ON_LEFT_KEY = booleanPreferencesKey("mic_button_on_left")
 private val NOTIFY_ON_REPLY_KEY = booleanPreferencesKey("notify_on_reply")
+private val USE_LOCATION_KEY = booleanPreferencesKey("use_location")
 // "Remember me" on the login screen — keyed by server URL (below the plain
 // "current session" keys above) so switching servers doesn't leak one home's
 // saved login into another's fields. Plaintext at rest, same as AUTH_TOKEN_KEY
@@ -106,6 +107,17 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setNotifyOnReply(on: Boolean) {
         context.dataStore.edit { it[NOTIFY_ON_REPLY_KEY] = on }
+    }
+
+    /**
+     * Let the assistant use this device's location for a "near me" Chat
+     * question (never a family Messages send — see agent-core's
+     * get_current_location). Off by default. Device-local, survives sign-out.
+     */
+    val useLocation = context.dataStore.data.map { it[USE_LOCATION_KEY] ?: false }
+
+    suspend fun setUseLocation(on: Boolean) {
+        context.dataStore.edit { it[USE_LOCATION_KEY] = on }
     }
 
     suspend fun saveSession(serverUrl: String, token: String, displayName: String, serverName: String) {

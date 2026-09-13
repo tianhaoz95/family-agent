@@ -122,6 +122,13 @@ final class AppModel {
     var notifyOnReply: Bool = SettingsStore().notifyOnReply {
         didSet { settings.notifyOnReply = notifyOnReply }
     }
+    /// Let the assistant use this device's location for a "near me" Chat
+    /// question. Device-local, off by default. Toggling it on immediately
+    /// requests location permission (see SettingsView) rather than waiting
+    /// for the next chat message, so the system prompt isn't a surprise.
+    var useLocation: Bool = SettingsStore().useLocation {
+        didSet { settings.useLocation = useLocation }
+    }
 
     // ---- "reply is ready" notifications: not persisted, just point-in-time
     // state read at the moment a reply lands, to skip a redundant

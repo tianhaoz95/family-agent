@@ -301,6 +301,16 @@ export interface ChatReference {
   label: string;
 }
 
+/** This computer's location, attached to one /chat turn — see
+ *  agent-core's get_current_location tool. Never persisted client-side
+ *  beyond a short in-memory cache; see main.ts's getChatLocation(). */
+export interface ChatLocation {
+  latitude: number;
+  longitude: number;
+  accuracyMeters?: number;
+  ageSeconds?: number;
+}
+
 /** A full-page artifact the assistant generated (render_artifact). List view. */
 export interface ArtifactSummary {
   id: string;
@@ -777,7 +787,8 @@ export const api = {
     sessionId?: string,
     signal?: AbortSignal,
     turnId?: string,
-    documentIds: string[] = []
+    documentIds: string[] = [],
+    location?: ChatLocation
   ) =>
     request<{
       reply: string;
@@ -793,6 +804,7 @@ export const api = {
         ...(documentIds.length ? { documentIds } : {}),
         ...(sessionId ? { sessionId } : {}),
         ...(turnId ? { turnId } : {}),
+        ...(location ? { location } : {}),
       }),
       signal,
     }),

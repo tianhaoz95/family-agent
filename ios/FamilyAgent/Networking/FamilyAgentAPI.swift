@@ -139,8 +139,14 @@ struct FamilyAgentAPI: Sendable {
 
     // MARK: - Chat
 
-    func chat(_ message: String, images: [String] = [], sessionId: String? = nil, turnId: String? = nil) async throws -> ChatResponse {
-        try await send("POST", "/chat", body: ChatRequest(message: message, images: images, sessionId: sessionId, turnId: turnId))
+    func chat(
+        _ message: String, images: [String] = [], sessionId: String? = nil, turnId: String? = nil,
+        location: ChatLocation? = nil
+    ) async throws -> ChatResponse {
+        try await send(
+            "POST", "/chat",
+            body: ChatRequest(message: message, images: images, sessionId: sessionId, turnId: turnId, location: location)
+        )
     }
     func turnSteps(_ turnId: String) async throws -> TurnStepsResponse {
         try await get("/chat/turns/\(turnId.pathEscaped)")

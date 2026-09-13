@@ -8,6 +8,13 @@
        in the WKWebView. -->
   <key>NSMicrophoneUsageDescription</key>
   <string>Family Agent records a short voice clip and sends it to the local agent running on this Mac to transcribe.</string>
+  <!-- Same requirement as the mic key above, same reason: without it, a
+       packaged .app hard-crashes the moment the assistant's "use my
+       location" setting calls navigator.geolocation in the WKWebView. Off
+       by default (Settings → Internet access-adjacent toggle); only asked
+       for if the user turns it on. -->
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Family Agent shares this Mac's approximate location with the assistant only when you ask a "near me" question, so it can search for nearby places.</string>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
 </dict>

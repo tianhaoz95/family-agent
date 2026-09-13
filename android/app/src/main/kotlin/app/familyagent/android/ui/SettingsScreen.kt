@@ -1,5 +1,6 @@
 package app.familyagent.android.ui
 
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -9,6 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -32,6 +34,8 @@ fun SettingsScreen(
     onSetMicOnLeft: (Boolean) -> Unit = {},
     notifyOnReply: Boolean = true,
     onSetNotifyOnReply: (Boolean) -> Unit = {},
+    useLocation: Boolean = false,
+    onSetUseLocation: (Boolean) -> Unit = {},
     serverSettings: ServerSettings? = null,
     onSetCardsEnabled: (Boolean) -> Unit = {},
     onSetVaultEnabled: (Boolean) -> Unit = {},
@@ -133,6 +137,56 @@ fun SettingsScreen(
                             "@agent reply in a family channel, while you're not looking at it.",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (notifyBlockedHint) MaterialTheme.colorScheme.error else AppAccents.textSecondary,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+        SectionLabel("Location")
+        Spacer(Modifier.height(4.dp))
+        val locationContext = LocalContext.current
+        var locationBlockedHint by remember { mutableStateOf(false) }
+        val locationPermissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) { granted ->
+            locationBlockedHint = !granted
+            onSetUseLocation(granted)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(
+                checked = useLocation,
+                onCheckedChange = { want ->
+                    if (want) {
+                        val already = ContextCompat.checkSelfPermission(
+                            locationContext, android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (already) {
+                            locationBlockedHint = false
+                            onSetUseLocation(true)
+                        } else {
+                            locationPermissionLauncher.launch(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+                        }
+                    } else {
+                        locationBlockedHint = false
+                        onSetUseLocation(false)
+                    }
+                },
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Let the assistant use my location",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    if (locationBlockedHint)
+                        "Location is blocked — allow it for Family Agent in system settings."
+                    else
+                        "For “near me” questions only — not a stored home address, and never " +
+                            "shared in a family conversation.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (locationBlockedHint) MaterialTheme.colorScheme.error else AppAccents.textSecondary,
                 )
             }
         }

@@ -18,6 +18,8 @@ import { makeArtifactTools, type ArtifactToolDeps } from "./artifactTools.js";
 import { StepRecorder } from "./steps.js";
 import { config } from "../config.js";
 import { makeFamilyToolTools, type FamilyToolDeps } from "./toolTools.js";
+import { makeLocationTools, type LocationInfo } from "./locationTool.js";
+export type { LocationInfo } from "./locationTool.js";
 import type { OnReference } from "./references.js";
 import type { Embedder } from "../embeddings.js";
 
@@ -116,6 +118,12 @@ an exact result. Use it for ANY arithmetic, percentage, tip, loan/interest,
 date-difference, unit-conversion, or "add these up / average these" question —
 never do the maths yourself, you get it wrong. Example: "split $84 three ways"
 → call run_code with 'Math.round(84/3*100)/100'.
+
+You also have a "get_current_location" tool: it returns the device's current
+location (latitude/longitude) — the phone or computer the person is using
+right now, not a stored home address. Call it for any "near me" / "nearby" /
+"in my area" / "around here" request BEFORE asking the person where they are.
+It may report no location is available (permission off) — only then ask.
 
 Keep replies short and concrete. If a request needs no tool at all (a plain
 question with nothing to look up or compute, like "what can you help with?"),
@@ -366,7 +374,15 @@ const RESEARCH_AGENT_PROMPT = `You look things up on the public web for the
 family and report back plainly.
 
 Tools: web_search (top results with snippets), open_page (read one page in
-full — pass a full https:// URL, usually one from web_search).
+full — pass a full https:// URL, usually one from web_search),
+get_current_location (the device's current latitude/longitude — the phone or
+computer being used right now, not a stored home address).
+
+For a "near me" / "nearby" / "in my area" / "what's around here" question,
+call get_current_location FIRST, then put the coordinates straight into your
+web_search query (e.g. "state parks near 37.369, -122.036") rather than
+asking the person which city they mean. If get_current_location reports
+nothing is available, only then ask.
 
 Workflow: call web_search first. If a snippet already answers the question,
 answer from it. If not, call open_page on the most promising result and read
@@ -428,6 +444,11 @@ export interface FamilyAgentDeps {
   listTools?: () => { id: string; name: string; kind: string; status: string; revisionState: string | null }[];
   /** Notified of each task / document / tool a subagent retrieves this turn. */
   onReference?: OnReference;
+  /** The device location of whoever sent THIS turn's message, if their client
+   *  shared one — read fresh per call, never cached across turns. Omit (or
+   *  have it return undefined) when nothing was sent; get_current_location
+   *  degrades gracefully. See agents/locationTool.ts. */
+  getLocation?: () => LocationInfo | undefined;
   /** Current embedding client (or null) — enables semantic document search. */
   getEmbedder?: () => Embedder | null;
   /**
@@ -540,6 +561,10 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
   // `render_artifact` — same placement as render_card: a full page instead of
   // an inline fragment.
   const artifactTools = deps.artifacts ? makeArtifactTools(deps.artifacts) : [];
+  // `get_current_location` — always bound, like run_code: it's self-limiting
+  // (no client message → no location → the tool just says so), not something
+  // that needs an admin/server-wide toggle the way web access does.
+  const locationTools = makeLocationTools(deps.getLocation ?? (() => undefined));
 
   return createDeepAgent({
     name: "family-planner",
@@ -555,7 +580,7 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
       cards: !!deps.cards,
       artifacts: !!deps.artifacts,
     }),
-    tools: [...computeTools, ...skillTools, ...cardTools, ...artifactTools],
+    tools: [...computeTools, ...skillTools, ...cardTools, ...artifactTools, ...locationTools],
     // deepagents bakes in generic ls/read_file/write_file tools for the
     // agent's own "working memory" filesystem. A 3B-class model reliably
     // confused those with our domain concept of "documents" — asked "what
@@ -629,6 +654,7 @@ export function buildFamilyAgent(store: ScopedStore, deps: FamilyAgentDeps = {})
                 ...makeWebTools({ logActivity: deps.web.logActivity, onReference: deps.onReference }),
                 ...cardTools,
                 ...artifactTools,
+                ...locationTools,
               ],
             },
           ]
@@ -805,14 +831,14 @@ export function buildFamilyRoutineAgent(store: ScopedStore) {
 }
 
 /** Same shape as buildFamilyToolsAgent, for a "/web" forced turn. */
-export function buildFamilyResearchAgent(deps: WebToolDeps) {
+export function buildFamilyResearchAgent(deps: WebToolDeps, getLocation?: () => LocationInfo | undefined) {
   return createDeepAgent({
     name: "family-research-direct",
     model: createLocalModel(),
     systemPrompt: RESEARCH_AGENT_PROMPT,
     permissions: [{ operations: ["read", "write"], paths: ["/**"], mode: "deny" }],
     middleware: [createFilesystemMiddleware({ tools: ["read_file"] })],
-    tools: makeWebTools(deps),
+    tools: [...makeWebTools(deps), ...makeLocationTools(getLocation ?? (() => undefined))],
   });
 }
 

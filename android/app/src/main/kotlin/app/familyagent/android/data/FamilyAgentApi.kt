@@ -124,8 +124,11 @@ class FamilyAgentApi(
         images: List<String> = emptyList(),
         sessionId: String? = null,
         turnId: String? = null,
+        location: ChatLocation? = null,
     ): ChatResponse =
-        json.decodeFromString(send("POST", "/chat", json.encodeToString(ChatRequest(message, images, sessionId, turnId))))
+        json.decodeFromString(
+            send("POST", "/chat", json.encodeToString(ChatRequest(message, images, sessionId, turnId, location)))
+        )
 
     /** Poll the tool calls made so far by an in-flight turn. */
     suspend fun turnSteps(turnId: String): TurnStepsResponse =

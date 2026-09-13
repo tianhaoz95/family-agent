@@ -270,6 +270,17 @@ data class ReopenCommentRequest(val status: String = "open")
 @Serializable
 data class BuildToolRequest(val prompt: String)
 
+/** This device's location, attached to one /chat turn — see agent-core's
+ *  get_current_location tool. Never persisted beyond a short in-memory
+ *  cache; see LocationProvider.kt. */
+@Serializable
+data class ChatLocation(
+    val latitude: Double,
+    val longitude: Double,
+    val accuracyMeters: Float? = null,
+    val ageSeconds: Double? = null,
+)
+
 @Serializable
 data class ChatRequest(
     val message: String,
@@ -281,6 +292,7 @@ data class ChatRequest(
     // Client-generated id for polling GET /chat/turns/:turnId for live tool-call
     // visibility while the reply is in flight.
     val turnId: String? = null,
+    val location: ChatLocation? = null,
 )
 
 @Serializable

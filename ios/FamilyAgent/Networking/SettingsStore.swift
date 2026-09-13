@@ -15,6 +15,7 @@ struct SettingsStore {
         static let autoRead = "auto_read_replies"
         static let micOnLeft = "mic_button_on_left"
         static let notifyOnReply = "notify_on_reply"
+        static let useLocation = "use_location"
         static let recentServers = "recent_servers"
     }
 
@@ -112,5 +113,13 @@ struct SettingsStore {
     var notifyOnReply: Bool {
         get { defaults.object(forKey: K.notifyOnReply) == nil ? true : defaults.bool(forKey: K.notifyOnReply) }
         nonmutating set { defaults.set(newValue, forKey: K.notifyOnReply) }
+    }
+
+    /// Lets the assistant answer "near me" questions using this device's own
+    /// location (Chat only, never family Messages — see agent-core's
+    /// get_current_location). Off by default; device-local, like autoRead.
+    var useLocation: Bool {
+        get { defaults.bool(forKey: K.useLocation) }
+        nonmutating set { defaults.set(newValue, forKey: K.useLocation) }
     }
 }

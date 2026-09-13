@@ -63,6 +63,7 @@ import {
   type ForcedAgentKind,
   type FamilyAgent,
   type InvokableAgent,
+  type LocationInfo,
 } from "./agents/index.js";
 import { extractDocument } from "./agents/extraction.js";
 import { suggestDocumentName } from "./agents/rename.js";
@@ -320,6 +321,12 @@ export function buildServer(
       | { type: "link"; id: string; label: string }
     )[]
   >();
+  // The device location the client attached to THIS turn's /chat call, if
+  // any — set right before invoking the agent, read through get_current_location
+  // (agents/locationTool.ts), never persisted. Same "fresh per turn, closed
+  // over by the cached agent's tools" shape as chatRefs above, needed because
+  // the agent object itself is built once and reused across many turns.
+  const chatLocations = new Map<string, LocationInfo | undefined>();
   // Generated HTML cards the model rendered this turn (render_card). One
   // collector array per in-flight turn, keyed by user (a set of them, so two
   // concurrent turns for one user can't stomp each other — same shape as the
@@ -515,6 +522,7 @@ export function buildServer(
       startToolIterate: (toolId, instruction) => startToolIterate(userId, toolId, instruction),
       listTools: () => toolsBrief(userId),
       onReference: (ref) => chatRefs.get(userId)?.push(ref),
+      getLocation: () => chatLocations.get(userId),
       getEmbedder: () => embedder,
       familyTools: config.toolsEnabled ? familyToolsDeps(userId) : undefined,
       web: webDeps(userId),
@@ -553,10 +561,13 @@ export function buildServer(
   const notesAgents = makeAgentCache((userId) => buildFamilyNotesAgent(store.scoped(userId)));
   const routineAgents = makeAgentCache((userId) => buildFamilyRoutineAgent(store.scoped(userId)));
   const researchAgents = makeAgentCache((userId) =>
-    buildFamilyResearchAgent({
-      logActivity: (a, ac, d) => store.scoped(userId).logActivity(a, ac, d),
-      onReference: (ref) => chatRefs.get(userId)?.push(ref),
-    })
+    buildFamilyResearchAgent(
+      {
+        logActivity: (a, ac, d) => store.scoped(userId).logActivity(a, ac, d),
+        onReference: (ref) => chatRefs.get(userId)?.push(ref),
+      },
+      () => chatLocations.get(userId)
+    )
   );
   const workshopAgents = makeAgentCache((userId) =>
     buildFamilyWorkshopAgent({ ...shellDeps(userId)!, onReference: (ref) => chatRefs.get(userId)?.push(ref) })
@@ -1109,11 +1120,23 @@ export function buildServer(
     /** Client-generated id so it can poll GET /chat/turns/:turnId for live
      *  tool-call visibility while this request is in flight. */
     turnId: z.string().min(1).max(80).optional(),
+    /** This device's current location, if the client has permission and
+     *  chose to share it — the phone's GPS, or the desktop OS's location
+     *  service. Never stored; read once by get_current_location for this
+     *  turn only. See agents/locationTool.ts. */
+    location: z
+      .object({
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+        accuracyMeters: z.number().positive().optional(),
+        ageSeconds: z.number().nonnegative().optional(),
+      })
+      .optional(),
   });
   app.post("/chat", { bodyLimit: 24 * 1024 * 1024 }, async (req, reply) => {
     const parsed = ChatBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
-    const { message, images = [], documentIds = [], sessionId, turnId } = parsed.data;
+    const { message, images = [], documentIds = [], sessionId, turnId, location } = parsed.data;
 
     let session = sessionId ? req.userStore.getChatSession(sessionId) : undefined;
     if (sessionId && !session) return reply.code(404).send({ error: "No such chat session." });
@@ -1155,6 +1178,7 @@ export function buildServer(
     const recorder = turnId ? startTurn(turnId, req.authUser.id) : undefined;
     try {
       chatRefs.set(req.authUser.id, []);
+      chatLocations.set(req.authUser.id, location);
       addRevealCollector(req.authUser.id, revealCollector);
       addCardCollector(req.authUser.id, cardCollector);
       const history = priorMessages.map((m) => ({ role: m.role, content: m.body }));
@@ -1185,6 +1209,13 @@ export function buildServer(
         "chat.reply",
         storedText === responseText ? responseText : "(a vault lookup — the answer isn't stored)"
       );
+      // Unlike chatRefs (harmless if a stale value lingers — every /chat call
+      // overwrites it before use), a location must never survive past its own
+      // turn: the planner/research-agent instances this closes over are
+      // shared with the family-channel @agent path too, which never sets
+      // this map at all and must never see a leftover location from an
+      // earlier private chat turn.
+      chatLocations.delete(req.authUser.id);
       return {
         reply: responseText,
         references,
@@ -1194,6 +1225,7 @@ export function buildServer(
       };
     } catch (err) {
       chatRefs.delete(req.authUser.id);
+      chatLocations.delete(req.authUser.id);
       removeRevealCollector(req.authUser.id, revealCollector);
       removeCardCollector(req.authUser.id, cardCollector);
       if (turnId) finishTurn(turnId);

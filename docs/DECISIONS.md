@@ -2651,3 +2651,96 @@ the real installed app running on the same ports, and a live test would have
 risked doing to it exactly what this fix exists to recover from.
 
 Files: `desktop/src-tauri/src/main.rs` (`watch_agent_core`, `ShuttingDown`).
+
+## Caller geolocation (`get_current_location`)
+
+The assistant can answer "parks near me" / "what's around here" using
+**whichever device sent that specific message's own location** — the phone's
+GPS on iOS/Android, the laptop's OS location service on desktop — not a
+single "family home" address shared by everyone. Two people in the same
+household asking "near me" from different places get different answers,
+because location is a property of the request, not the account.
+
+**Why a tool, not a request field the planner just reads.** Every other
+per-turn thing the model can see (images, attached documents) rides directly
+in the message content built for that turn. Location doesn't, because
+agent-core has no way to know in advance whether a turn will need it — a
+plain "what's on my calendar" shouldn't pay any cost for a capability it
+never asked for, and more importantly the planner/subagent objects are
+**built once and cached per user** (`makeAgentCache`), reused across many
+turns; baking a specific turn's coordinates into the system prompt or message
+content at agent-construction time would either go stale immediately or
+force rebuilding the agent every single turn, defeating the cache. So
+`get_current_location` is a real tool the model calls only when it decides
+it's relevant, and what it returns is resolved fresh at call time.
+
+**How a fresh value reaches a long-lived cached object**: the exact same
+shape as `chatRefs`/`onReference` already use for "the agent looked this up"
+hints. `server.ts` holds `chatLocations: Map<userId, LocationInfo | undefined>`;
+`POST /chat`'s handler does `chatLocations.set(userId, body.location)` right
+before invoking the (cached, reused) agent, and the `get_current_location`
+tool — bound once, at agent-build time — is a closure that reads
+`chatLocations.get(userId)` fresh on every call. The tool never gets a stale
+value because it never captures one; it captures the *map*.
+
+**Deliberately narrow to avoid a leak across contexts.** The planner and
+research-agent instances a private 1:1 Chat turn uses are the *same* cached
+objects a family-channel `@agent` mention or `/`-command reuses
+(`runForcedAgentTurn`, shared by both routes) — so if `/chat`'s success path
+left `chatLocations` populated after returning, a later family-channel
+message from that same user would silently see their last *private* chat's
+location, without ever having shared one in that context. `/chat` clears its
+own entry immediately after every turn (success *and* error) specifically
+because of this — `chatRefs` doesn't need to (a stale ref list is harmless,
+overwritten before its next read), but a location genuinely must not survive
+past the single turn that supplied it. Family channels never set this map at
+all — the capability is 1:1 Chat only, for now.
+
+**No reverse geocoding.** The tool hands the model raw latitude/longitude and
+tells it to put them straight into a `web_search` query, rather than
+resolving them to a city/place name server-side first. Doing that properly
+would mean a new non-localhost egress point (a geocoding API) behind its own
+enable/disable story, on top of an already-substantial feature — deferred
+until it's clear raw coordinates aren't good enough for real queries.
+
+**Per-client capture, each platform's own native location API** — no shared
+code, same as everything else across these three clients:
+- **Desktop**: plain `navigator.geolocation` in the Tauri webview, not the
+  `@tauri-apps/plugin-geolocation` crate — WKWebView (macOS) and WebView2
+  (Windows) both surface the OS's native permission prompt for it
+  automatically, and on Linux the existing `grant_webview_media_permission`
+  WebKitGTK hook (added for the mic) already auto-allows *any*
+  `WebKitPermissionRequest`, geolocation included, with zero changes needed.
+  Adding the plugin would have meant a new Cargo dependency, capability ACL
+  entries, and a slower CI build for a permission the webview already
+  handles natively. `NSLocationWhenInUseUsageDescription` in
+  `desktop/src-tauri/Info.plist` (merged into the bundle by Tauri, same
+  mechanism the mic's `NSMicrophoneUsageDescription` already uses) is the
+  only new bundle config needed.
+- **iOS**: `CLLocationManager` via a small async wrapper
+  (`App/LocationProvider.swift`), `NSLocationWhenInUseUsageDescription` in
+  `Config/Info.plist`.
+- **Android**: plain `LocationManager` (`ACCESS_COARSE_LOCATION`), not
+  `FusedLocationProviderClient` — this app has no other Google Play Services
+  dependency, and coarse (city-block) accuracy is plenty for "nearby X";
+  pulling in Play Services for this one feature would be a much bigger
+  dependency than the feature warrants, and coarse fails open on a
+  Play-Services-less/sideloaded install where fused location wouldn't work
+  at all. `data/LocationProvider.kt`.
+
+All three: **off by default**, a client-local setting (not a server one —
+it's inherently a property of the device, not the household), a 3-minute
+in-memory cache so every message doesn't re-poll the OS location service,
+and every failure mode (permission denied, no provider, timed out) collapses
+to simply not attaching a location — the turn still sends normally, and
+`get_current_location` degrades to telling the model to ask instead of
+guessing.
+
+Files: `agent-core/src/agents/locationTool.ts`, `agent-core/src/server.ts`
+(`chatLocations`), `agent-core/src/agents/index.ts` (`FamilyAgentDeps.getLocation`,
+bound onto the planner, research-agent, and the `/web` forced-turn agent).
+Desktop: `desktop/src/main.ts` (`getChatLocation`), `desktop/src-tauri/Info.plist`.
+iOS: `ios/FamilyAgent/App/LocationProvider.swift`,
+`AppModel+Chat.swift` (`currentChatLocation`). Android:
+`android/.../data/LocationProvider.kt`, `AppViewModel.kt` (`currentChatLocation`).
+Tests: `agent-core/test/locationTool.test.ts`, `agent-core/test/chatLocation.test.ts`.
