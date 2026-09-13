@@ -3700,3 +3700,41 @@ falling back to `.open`, and two non-matching URLs both correctly returning
 `nil`) since the app itself couldn't be driven. The remaining gap is purely
 "does the widget's on-screen row look and tap right" — worth a real-device or
 a differently-permissioned-Mac check before shipping.
+
+### Follow-up: the row floated in dead space; fixing it broke Android's width
+
+A real-device screenshot showed the row correctly centered but visually
+lost — a lot of blank white card above and below it. `.systemMedium` /
+Android's grid-row height are fixed by the platform (no smaller Home Screen
+size exists to ask for instead), so the fix on both platforms is making the
+row itself bigger, not fighting the frame.
+
+**iOS had headroom to do this freely** (widened field/icon height from 42pt
+to 64pt, logo 30→44pt) — the reference screenshot showed the original size
+fitting with plenty of horizontal margin, confirmed by the CI-matching build
+still passing clean afterward.
+
+**Android did not — bumping to the same 64dp broke it**: the field's text
+wrapped letter-by-letter into a vertical stack. The actual granted width
+(confirmed on-device via `uiautomator dump`'s real pixel bounds, twice — the
+original placement and a fresh drag-and-drop both came out the same) was
+only ~271dp, far narrower than the ~340dp the fixed-cost math assumed;
+`android:targetCellWidth="4"` wasn't being honored by this launcher the way
+`minWidth` was — the granted size tracked the declared *minimum* almost
+exactly. Two changes, not one: `minWidth` raised to 340dp (asks for enough
+room in the first place) *and* Android's row/icon/logo sizing kept smaller
+than iOS's (52dp/36dp vs 64dp/44dp, plus `maxLines = 1` on the field text as
+a defensive backstop against ever wrapping again) — because even at the
+larger declared width, matching iOS's sizing exactly left too little of it
+for the field. The two platforms' constants are deliberately no longer
+identical, with the reasoning kept in a code comment at the Android
+constants themselves so it doesn't read as a copy-paste slip next time
+someone syncs the two files by hand.
+
+Verified on-device end-to-end after the fix: removed the placed widget via
+the launcher's own jiggle-mode "Remove" (a `uiautomator`-driven long-press +
+drag, not a tap — a widget preview only responds to a genuine long-press-drag,
+confirmed earlier when first placing it), re-added a fresh instance from
+`FamilyAgentWidgetReceiver`'s app-drawer shortcut, and confirmed the field
+text now renders in full on one line with the row visibly filling more of
+the card.

@@ -42,43 +42,57 @@ private func chatURL(action: String? = nil) -> URL {
 private let accent = Color(red: 0x00 / 255, green: 0x75 / 255, blue: 0xDE / 255)
 private let fieldBg = Color(white: 0.96)
 
+/// `.systemMedium`'s actual on-device height (~155-170pt) is fixed by the OS
+/// — there's no smaller/custom Home Screen widget size to ask for instead —
+/// so a row sized like an in-app control (as this was originally: a 42pt
+/// field, like the composer's own) just floats as a thin strip in a lot of
+/// dead white space. The fix is to size the row itself to actually fill that
+/// height, not to fight the frame. Kept in sync with Android's
+/// `widget/FamilyAgentWidget.kt` by hand, same as everywhere else in this file.
+private let rowHeight: CGFloat = 64
+private let logoSize: CGFloat = 44
+
 struct FamilyAgentWidgetEntryView: View {
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Image("WidgetLogo")
                 .resizable()
-                .frame(width: 30, height: 30)
-                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .frame(width: logoSize, height: logoSize)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
 
             Link(destination: chatURL()) {
                 HStack {
                     Text("Ask Family Agent…")
+                        .font(.system(size: 17))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 14)
-                .frame(height: 42)
+                .padding(.horizontal, 18)
+                .frame(height: rowHeight)
                 .background(fieldBg)
-                .clipShape(RoundedRectangle(cornerRadius: 21))
+                .clipShape(RoundedRectangle(cornerRadius: rowHeight / 2))
             }
             .buttonStyle(.plain)
 
             Link(destination: chatURL(action: "mic")) {
                 Image(systemName: "mic.fill")
+                    .font(.system(size: 22))
                     .foregroundStyle(accent)
-                    .frame(width: 42, height: 42)
+                    .frame(width: rowHeight, height: rowHeight)
             }
             .buttonStyle(.plain)
 
             Link(destination: chatURL(action: "camera")) {
                 Image(systemName: "camera.fill")
+                    .font(.system(size: 22))
                     .foregroundStyle(accent)
-                    .frame(width: 42, height: 42)
+                    .frame(width: rowHeight, height: rowHeight)
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
+        .frame(maxHeight: .infinity)
         .containerBackground(.white, for: .widget)
     }
 }

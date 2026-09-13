@@ -73,6 +73,26 @@ private val FieldTextColor = ColorProvider(Color(0xFF6B6B6B))
 private val FieldBg = ColorProvider(Color(0xFFF6F5F4))
 private val CardBg = ColorProvider(Color(0xFFFFFFFF))
 
+// The launcher snaps a widget's placed height to a whole grid row, which is
+// taller than this content actually needs at its original (in-app-control)
+// size — a 42dp row just floated as a thin strip in a lot of dead white
+// space. Sized up to actually fill that height instead of fighting the grid.
+//
+// Deliberately a smaller bump than iOS's equivalent constant (64pt): unlike
+// `.systemMedium`'s generous fixed width, this launcher granted a genuinely
+// narrow width for a 1-row widget (confirmed on-device — not just this
+// instance's original placement size, a fresh drag-and-drop from the picker
+// came out the same) — going as wide as iOS's icons here left too little of
+// that width for the field, and its text wrapped letter-by-letter instead of
+// eliding. This value is the largest that still leaves the field comfortably
+// wide enough for the placeholder text at `FieldFontSize`, verified on an
+// actual emulator. Kept in sync with `FamilyAgentWidget.swift` by hand, same
+// as everywhere else in this file — but not required to match exactly, for
+// this reason.
+private val RowHeight = 52.dp
+private val LogoSize = 36.dp
+private val FieldFontSize = 14.sp
+
 @Composable
 private fun WidgetContent() {
     val context = LocalContext.current
@@ -87,20 +107,24 @@ private fun WidgetContent() {
         Image(
             provider = ImageProvider(R.drawable.logo),
             contentDescription = "Family Agent",
-            modifier = GlanceModifier.size(30.dp),
+            modifier = GlanceModifier.size(LogoSize),
         )
         Spacer(GlanceModifier.width(10.dp))
         Box(
             modifier = GlanceModifier
                 .defaultWeight()
-                .height(42.dp)
+                .height(RowHeight)
                 .background(FieldBg)
-                .cornerRadius(21.dp)
+                .cornerRadius(RowHeight / 2)
                 .padding(horizontal = 14.dp)
                 .clickable(actionStartActivity(chatIntent(context, "open"))),
             contentAlignment = Alignment.CenterStart,
         ) {
-            Text("Ask Family Agent…", style = TextStyle(color = FieldTextColor, fontSize = 14.sp))
+            Text(
+                "Ask Family Agent…",
+                style = TextStyle(color = FieldTextColor, fontSize = FieldFontSize),
+                maxLines = 1,
+            )
         }
         Spacer(GlanceModifier.width(6.dp))
         WidgetIconButton(R.drawable.ic_widget_mic, "Voice", chatIntent(context, "mic"))
@@ -113,11 +137,11 @@ private fun WidgetContent() {
 private fun WidgetIconButton(iconRes: Int, description: String, intent: Intent) {
     Box(
         modifier = GlanceModifier
-            .size(42.dp)
-            .cornerRadius(21.dp)
+            .size(RowHeight)
+            .cornerRadius(RowHeight / 2)
             .clickable(actionStartActivity(intent)),
         contentAlignment = Alignment.Center,
     ) {
-        Image(provider = ImageProvider(iconRes), contentDescription = description, modifier = GlanceModifier.size(22.dp))
+        Image(provider = ImageProvider(iconRes), contentDescription = description, modifier = GlanceModifier.size(24.dp))
     }
 }
