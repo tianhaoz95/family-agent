@@ -167,10 +167,17 @@ struct MainShell: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Theme.accentInk)
                 .frame(width: 42, height: 42)
-                .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+                .background {
+                    if #available(iOS 26, *) {
+                        Circle().fill(Color.white.opacity(0.35))
+                    } else {
+                        Circle().fill(.white)
+                    }
+                }
+                .glass(.floating, in: Circle())
+                .overlay(Circle().strokeBorder(Theme.border, lineWidth: 1))
                 .elevation(Theme.E.pop)
-                .contentShape(Rectangle())
+                .contentShape(Circle())
         }
         .buttonStyle(PressScaleStyle(scale: 0.92))
         .padding(.leading, 12)
