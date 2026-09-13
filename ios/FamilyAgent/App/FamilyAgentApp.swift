@@ -23,6 +23,11 @@ struct FamilyAgentApp: App {
                     model.pendingNotificationNav = nav
                     appDelegate.pendingNav = nil
                 }
+                // The home screen widget's Link buttons — see WidgetLaunch.swift.
+                .onOpenURL { url in
+                    guard let action = WidgetLaunch.action(from: url) else { return }
+                    model.pendingWidgetAction = action
+                }
         }
     }
 }

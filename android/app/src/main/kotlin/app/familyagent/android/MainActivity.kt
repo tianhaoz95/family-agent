@@ -137,6 +137,8 @@ class MainActivity : ComponentActivity() {
         // one (app already running) comes through onNewIntent below instead,
         // since the activity is launchMode="singleTop".
         AppForegroundTracker.pendingNav = ReplyNotifications.pendingNavFrom(intent)
+        // Same shape, for a tap on the home screen widget.
+        AppForegroundTracker.pendingWidgetAction = WidgetLaunch.actionFrom(intent)
 
         val settingsStore = SettingsStore(applicationContext)
         val discovery = ServerDiscovery(applicationContext)
@@ -183,6 +185,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         ReplyNotifications.pendingNavFrom(intent)?.let { AppForegroundTracker.pendingNav = it }
+        WidgetLaunch.actionFrom(intent)?.let { AppForegroundTracker.pendingWidgetAction = it }
     }
 
     // Coarser than "is the Chat screen visible" (that's tracked separately,
@@ -221,6 +224,23 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
     val onToolView = currentDestination?.route == TOOL_VIEW_ROUTE
+
+    // A tapped home screen widget button — always jump to Chat; the mic/camera
+    // variants are handed to ChatScreen below as `pendingAction` so it can
+    // auto-trigger that control once the composer is actually on screen
+    // (consumed there, mirroring how `pendingNav` below is consumed here).
+    var chatAutoAction by remember { mutableStateOf<WidgetChatAction?>(null) }
+    LaunchedEffect(AppForegroundTracker.pendingWidgetAction) {
+        AppForegroundTracker.pendingWidgetAction?.let { action ->
+            navController.navigate(Destination.Chat.route) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+            chatAutoAction = action
+            AppForegroundTracker.pendingWidgetAction = null
+        }
+    }
 
     // Freshen the connection reading each time the menu is pulled open — the
     // status pill in the drawer footer is the only place it's surfaced now.
@@ -373,6 +393,8 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onOpenHistory = { navController.navigate(CHAT_SESSIONS_ROUTE) },
                         tools = state.tools,
                         onRefreshTools = viewModel::refreshTools,
+                        pendingAction = chatAutoAction,
+                        onPendingActionConsumed = { chatAutoAction = null },
                     )
                 }
                 composable(CHAT_SESSIONS_ROUTE) {

@@ -121,6 +121,18 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showHistory) { ChatSessionsView { showHistory = false } }
         .sheet(isPresented: $showSlashHelp) { SlashHelpSheet(tools: model.tools) }
+        // The home screen widget's field/camera buttons. `initial: true`
+        // since a cold launch already has `pendingWidgetAction` set by the
+        // time this view first appears — plain `onChange` only fires on a
+        // later change, not the value already present on arrival. The mic
+        // variant is deliberately NOT consumed here — see `mic` below.
+        .onChange(of: model.pendingWidgetAction, initial: true) { _, action in
+            switch action {
+            case .camera: showCamera = true; model.pendingWidgetAction = nil
+            case .open: model.pendingWidgetAction = nil
+            case .mic, nil: break
+            }
+        }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task {
@@ -291,7 +303,16 @@ struct ChatView: View {
                       onDictate: { model.transcribeVoice($0) { t in
                           input = input.isEmpty ? t : "\(input.trimmingCharacters(in: .whitespaces)) \(t)"
                       } },
-                      onVoiceSend: { model.sendChatVoice($0) })
+                      onVoiceSend: { model.sendChatVoice($0) },
+                      // Not consumed in the `.onChange` above: `voiceEnabled`
+                      // (server health, fetched async) starts false, so this
+                      // view may not exist yet on the very first frame after
+                      // a cold widget launch — clearing the token there
+                      // regardless would drop it before HoldToTalkMic ever
+                      // mounts to see it. It consumes its own copy instead,
+                      // once it actually exists.
+                      autoStartToken: model.pendingWidgetAction,
+                      onAutoStartHandled: { model.pendingWidgetAction = nil })
     }
 
     private func send() {

@@ -159,6 +159,13 @@ struct MainShell: View {
             }
             model.pendingNotificationNav = nil
         }
+        // A tapped home screen widget button — always jump to Chat; the
+        // mic/camera variants are consumed by ChatView itself (see
+        // AppModel.pendingWidgetAction's doc comment).
+        .onChange(of: model.pendingWidgetAction) { _, action in
+            guard action != nil else { return }
+            selection = .chat
+        }
     }
 
     // MARK: pieces

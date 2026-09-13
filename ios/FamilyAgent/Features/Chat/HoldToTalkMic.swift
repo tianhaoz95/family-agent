@@ -10,6 +10,17 @@ struct HoldToTalkMic: View {
     let onDictate: (Data) -> Void
     /// push-to-talk: clip is sent immediately
     let onVoiceSend: (Data) -> Void
+    /// `.mic` for one `.task(id:)` firing to start dictation without a tap —
+    /// the home screen widget's mic button (ChatView passes its
+    /// `pendingWidgetAction` straight through). A tap-to-dictate start, not
+    /// push-to-talk: there's no press to hold from outside the app, and a
+    /// reviewable transcript is the safer default than auto-sending a clip
+    /// nobody proofread.
+    var autoStartToken: WidgetChatAction? = nil
+    /// Called once `autoStartToken == .mic` has been acted on, so ChatView
+    /// can clear `pendingWidgetAction` upstream — see that property's doc
+    /// comment for why this composable clears it, not ChatView eagerly.
+    var onAutoStartHandled: () -> Void = {}
 
     @State private var recorder = VoiceRecorder()
     @State private var mode: Mode = .idle
@@ -32,6 +43,15 @@ struct HoldToTalkMic: View {
             .fullScreenCover(isPresented: Binding(get: { mode == .ptt }, set: { _ in })) {
                 VoiceOverlay(recorder: recorder, cancelArmed: cancelArmed)
                     .presentationBackground(.clear)
+            }
+            .task(id: autoStartToken) {
+                guard autoStartToken == .mic, mode == .idle else { return }
+                defer { onAutoStartHandled() }
+                guard enabled, await VoiceRecorder.requestPermission() else { return }
+                do {
+                    try recorder.start()
+                    mode = .dictating
+                } catch {}
             }
     }
 

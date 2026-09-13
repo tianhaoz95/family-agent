@@ -92,5 +92,21 @@
 		<string>Inter-Variable.ttf</string>
 		<string>SourceSerif4-Regular.ttf</string>
 	</array>
+
+	<!-- The home screen widget's Link buttons open familyagent://chat[?action=mic|camera]
+	     — see WidgetLaunch.swift and FamilyAgentWidget/FamilyAgentWidget.swift.
+	     Private scheme (nothing else is expected to open it), so no
+	     LSApplicationQueriesSchemes counterpart is needed. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.familyagent.ios</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>familyagent</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

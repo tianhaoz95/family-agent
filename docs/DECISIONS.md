@@ -3606,3 +3606,97 @@ Routes: `POST /artifacts/:id/comments/:cid/replies`, `GET/POST
 `agent-core/src/agents/threadReply.ts`, `db.ts` (`CommentReplyRecord`,
 `artifact_comment_replies`, `wiki_comments`/`wiki_comment_replies`). Tests:
 `agent-core/test/threadedComments.test.ts`.
+
+## Home screen widget (iOS + Android)
+
+A Claude/Gemini-style "launcher bar" widget: a logo, a tappable field-shaped
+area that opens Chat, and mic/camera buttons that open Chat **and**
+immediately trigger that control. No live data of any kind — this is a
+static shortcut row, not a dashboard (Android: `updatePeriodMillis="0"`; iOS:
+a single `TimelineEntry` with `.never` refresh) — so there's no server call
+and no agent-core involvement at all; both widgets are pure client-side deep
+links into a screen the app already has.
+
+**Neither platform can put a real, typeable text field on a widget.** Both
+Gemini's and Claude's own home-screen widgets have exactly this same
+constraint — the "input field" is a styled tap target, not an editable
+control, on every launcher-bar widget of this shape. Tapping it (or the
+logo) just opens the app to Chat with nothing further; the honest framing
+internally is "this looks like a composer, but it's a shortcut."
+
+**Android — Jetpack Glance** (`androidx.glance:glance-appwidget`), not
+RemoteViews/XML: the app already renders everything else in Compose, and
+Glance is Compose-shaped RemoteViews generation, so `widget/FamilyAgentWidget.kt`
+reads like any other screen. Three independent tap zones (field / mic /
+camera), each its own `GlanceModifier.clickable(actionStartActivity(intent))`
+— an explicit `Intent(context, MainActivity::class.java)` per zone (not
+`actionStartActivity<MainActivity>(actionParameters)`'s reified-generic +
+`ActionParameters` form) so the click-through mechanism is a plain,
+inspectable `Intent.putExtra`, not dependent on how Glance's own action
+plumbing maps parameters onto the launched Intent's extras — confirmed
+working end-to-end on a real emulator (see below). `WidgetChatAction` +
+`WidgetLaunch` (`Notifications.kt`) parse `MainActivity`'s intent the same
+way `ReplyNotifications`/`PendingNotificationNav` already do for a tapped
+system notification.
+
+**iOS — a real `WidgetKit` extension target**, added by hand to the
+hand-authored `project.pbxproj` (Xcode 16 file-system-synchronized groups,
+same shape as the main app — see "Cloning the Android app to native iOS" for
+that convention). `FamilyAgentWidget/FamilyAgentWidget.swift` is a
+`StaticConfiguration` widget; each of the three zones is its own SwiftUI
+`Link(destination:)` — a widget has supported more than one independent tap
+target this way since iOS 16, one `.widgetURL()` no longer being the only
+option. Each `Link` opens `familyagent://chat[?action=mic|camera]`
+(`CFBundleURLTypes` in `Config/Info.plist`); `WidgetLaunch.swift` parses it,
+`FamilyAgentApp`'s `.onOpenURL` sets `AppModel.pendingWidgetAction`, and
+`MainShell` switches to Chat the same way it already does for
+`pendingNotificationNav`. The extension's own `Config/FamilyAgentWidgetExtension-Info.plist`
+sits outside the synchronized group for the same reason the main app's
+`Info.plist` does (see "Native iOS app" above — Xcode both copies *and*
+processes an `Info.plist` living *inside* a synchronized group, which is a
+build error). `PRODUCT_BUNDLE_IDENTIFIER = app.familyagent.ios.widget`; no
+entitlements, no App Group — nothing is shared with the host app beyond the
+one-way URL.
+
+**The mic/camera auto-trigger has to survive a race, on both platforms.**
+`voiceEnabled` (server health, fetched async at launch) starts `false`, so
+the mic control may not exist in the view tree yet on the very first frame
+after a cold widget launch — clearing the pending action immediately
+(matching how the *camera* trigger is consumed, which has no such
+dependency) would silently drop a mic launch before the mic view ever mounts
+to see it. Fixed by **not** consuming the mic variant where the camera one
+is consumed: Android's `HoldToTalkMic` gained `autoStartToken` +
+`onAutoStartHandled` (a `LaunchedEffect(autoStartToken)`, which — like any
+freshly-composed node's effect — fires on mount even for a value that
+"didn't change"); iOS's mirrors it with `.task(id:)` (same fire-on-mount
+semantics). Each consumes and clears the token itself, once it actually
+exists, rather than the parent screen clearing it eagerly. Caught on Android
+by testing an actual cold widget launch on the emulator — the permission
+dialog silently never appeared until this fix.
+
+**Verified on Android**, interactively, end to end, on a real emulator: the
+widget placed via a real drag-and-drop onto the home screen (`adb shell input
+draganddrop`, since a widget preview only responds to a long-press-drag, not
+a tap); a cold tap on the field opened straight to Chat; a cold tap on the
+camera button opened Chat and the system camera together, and a captured
+photo landed as a chat attachment; a cold tap on the mic button opened Chat,
+prompted for the record-audio permission, and began dictation (visible via
+both the in-app stop icon and the OS's green mic-in-use indicator) once
+granted. **iOS is unverified interactively** — this sandbox's Simulator
+window cannot receive synthesized input at all (confirmed two independent
+ways: `CGEventPost` clicks have no effect, and `System Events` UI scripting
+returns error -25204, "not allowed to send keystrokes" — an Accessibility/
+"control this computer" permission this environment's process doesn't hold,
+not something fixable in code). What *is* confirmed: the full app + widget
+extension build together and the extension embeds correctly
+(`FamilyAgent.app/PlugIns/FamilyAgentWidgetExtension.appex` with the right
+`NSExtensionPointIdentifier`); `familyagent://` is registered — proven by
+iOS's own "Open in Family Agent?" system prompt appearing for it, which only
+happens for a scheme actually declared in `CFBundleURLTypes`; the CI-matching
+build (`CODE_SIGNING_ALLOWED=NO`, warning-grep) passes clean; and
+`WidgetLaunch.action(from:)`'s parsing was unit-checked standalone (all six
+cases — bare, `?action=mic`, `?action=camera`, an unknown action value
+falling back to `.open`, and two non-matching URLs both correctly returning
+`nil`) since the app itself couldn't be driven. The remaining gap is purely
+"does the widget's on-screen row look and tap right" — worth a real-device or
+a differently-permissioned-Mac check before shipping.

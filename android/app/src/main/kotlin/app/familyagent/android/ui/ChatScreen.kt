@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import app.familyagent.android.ChatMessage
+import app.familyagent.android.WidgetChatAction
 import app.familyagent.android.data.ChatReference
 import app.familyagent.android.data.Tool
 import app.familyagent.android.ui.theme.AppAccents
@@ -107,6 +108,14 @@ fun ChatScreen(
     onOpenHistory: () -> Unit = {},
     tools: List<Tool> = emptyList(),
     onRefreshTools: () -> Unit = {},
+    // Set for one recomposition when the home screen widget's mic or camera
+    // button launched the app — MainActivity navigates here and hands this
+    // down rather than acting on it itself, since the composer state (the
+    // camera launcher, the mic's recorder) lives here. Consumed immediately
+    // (onPendingActionConsumed) so it doesn't refire on an unrelated
+    // recomposition or a configuration change.
+    pendingAction: WidgetChatAction? = null,
+    onPendingActionConsumed: () -> Unit = {},
 ) {
     // Chat is the app's start destination, so it never goes through
     // MainActivity's navigateTo — fetch the tool list ourselves (same
@@ -141,6 +150,27 @@ fun ChatScreen(
         val uri = pendingCameraUri
         if (ok && uri != null) addUris(listOf(uri))
         pendingCameraUri = null
+    }
+
+    // The widget's camera button: same "Take photo" path as the attach menu
+    // below, just triggered on arrival instead of a tap. OPEN (the plain
+    // "field" tap) needs no action here — it's already handled by just being
+    // on this screen. MIC is deliberately NOT consumed here: `voiceEnabled`
+    // (server health, fetched async) starts false, so `mic()` below may not
+    // be composed yet on the very first frame after a cold launch — clearing
+    // pendingAction here regardless would drop the token before HoldToTalkMic
+    // ever mounts to see it. HoldToTalkMic consumes it itself instead, once
+    // it actually exists (its LaunchedEffect runs on mount even for a value
+    // that "didn't change", since it's new to that composable).
+    LaunchedEffect(pendingAction) {
+        if (pendingAction == WidgetChatAction.CAMERA) {
+            val uri = createChatPhotoUri(context)
+            pendingCameraUri = uri
+            takePhoto.launch(uri)
+            onPendingActionConsumed()
+        } else if (pendingAction == WidgetChatAction.OPEN) {
+            onPendingActionConsumed()
+        }
     }
 
     LaunchedEffect(messages.size, sending) {
@@ -310,6 +340,8 @@ fun ChatScreen(
                     }
                 },
                 onVoiceSend = onVoiceSend,
+                autoStartToken = pendingAction.takeIf { it == WidgetChatAction.MIC },
+                onAutoStartHandled = onPendingActionConsumed,
             )
         }
         // Two rows, Claude-app style: the text field on top, attach/mic/send

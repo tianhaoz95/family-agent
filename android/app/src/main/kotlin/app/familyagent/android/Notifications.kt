@@ -24,6 +24,27 @@ sealed interface PendingNotificationNav {
     data class Channel(val channelId: String) : PendingNotificationNav
 }
 
+/** What the home screen widget was tapped to do — always lands on Chat, and
+ *  the mic/camera variants additionally auto-trigger that control once the
+ *  screen is showing (see ChatScreen's `pendingAction`). Mirrors
+ *  [PendingNotificationNav]'s "read once in MainActivity, act on it in
+ *  Compose" shape, but as its own type since a widget tap always targets
+ *  Chat specifically, never a session id or channel. */
+enum class WidgetChatAction { OPEN, MIC, CAMERA }
+
+/** Parses a launch/new intent from the home screen widget (`widget/Widget.kt`
+ *  builds these via Glance's `actionStartActivity`), if that's what it was. */
+object WidgetLaunch {
+    const val EXTRA_ACTION = "app.familyagent.android.WIDGET_ACTION"
+
+    fun actionFrom(intent: Intent?): WidgetChatAction? = when (intent?.getStringExtra(EXTRA_ACTION)) {
+        "open" -> WidgetChatAction.OPEN
+        "mic" -> WidgetChatAction.MIC
+        "camera" -> WidgetChatAction.CAMERA
+        else -> null
+    }
+}
+
 /**
  * Where the user currently is, read (not observed as a StateFlow) by the
  * view model at the moment it decides whether a "reply is ready"
@@ -43,6 +64,7 @@ object AppForegroundTracker {
     @Volatile var isChatScreenActive: Boolean = false
     @Volatile var activeConversationChannelId: String? = null
     var pendingNav: PendingNotificationNav? by mutableStateOf<PendingNotificationNav?>(null)
+    var pendingWidgetAction: WidgetChatAction? by mutableStateOf<WidgetChatAction?>(null)
 }
 
 /** Posts (and helps navigate from) the "assistant reply is ready" system

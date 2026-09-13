@@ -170,6 +170,13 @@ final class AppModel {
     /// A tapped notification's target, relayed from AppDelegate by
     /// FamilyAgentApp; MainShell consumes and clears it.
     var pendingNotificationNav: PendingNotificationNav?
+    /// A tapped home screen widget button, relayed from FamilyAgentApp's
+    /// `onOpenURL`. MainShell switches to Chat on any value; ChatView itself
+    /// clears it (immediately for `.open`/`.camera`, or via HoldToTalkMic's
+    /// `onAutoStartHandled` for `.mic` — that control may not exist yet on
+    /// the very first frame after a cold launch, since `voiceEnabled` is
+    /// server health fetched async and starts false).
+    var pendingWidgetAction: WidgetChatAction?
     /// Signature (createdAt) of the last resolved agent reply already
     /// notified about, per channel — see `notifyOfResolvedAgentReplies`.
     var lastNotifiedAgentReply: [String: String] = [:]

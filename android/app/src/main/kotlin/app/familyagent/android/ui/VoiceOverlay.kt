@@ -70,6 +70,18 @@ fun HoldToTalkMic(
     onDictate: (ByteArray) -> Unit,
     onVoiceSend: (ByteArray) -> Unit,
     modifier: Modifier = Modifier,
+    // Non-null for one recomposition to start dictation without a tap — the
+    // home screen widget's mic button (ChatScreen passes its `pendingAction`
+    // through here). A tap-to-dictate start, not push-to-talk: there's no
+    // press to hold from outside the app, and a reviewable transcript is the
+    // safer default than auto-sending a clip nobody proofread.
+    autoStartToken: Any? = null,
+    // Called once autoStartToken has been acted on, so ChatScreen can clear
+    // it upstream. Deliberately NOT cleared by ChatScreen itself right after
+    // a widget launch — this composable may not exist yet on that first
+    // frame (voiceEnabled is server health, fetched async and false until
+    // then), so the token has to survive until HoldToTalkMic actually mounts.
+    onAutoStartHandled: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -127,6 +139,13 @@ fun HoldToTalkMic(
             } else {
                 recorder.cancel()
             }
+        }
+    }
+
+    LaunchedEffect(autoStartToken) {
+        if (autoStartToken != null) {
+            if (enabled) startDictation()
+            onAutoStartHandled()
         }
     }
 

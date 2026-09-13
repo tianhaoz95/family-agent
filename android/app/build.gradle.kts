@@ -58,6 +58,10 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.0")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
+    // Home screen widget (Chat launcher): Glance renders Compose-ish UI into
+    // RemoteViews under the hood, so no XML layouts are needed.
+    implementation("androidx.glance:glance-appwidget:1.1.1")
+
     // Renders the planner model's Markdown replies in the chat (pure Compose).
     implementation("com.mikepenz:multiplatform-markdown-renderer-android:0.27.0")
     implementation("com.mikepenz:multiplatform-markdown-renderer-m3-android:0.27.0")
