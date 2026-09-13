@@ -335,6 +335,12 @@ export interface ChannelRecord {
 /** A channel plus its member list — returned by getChannelForUser / create*. */
 export interface ChannelDetail extends ChannelRecord {
   members: ChannelMemberInfo[];
+  /** Display title: the group name, or the other member(s) for a DM — same
+   *  as ChannelSummary's. Every client's `Channel` model requires this key
+   *  (a real client-side crash on iOS, decoded as an empty string on
+   *  Android — either way a bug), so every response shape that returns a
+   *  channel must include it, not just the list endpoint. */
+  title: string;
 }
 
 /** A row in the channel list: channel + a preview + this user's unread count. */
@@ -1241,7 +1247,8 @@ export class Store {
     if (!this.isChannelMember(channelId, userId)) return undefined;
     const channel = this.channelRow(channelId);
     if (!channel) return undefined;
-    return { ...channel, members: this.channelMemberInfo(channelId) };
+    const members = this.channelMemberInfo(channelId);
+    return { ...channel, members, title: this.channelTitle(channel, members, userId) };
   }
 
   /** DM title = the other member's name; group title = its name (or a member join). */

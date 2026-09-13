@@ -1273,6 +1273,41 @@ describe("HTTP API", () => {
     expect((await authInject(app, gran.token)({ method: "GET", url: "/channels" })).json().channels).toEqual([]);
   });
 
+  it("every channel response shape includes 'title' — not just GET /channels' list", async () => {
+    // GET /channels (the list) computes title via a different code path than
+    // POST /channels / GET /channels/:id / POST /channels/:id/members — a
+    // real regression left the latter three returning a bare ChannelDetail
+    // with no title key at all, which every client's Channel model requires
+    // (a hard decode crash on iOS, silently empty on Android).
+    const kid = seedUser(store, { username: "kid", role: "member" });
+    const gran = seedUser(store, { username: "gran", role: "member" });
+
+    const dmCreated = await inject({
+      method: "POST",
+      url: "/channels",
+      payload: { kind: "dm", memberIds: [kid.user.id] },
+    });
+    expect(dmCreated.json().channel.title).toBe(kid.user.displayName);
+
+    const groupCreated = await inject({
+      method: "POST",
+      url: "/channels",
+      payload: { kind: "group", name: "Household", memberIds: [kid.user.id] },
+    });
+    const channelId = groupCreated.json().channel.id;
+    expect(groupCreated.json().channel.title).toBe("Household");
+
+    const fetched = await inject({ method: "GET", url: `/channels/${channelId}` });
+    expect(fetched.json().channel.title).toBe("Household");
+
+    const withMember = await inject({
+      method: "POST",
+      url: `/channels/${channelId}/members`,
+      payload: { memberIds: [gran.user.id] },
+    });
+    expect(withMember.json().channel.title).toBe("Household");
+  });
+
   it("a chat message can carry image attachments (data URIs), echoed back on read", async () => {
     const kid = seedUser(store, { username: "kid", role: "member" });
     const created = await inject({

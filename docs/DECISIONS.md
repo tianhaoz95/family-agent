@@ -3192,3 +3192,44 @@ of an indefinite stall.
 Files: `ios/FamilyAgent/App/AppModel+Data.swift`
 (`pollDesktopUpdateStatus`), `android/.../AppViewModel.kt`
 (`pollDesktopUpdateStatus`).
+
+## Starting a new conversation crashed the screen on iOS (missing `title`)
+
+Reported as: tapping "New conversation" on iOS threw
+`DecodingError.keyNotFound: Key 'title' ... Path: channel` right on the
+Messages screen.
+
+`GET /channels` (the list) and every other channel-returning route
+(`POST /channels`, `GET /channels/:id`, `POST /channels/:id/members`) return
+two *different* shapes from `db.ts` — `ChannelSummary` (computed by
+`listChannelsForUser`, includes a `title` built by the private
+`channelTitle()` helper) and `ChannelDetail` (returned by
+`getChannelForUser`, `findOrCreateDm`, `createGroupChannel`,
+`addChannelMembers`). Only the first one ever called `channelTitle()` —
+`ChannelDetail` was `{ ...channel, members }` with no `title` key at all.
+Every client's `Channel` model treats `title` as required-on-the-wire (a
+Kotlin/Swift default value only fills in a *missing key* for
+`kotlinx.serialization`, not for Swift's synthesized `Codable` — a
+`var title: String = ""` still throws `keyNotFound` if the JSON omits the
+key entirely). That mismatch meant it always worked for the *list* screen
+and always failed the moment you opened a channel a different way: creating
+one (a brand-new DM or group), fetching a single one by id, or adding a
+member to a group.
+
+Android never crashed on the same bug — kotlinx.serialization silently
+filled in `""` for the missing key — which is why this had been sitting
+undetected: a New conversation on Android just showed a blank/wrong title
+rather than an obvious error, so the underlying gap in `ChannelDetail` never
+surfaced as a crash there. Neither client's own code needed to change once
+the server response itself was fixed.
+
+Fixed by adding `title` to `ChannelDetail` and computing it in
+`getChannelForUser()` the exact same way `listChannelsForUser` already does
+— every other constructor of a `ChannelDetail` (`findOrCreateDm`,
+`createGroupChannel`, `addChannelMembers`) all end by calling
+`getChannelForUser()`, so one change closes all four broken response sites
+at once. Regression test asserts `title` on all four.
+
+Files: `agent-core/src/db.ts` (`ChannelDetail`, `getChannelForUser`). Tests:
+`agent-core/test/server.routes.test.ts` ("every channel response shape
+includes 'title'").
