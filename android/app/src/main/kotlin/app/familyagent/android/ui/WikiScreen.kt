@@ -10,6 +10,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Comment
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.MenuBook
@@ -24,6 +25,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.data.WikiPage
 import app.familyagent.android.ui.theme.AppAccents
+import kotlinx.coroutines.launch
 
 /**
  * The family wiki's page list — every page is shared, no private/shared
@@ -144,11 +146,13 @@ fun WikiScreen(
 fun WikiPageScreen(
     pageId: String,
     load: suspend (String) -> WikiPage?,
+    vm: app.familyagent.android.AppViewModel,
     onSave: (id: String, title: String, body: String, onDone: (WikiPage?) -> Unit) -> Unit,
     onRevert: (id: String, onDone: (WikiPage?) -> Unit) -> Unit,
     onDelete: (String) -> Unit,
     onClose: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     var title by remember { mutableStateOf("") }
     val richController = remember(pageId) { RichTextController("") }
     var canUndo by remember { mutableStateOf(false) }
@@ -156,6 +160,9 @@ fun WikiPageScreen(
     var menuOpen by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
+    var comments by remember(pageId) { mutableStateOf<List<app.familyagent.android.data.WikiComment>>(emptyList()) }
+    var showComments by remember { mutableStateOf(false) }
+    var pendingQuote by remember { mutableStateOf<Triple<String, String, String>?>(null) }
 
     LaunchedEffect(pageId) {
         if (loaded) return@LaunchedEffect
@@ -163,6 +170,8 @@ fun WikiPageScreen(
         load(pageId)?.let { page ->
             title = page.title; richController.setMarkdown(page.body); canUndo = page.prevBody != null
         }
+        vm.ensureFamilyMembersLoaded()
+        comments = vm.wikiComments(pageId)
     }
 
     BackHandler { onClose() }
@@ -184,6 +193,18 @@ fun WikiPageScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    IconButton(onClick = {
+                        // A `null` selection means "comment on the whole
+                        // page" — represented as an empty-quote anchor so
+                        // the composer opens immediately either way (unlike
+                        // artifacts, which need a separate "no selection"
+                        // fallback button since a comment there is always
+                        // opened from an in-page selection first).
+                        pendingQuote = richController.currentSelectionQuote() ?: Triple("", "", "")
+                        showComments = true
+                    }) {
+                        Icon(Icons.AutoMirrored.Rounded.Comment, contentDescription = "Comments")
+                    }
                     Box {
                         IconButton(onClick = { menuOpen = true }) {
                             Icon(Icons.Rounded.MoreVert, contentDescription = "More")
@@ -268,5 +289,99 @@ fun WikiPageScreen(
             },
             dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") } },
         )
+    }
+
+    if (showComments) {
+        WikiCommentsSheet(
+            comments = comments,
+            pendingQuote = pendingQuote,
+            onDismiss = { showComments = false; pendingQuote = null },
+            onAdd = { body ->
+                val pq = pendingQuote
+                scope.launch {
+                    val req = app.familyagent.android.data.NewWikiCommentRequest(
+                        body, pq?.first?.ifEmpty { null }, pq?.second?.ifEmpty { null }, pq?.third?.ifEmpty { null },
+                    )
+                    vm.addWikiComment(pageId, req)?.let { comments = comments + it; pendingQuote = null }
+                }
+            },
+            onDelete = { cid -> scope.launch { if (vm.deleteWikiComment(pageId, cid)) comments = comments.filterNot { it.id == cid } } },
+            onResolve = { cid -> scope.launch { vm.resolveWikiComment(pageId, cid)?.let { r -> comments = comments.map { if (it.id == cid) r else it } } } },
+            onReopen = { cid -> scope.launch { vm.reopenWikiComment(pageId, cid)?.let { r -> comments = comments.map { if (it.id == cid) r else it } } } },
+            onReply = { cid, body ->
+                scope.launch {
+                    vm.replyToWikiComment(pageId, cid, body)?.let { r ->
+                        comments = comments.map { if (it.id == cid) r.comment else it }
+                        richController.setMarkdown(r.page.body)
+                        canUndo = r.page.prevBody != null
+                    }
+                }
+            },
+            nameForUserId = { id -> vm.nameForUserId(id) },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WikiCommentsSheet(
+    comments: List<app.familyagent.android.data.WikiComment>,
+    pendingQuote: Triple<String, String, String>?,
+    onDismiss: () -> Unit,
+    onAdd: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onResolve: (String) -> Unit,
+    onReopen: (String) -> Unit,
+    onReply: (String, String) -> Unit,
+    nameForUserId: (String) -> String,
+) {
+    var draft by remember(pendingQuote) { mutableStateOf("") }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 24.dp)
+                .heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Comments", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+
+            if (pendingQuote != null) {
+                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.medium) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (pendingQuote.first.isNotEmpty()) {
+                            Text("“${pendingQuote.first.take(140)}”", style = MaterialTheme.typography.bodySmall, color = AppAccents.textSecondary)
+                        }
+                        OutlinedTextField(
+                            value = draft, onValueChange = { draft = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text(if (pendingQuote.first.isEmpty()) "Comment on this page…" else "What should change here? (or a question)") },
+                            minLines = 2,
+                        )
+                        Button(onClick = { if (draft.isNotBlank()) { onAdd(draft); draft = "" } }, enabled = draft.isNotBlank(), modifier = Modifier.align(Alignment.End)) {
+                            Text("Comment")
+                        }
+                    }
+                }
+            }
+
+            if (comments.isEmpty()) {
+                Text(
+                    "Select text in the page, then tap the comment button — or comment on the whole page.",
+                    style = MaterialTheme.typography.bodyMedium, color = AppAccents.textSecondary,
+                )
+            }
+            comments.forEach { c ->
+                CommentThreadCard(
+                    quote = c.quote,
+                    commentBody = c.body,
+                    authorLabel = c.userName,
+                    replies = c.replies,
+                    status = c.status,
+                    onReply = { body -> onReply(c.id, body) },
+                    onResolve = { onResolve(c.id) },
+                    onReopen = { onReopen(c.id) },
+                    onDelete = { onDelete(c.id) },
+                )
+            }
+        }
     }
 }

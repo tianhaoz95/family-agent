@@ -3524,3 +3524,85 @@ app is deliberately light-themed everywhere else), iOS (native
 photo's data URI through a real file under `cache/gallery/` (see
 `res/xml/file_paths.xml`) and a `FileProvider` content URI, the same
 mechanism `createChatPhotoUri` already used for camera capture.
+
+## Threaded comments (artifacts and the wiki, replacing one-shot replies)
+
+Both comment surfaces used to allow exactly one AI response per comment —
+`resolveArtifactComments` set a terminal `resolution` field and there was no
+way to keep talking in the same thread. Fixed by giving every comment a real
+reply list instead, and reusing the same shape for the brand-new wiki
+highlight-and-comment feature rather than inventing two similar-but-different
+systems: "the artifact comment thread and the VT [wiki] comment thread should
+work fairly similarly" was the explicit ask, and the two now share almost
+everything but the anchoring target.
+
+**A comment is one anchored root (unchanged: `quote`/`prefix`/`suffix` +
+`body`) plus an ordered `CommentReplyRecord[]`** — `id, commentId, author,
+authorName, body, createdAt`, where `author` is a real user id or the literal
+string `"agent"`. `status`/`resolution`/`resolved_by` on the parent row become
+a pure human "mark this done" flag; the reply list is the actual transcript of
+the discussion, not `resolution` (kept only for backward-compat display of
+comments resolved before this change). Cascade delete follows the same chain
+everywhere it already existed: deleting a comment/page/artifact deletes its
+replies first.
+
+**`@agent`/`@ai` in a reply body re-triggers the assistant, indefinitely, in
+the same thread** — not just once per comment. Detected with the same
+`mentionsAgent()` regex `agents/index.ts` already used for family-channel
+mentions, wired into a new shared, off-planner function,
+`agents/threadReply.ts`'s `runThreadAgentTurn()` (same shape as
+`extraction.ts` / `artifacts/resolve.ts`: a closure-bound `edit_content` tool,
+one model call, no planner, no delegation). It's handed the **full current
+content** (the artifact's `html` or the wiki page's Markdown `body`, capped),
+the anchored quote, the **entire prior reply history** of the thread, and the
+new message; it replies conversationally and may call `edit_content` once to
+revise the content. A failed/unreachable model (caught around
+`bound.invoke()`) degrades gracefully: the human's literal `@agent ...`
+message is still saved, no phantom agent reply is added, and no error
+surfaces — verified this way in dev, since Ollama isn't always running.
+
+**Wiki comments live on the base `Store`, not `ScopedStore`** (`wiki_comments`
+/ `wiki_comment_replies`), matching `wiki_pages`' own placement — no ownership
+check on who can comment, reply, resolve, or delete, consistent with "every
+wiki page is shared." Artifact comments stay on `ScopedStore`, scoped through
+the owning artifact, unchanged from before.
+
+**One route shape reused twice.** `POST /artifacts/:id/comments/:cid/replies`
+and `POST /wiki/:id/comments/:cid/replies` both: save the human reply, check
+`mentionsAgent`, call `runThreadAgentTurn` if so, apply `editedContent` via the
+existing `updateArtifactHtml` / `updateWikiPage` path when it validates, append
+an `"agent"`/`"Assistant"` reply, and return **both** halves that changed —
+`{ comment, artifact }` / `{ comment, page }` — so a client can re-render the
+thread and reload the content view (in case the reply edited it) from one
+response.
+
+**One shared UI component per platform, not parallel reimplementations** — the
+actual mechanism behind "should work fairly similarly": desktop's
+`renderCommentThreadCard()` (`main.ts`), iOS's `CommentThreadCard`
+(`Features/Shared/CommentThread.swift`), and Android's `CommentThreadCard`
+(`ui/CommentThread.kt`) are each used by *both* the artifact comments
+panel/sheet and the new wiki comments panel/sheet on that platform. Each
+renders the quote, the reply list (an agent reply visually distinguished),
+Resolve/Reopen + Delete, and a reply composer wired to Enter/Send.
+
+**A `nameForUserId`/`nameForSender` helper resolves a reply's raw author id to
+a display name** ("You" / "Assistant" / a family member's name) via a lazily
+loaded family-member list — added on iOS (`AppModel.nameForUserId` +
+`ensureFamilyMembersLoaded()`) and Android (`AppViewModel` equivalents)
+mirroring desktop's pre-existing `nameForSender()`.
+
+**A found-and-fixed bug along the way**: `SealedFullWebView`'s `updateUIView`
+on iOS was a deliberate no-op (a sealed artifact loads once via
+`loadHTMLString`), which meant an `@agent`-driven edit — or even the
+pre-existing `revert()` — silently didn't refresh the visible page until the
+screen was closed and reopened. Fixed with `.id(artifact.revision)`, forcing
+SwiftUI to treat the view as new whenever the content actually changes.
+Android's equivalent `AndroidView.update` block already guarded on
+`web.tag != a.revision`, so it needed no fix.
+
+Routes: `POST /artifacts/:id/comments/:cid/replies`, `GET/POST
+/wiki/:id/comments`, `DELETE /wiki/:id/comments/:cid`, `POST
+/wiki/:id/comments/:cid/{resolve,reopen,replies}`. Files:
+`agent-core/src/agents/threadReply.ts`, `db.ts` (`CommentReplyRecord`,
+`artifact_comment_replies`, `wiki_comments`/`wiki_comment_replies`). Tests:
+`agent-core/test/threadedComments.test.ts`.

@@ -273,6 +273,16 @@ final class AppModel {
     var isAdmin: Bool { currentUser?.role == "admin" }
     var totalUnread: Int { channels.reduce(0) { $0 + $1.unreadCount } }
 
+    /// A user id from a comment/channel record -> a name worth showing.
+    /// Mirrors desktop's `nameForSender` — used by artifact/wiki comment
+    /// threads, which (unlike a wiki page's own createdBy/updatedBy) carry
+    /// only a raw id, not a server-resolved display name.
+    func nameForUserId(_ id: String) -> String {
+        if id == "agent" { return "Assistant" }
+        if id == currentUser?.id { return "You" }
+        return familyMembers.first(where: { $0.id == id })?.displayName ?? "Someone"
+    }
+
     // MARK: - Session
 
     func restoreSession() async {

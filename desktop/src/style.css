@@ -4408,6 +4408,44 @@ input[type="file"]::file-selector-button:hover {
   display: flex;
   gap: 6px;
 }
+/* ---- threaded comment replies (artifact + wiki panels share this) ---- */
+.comment-thread-replies {
+  margin: 6px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.comment-reply {
+  margin: 0;
+  font-size: 0.81rem;
+  color: var(--text-body);
+}
+.comment-reply.is-agent strong {
+  color: var(--accent);
+}
+.comment-reply-composer {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.comment-reply-composer input {
+  flex: 1;
+  font: inherit;
+  font-size: 0.82rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 6px 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+/* The wiki comments FAB/panel reuse the artifact viewer's classes; unlike
+   the artifact viewer (position: relative ancestor) the wiki editor has no
+   such wrapper, so this one is fixed to the window instead of the pane. */
+#wiki-comments-fab {
+  position: fixed;
+}
 /* ---- tool improve / revert ---- */
 .tool-improve-form {
   display: flex;

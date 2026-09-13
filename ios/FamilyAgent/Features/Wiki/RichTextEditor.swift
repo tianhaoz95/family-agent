@@ -88,6 +88,22 @@ final class RichTextController {
         storage.endEditing()
         notifyChanged()
     }
+
+    /// The current selection's text, plus a little surrounding context to
+    /// disambiguate a repeated phrase — the same anchor shape a comment
+    /// thread uses on the artifact viewer. `nil` selection (just a caret,
+    /// or none) means "comment on the whole page" to the caller.
+    func currentSelectionQuote() -> (quote: String, prefix: String, suffix: String)? {
+        guard let tv = textView, tv.selectedRange.length > 0 else { return nil }
+        let ns = tv.text as NSString
+        let range = tv.selectedRange
+        let quote = ns.substring(with: range)
+        let prefixStart = max(0, range.location - 48)
+        let prefix = ns.substring(with: NSRange(location: prefixStart, length: range.location - prefixStart))
+        let suffixEnd = min(ns.length, range.location + range.length + 48)
+        let suffix = ns.substring(with: NSRange(location: range.location + range.length, length: suffixEnd - (range.location + range.length)))
+        return (quote, prefix, suffix)
+    }
 }
 
 /// A `UITextView` bound to an `NSAttributedString`, formatted by

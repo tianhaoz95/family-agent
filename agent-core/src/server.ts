@@ -87,8 +87,9 @@ import { persistSettings } from "./settingsFile.js";
 import { getDesktopUpdateStatus, requestDesktopUpdate, reportDesktopUpdateStatus } from "./desktopUpdate.js";
 import { verifyPassword, bearerToken } from "./auth.js";
 import { wrapCard, type CardRecord, type RenderedCard } from "./cards/wrap.js";
-import { wrapArtifact, toAnchor } from "./artifacts/wrap.js";
+import { wrapArtifact, toAnchor, validateArtifactFragment } from "./artifacts/wrap.js";
 import { resolveArtifactComments } from "./artifacts/resolve.js";
+import { runThreadAgentTurn } from "./agents/threadReply.js";
 import type { ReferenceHint } from "./agents/references.js";
 import { VaultKeyring } from "./vault/keyring.js";
 import {
@@ -2079,6 +2080,100 @@ export function buildServer(
     return { deleted: true };
   });
 
+  // ---- wiki page comments (highlight + discuss) ----
+  // Same shape as artifact comments — a thread anchored to a quote, real
+  // replies rather than a single terminal resolution, @agent repeatable in
+  // the same discussion. Fully shared like the pages themselves: no
+  // ownership check on who can comment/reply/resolve. See
+  // docs/DECISIONS.md → "Threaded comments".
+  const withCommentUserName = <T extends { userId: string }>(c: T) => ({
+    ...c,
+    userName: store.getUser(c.userId)?.displayName ?? "Someone",
+  });
+
+  app.get("/wiki/:id/comments", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!store.getWikiPage(id)) return reply.code(404).send({ error: "page not found" });
+    return { comments: store.listWikiComments(id).map(withCommentUserName) };
+  });
+
+  app.post("/wiki/:id/comments", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!store.getWikiPage(id)) return reply.code(404).send({ error: "page not found" });
+    const parsed = z
+      .object({
+        body: z.string().trim().min(1).max(2000),
+        quote: z.string().max(1000).optional(),
+        prefix: z.string().max(80).optional(),
+        suffix: z.string().max(80).optional(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const c = store.addWikiComment({ pageId: id, userId: req.authUser.id, ...parsed.data });
+    if (!c) return reply.code(404).send({ error: "page not found" });
+    return { comment: withCommentUserName(c) };
+  });
+
+  app.delete("/wiki/:id/comments/:cid", async (req, reply) => {
+    const { id, cid } = req.params as { id: string; cid: string };
+    if (!store.deleteWikiComment(id, cid)) return reply.code(404).send({ error: "comment not found" });
+    return { deleted: true };
+  });
+
+  app.post("/wiki/:id/comments/:cid/resolve", async (req, reply) => {
+    const { id, cid } = req.params as { id: string; cid: string };
+    const c = store.resolveWikiComment(id, cid);
+    if (!c) return reply.code(404).send({ error: "comment not found" });
+    return { comment: withCommentUserName(c) };
+  });
+
+  app.post("/wiki/:id/comments/:cid/reopen", async (req, reply) => {
+    const { id, cid } = req.params as { id: string; cid: string };
+    const c = store.reopenWikiComment(id, cid);
+    if (!c) return reply.code(404).send({ error: "comment not found" });
+    return { comment: withCommentUserName(c) };
+  });
+
+  // Reply into a thread — a family member, or (if the reply mentions
+  // @agent) the assistant right after, with the page's current body, the
+  // anchored quote, and the whole discussion so far as context. Repeatable
+  // in the same thread, unlike the old single-resolution shape.
+  app.post("/wiki/:id/comments/:cid/replies", { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) => {
+    const { id, cid } = req.params as { id: string; cid: string };
+    const page = store.getWikiPage(id);
+    if (!page) return reply.code(404).send({ error: "page not found" });
+    const comment = store.getWikiComment(id, cid);
+    if (!comment) return reply.code(404).send({ error: "comment not found" });
+    const parsed = z.object({ body: z.string().trim().min(1).max(4000) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+
+    const human = store.addWikiCommentReply(id, cid, req.authUser.id, req.authUser.displayName, parsed.data.body);
+    if (!human) return reply.code(404).send({ error: "comment not found" });
+
+    if (mentionsAgent(parsed.data.body)) {
+      const history = [
+        { author: store.getUser(comment.userId)?.displayName ?? "Someone", body: comment.body },
+        ...comment.replies.map((r) => ({ author: r.authorName, body: r.body })),
+        { author: req.authUser.displayName, body: parsed.data.body },
+      ];
+      const result = await runThreadAgentTurn(extractionModel, {
+        kind: "wiki page",
+        title: page.title,
+        content: page.body,
+        maxContentChars: 40_000,
+        quote: comment.quote,
+        history,
+        message: parsed.data.body,
+      });
+      if (!("error" in result)) {
+        if (result.editedContent) store.updateWikiPage(id, { body: result.editedContent }, req.authUser.id);
+        store.addWikiCommentReply(id, cid, "agent", "Assistant", result.reply);
+      }
+    }
+    const updated = store.getWikiComment(id, cid)!;
+    return { comment: withCommentUserName(updated), page: withWikiNames(store.getWikiPage(id)!) };
+  });
+
   // ---- gallery ----
   // "private" (this user's own) vs "shared" (the family gallery) — same
   // split, and the same request shape (image as a data: URI in the JSON
@@ -2698,6 +2793,51 @@ export function buildServer(
     const { id, cid } = req.params as { id: string; cid: string };
     if (!req.userStore.deleteArtifactComment(id, cid)) return reply.code(404).send({ error: "comment not found" });
     return { deleted: true };
+  });
+
+  // Reply into a comment's thread — a family member, or (if the reply
+  // mentions @agent) the assistant right after. Repeatable: @agent can be
+  // invoked again and again in the same thread, each time with the full
+  // artifact + the whole discussion so far as context. See
+  // docs/DECISIONS.md → "Threaded comments".
+  app.post("/artifacts/:id/comments/:cid/replies", { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) => {
+    if (artifactsGate(reply)) return;
+    const { id, cid } = req.params as { id: string; cid: string };
+    const artifact = req.userStore.getArtifact(id);
+    if (!artifact) return reply.code(404).send({ error: "artifact not found" });
+    const comment = req.userStore.getArtifactComment(id, cid);
+    if (!comment) return reply.code(404).send({ error: "comment not found" });
+    const parsed = z.object({ body: z.string().trim().min(1).max(4000) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+
+    const human = req.userStore.addArtifactCommentReply(id, cid, req.authUser.id, req.authUser.displayName, parsed.data.body);
+    if (!human) return reply.code(404).send({ error: "comment not found" });
+
+    if (mentionsAgent(parsed.data.body)) {
+      const history = [
+        { author: comment.userId === req.authUser.id ? req.authUser.displayName : (store.getUser(comment.userId)?.displayName ?? "Someone"), body: comment.body },
+        ...comment.replies.map((r) => ({ author: r.authorName, body: r.body })),
+        { author: req.authUser.displayName, body: parsed.data.body },
+      ];
+      const result = await runThreadAgentTurn(extractionModel, {
+        kind: "artifact",
+        title: artifact.title,
+        content: artifact.html,
+        maxContentChars: 40_000,
+        quote: comment.quote,
+        history,
+        message: parsed.data.body,
+      });
+      if (!("error" in result)) {
+        if (result.editedContent && validateArtifactFragment(result.editedContent).ok) {
+          req.userStore.updateArtifactHtml(id, result.editedContent);
+        }
+        req.userStore.addArtifactCommentReply(id, cid, "agent", "Assistant", result.reply);
+      }
+    }
+    const updated = req.userStore.getArtifactComment(id, cid)!;
+    const a = req.userStore.getArtifact(id)!;
+    return { comment: updated, artifact: wrapArtifact(a, req.userStore.listArtifactComments(id).map(toAnchor)) };
   });
 
   // Manual resolve — the human marks a comment done without asking the

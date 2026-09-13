@@ -21,6 +21,8 @@ import {
   type ArtifactSummary,
   type Artifact,
   type ArtifactComment,
+  type CommentReply,
+  type WikiComment,
   type Health,
   type User,
   AGENT_SENDER_ID,
@@ -7184,7 +7186,9 @@ async function openWikiPage(id: string) {
   wikiStatusEl.textContent = "";
   wikiEmptyEl.hidden = true;
   wikiEditorEl.hidden = false;
+  wikiCommentsFab.hidden = false;
   renderWikiPageList();
+  void refreshWikiComments();
 }
 
 // Chromium's contenteditable defaults new paragraphs to `<div>` unless told
@@ -7291,6 +7295,8 @@ async function deleteWikiPageRow(id: string) {
     wikiDirty = false;
     wikiEditorEl.hidden = true;
     wikiEmptyEl.hidden = false;
+    wikiCommentsFab.hidden = true;
+    closeWikiCommentsPanel();
   }
   await refreshWikiPages();
 }
@@ -7299,6 +7305,151 @@ wikiDeleteBtn.addEventListener("click", async () => {
   if (!activeWikiPageId) return;
   if (!confirm(`Delete "${wikiTitleInput.value}"? This can't be undone.`)) return;
   await deleteWikiPageRow(activeWikiPageId);
+});
+
+// ---- wiki comments (highlight + discuss) ----
+// Same threaded shape as artifact comments (renderCommentThreadCard is
+// shared) — the difference is purely how a new thread gets anchored: the
+// wiki editor is a plain contenteditable in this same page, not a sandboxed
+// iframe, so capturing a selection is just window.getSelection() instead of
+// the artifact viewer's postMessage bridge. See docs/DECISIONS.md →
+// "Threaded comments".
+const wikiCommentsFab = document.getElementById("wiki-comments-fab") as HTMLButtonElement;
+const wikiCommentsFabBadge = document.getElementById("wiki-comments-fab-badge")!;
+const wikiCommentsPanel = document.getElementById("wiki-comments-panel")!;
+const wikiCommentsClose = document.getElementById("wiki-comments-close") as HTMLButtonElement;
+const wikiCommentsBody = document.getElementById("wiki-comments-body")!;
+const wikiCommentBtn = document.getElementById("wiki-comment-btn") as HTMLButtonElement;
+
+let wikiComments: WikiComment[] = [];
+
+function openWikiCommentsPanel(): void {
+  wikiCommentsPanel.hidden = false;
+  requestAnimationFrame(() => wikiCommentsPanel.classList.add("is-open"));
+}
+function closeWikiCommentsPanel(): void {
+  wikiCommentsPanel.classList.remove("is-open");
+  wikiCommentsPanel.hidden = true;
+  wikiCommentsBody.querySelector(".artifact-composer")?.remove();
+}
+wikiCommentsFab.addEventListener("click", () => {
+  if (wikiCommentsPanel.hidden) openWikiCommentsPanel();
+  else closeWikiCommentsPanel();
+});
+wikiCommentsClose.addEventListener("click", closeWikiCommentsPanel);
+
+async function refreshWikiComments(): Promise<void> {
+  if (!activeWikiPageId) return;
+  try {
+    wikiComments = (await api.wikiComments(activeWikiPageId)).comments;
+  } catch {
+    return;
+  }
+  renderWikiCommentsPanel();
+}
+
+function renderWikiCommentsPanel(): void {
+  const open = wikiComments.filter((c) => c.status === "open");
+  wikiCommentsFabBadge.textContent = String(open.length);
+  wikiCommentsFabBadge.hidden = open.length === 0;
+
+  const rail = wikiCommentsBody;
+  rail.replaceChildren();
+  if (wikiComments.length === 0) {
+    const hint = document.createElement("p");
+    hint.className = "artifact-rail-empty";
+    hint.textContent = "Select text and press the comment button, or comment on the whole page.";
+    rail.appendChild(hint);
+    return;
+  }
+  for (const c of wikiComments) {
+    const card = renderCommentThreadCard(c, {
+      authorLabel: c.userId === currentUser?.id ? "You" : c.userName,
+      onReply: async (body) => {
+        if (!activeWikiPageId) return;
+        const res = await api.replyToWikiComment(activeWikiPageId, c.id, body);
+        const idx = wikiComments.findIndex((x) => x.id === c.id);
+        if (idx >= 0) wikiComments[idx] = res.comment;
+        // The assistant may have edited the page — reload it in place.
+        if (activeWikiPageId === res.page.id && !wikiDirty) {
+          wikiTitleInput.value = res.page.title;
+          wikiBodyEditor.innerHTML = renderMarkdown(res.page.body);
+          wikiUndoBtn.hidden = !res.page.prevBody;
+        }
+        renderWikiCommentsPanel();
+      },
+      onResolve: async () => {
+        if (!activeWikiPageId) return;
+        await api.resolveWikiComment(activeWikiPageId, c.id);
+        await refreshWikiComments();
+      },
+      onReopen: async () => {
+        if (!activeWikiPageId) return;
+        await api.reopenWikiComment(activeWikiPageId, c.id);
+        await refreshWikiComments();
+      },
+      onDelete: async () => {
+        if (!activeWikiPageId) return;
+        await api.deleteWikiComment(activeWikiPageId, c.id);
+        await refreshWikiComments();
+      },
+    });
+    rail.appendChild(card);
+  }
+}
+
+wikiCommentBtn.addEventListener("click", () => {
+  if (!activeWikiPageId) return;
+  const sel = window.getSelection();
+  let quote: string | undefined;
+  let prefix: string | undefined;
+  let suffix: string | undefined;
+  if (sel && !sel.isCollapsed && sel.rangeCount > 0 && wikiBodyEditor.contains(sel.anchorNode)) {
+    quote = sel.toString().slice(0, 1000) || undefined;
+    const full = wikiBodyEditor.textContent ?? "";
+    const at = quote ? full.indexOf(quote) : -1;
+    if (at >= 0) {
+      prefix = full.slice(Math.max(0, at - 48), at) || undefined;
+      suffix = full.slice(at + quote!.length, at + quote!.length + 48) || undefined;
+    }
+  }
+  openWikiCommentsPanel();
+  const rail = wikiCommentsBody;
+  rail.querySelector(".artifact-composer")?.remove();
+  const box = document.createElement("div");
+  box.className = "artifact-composer";
+  if (quote) box.innerHTML = `<blockquote class="artifact-comment-quote">${escapeHtml(snippet(quote))}</blockquote>`;
+  const ta = document.createElement("textarea");
+  ta.placeholder = quote ? "What should change here? (or a question)" : "Comment on this page…";
+  ta.rows = 3;
+  const actions = document.createElement("div");
+  actions.className = "artifact-composer-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "artifact-ask-btn";
+  save.textContent = "Comment";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost-btn";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => box.remove());
+  save.addEventListener("click", async () => {
+    const body = ta.value.trim();
+    if (!body || !activeWikiPageId) return;
+    save.disabled = true;
+    try {
+      await api.addWikiComment(activeWikiPageId, body, { quote, prefix, suffix });
+      box.remove();
+      await refreshWikiComments();
+    } catch (err) {
+      save.disabled = false;
+      alert(`Couldn't save the comment: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+  actions.append(save, cancel);
+  box.append(ta, actions);
+  rail.insertBefore(box, rail.children[1] ?? null);
+  ta.focus();
 });
 
 // ---------- Gallery (family photo library) ----------
@@ -8162,6 +8313,115 @@ function snippet(s: string | null, n = 90): string {
   return t.length > n ? t.slice(0, n) + "…" : t;
 }
 
+/** A comment card: the anchored quote, the root message, every reply in the
+ *  thread so far, and a reply composer — typing "@agent" in it brings the
+ *  assistant into the discussion (repeatably; every reply, including a
+ *  prior @agent one, is context for the next). Shared between the artifact
+ *  viewer and the wiki editor's comment panels — see docs/DECISIONS.md →
+ *  "Threaded comments". */
+interface ThreadedComment {
+  id: string;
+  body: string;
+  quote: string | null;
+  status: "open" | "resolved";
+  replies: CommentReply[];
+}
+function renderCommentThreadCard(
+  c: ThreadedComment,
+  opts: {
+    authorLabel: string;
+    onQuoteClick?: () => void;
+    onReply: (body: string) => Promise<void>;
+    onResolve: () => Promise<void>;
+    onReopen: () => Promise<void>;
+    onDelete: () => Promise<void>;
+  }
+): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "artifact-comment" + (c.status === "resolved" ? " is-resolved" : "");
+  card.dataset.id = c.id;
+
+  const quoteHtml = c.quote ? `<blockquote class="artifact-comment-quote">${escapeHtml(snippet(c.quote))}</blockquote>` : "";
+  card.innerHTML = `${quoteHtml}<p class="artifact-comment-body"><strong>${escapeHtml(opts.authorLabel)}:</strong> ${escapeHtml(c.body)}</p>`;
+  if (opts.onQuoteClick) card.querySelector(".artifact-comment-quote")?.addEventListener("click", opts.onQuoteClick);
+
+  if (c.replies.length) {
+    const list = document.createElement("div");
+    list.className = "comment-thread-replies";
+    for (const r of c.replies) {
+      const row = document.createElement("p");
+      row.className = "comment-reply" + (r.author === "agent" ? " is-agent" : "");
+      const strong = document.createElement("strong");
+      strong.textContent = `${r.authorName}: `;
+      row.appendChild(strong);
+      row.appendChild(document.createTextNode(r.body));
+      list.appendChild(row);
+    }
+    card.appendChild(list);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "artifact-comment-actions";
+  if (c.status === "resolved") {
+    const reopen = document.createElement("button");
+    reopen.type = "button";
+    reopen.className = "artifact-comment-link";
+    reopen.textContent = "Reopen";
+    reopen.addEventListener("click", () => void opts.onReopen());
+    actions.appendChild(reopen);
+  } else {
+    const resolveBtn = document.createElement("button");
+    resolveBtn.type = "button";
+    resolveBtn.className = "artifact-comment-link";
+    resolveBtn.textContent = "Resolve";
+    resolveBtn.addEventListener("click", () => void opts.onResolve());
+    actions.appendChild(resolveBtn);
+  }
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "artifact-comment-link danger";
+  del.textContent = "Delete";
+  del.addEventListener("click", () => void opts.onDelete());
+  actions.appendChild(del);
+  card.appendChild(actions);
+
+  const composer = document.createElement("div");
+  composer.className = "comment-reply-composer";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "Reply, or type @agent to ask the assistant…";
+  const send = document.createElement("button");
+  send.type = "button";
+  send.className = "artifact-comment-link primary";
+  send.textContent = "Send";
+  const doSend = async () => {
+    const body = input.value.trim();
+    if (!body) return;
+    input.disabled = true;
+    send.disabled = true;
+    try {
+      await opts.onReply(body);
+      input.value = "";
+    } catch (err) {
+      alert(`Couldn't send that: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      input.disabled = false;
+      send.disabled = false;
+    }
+  };
+  send.addEventListener("click", () => void doSend());
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void doSend();
+    }
+  });
+  composer.append(input, send);
+  card.appendChild(composer);
+
+  return card;
+}
+
 // Resolved comments stay in the DB (undo-able via Reopen) but are hidden
 // from the rail by default — this toggle, not persisted, shows them again.
 let showResolvedArtifactComments = false;
@@ -8229,58 +8489,30 @@ function renderCommentRail(): void {
   }
 
   for (const c of visible) {
-    const card = document.createElement("div");
-    card.className = "artifact-comment" + (c.status === "resolved" ? " is-resolved" : "");
-    card.dataset.id = c.id;
-    const quoteHtml = c.quote ? `<blockquote class="artifact-comment-quote">${escapeHtml(snippet(c.quote))}</blockquote>` : "";
-    card.innerHTML = `${quoteHtml}<p class="artifact-comment-body">${escapeHtml(c.body)}</p>`;
-
-    if (c.status === "resolved") {
-      const res = document.createElement("p");
-      res.className = "artifact-comment-resolution";
-      res.textContent = (c.resolvedBy === "agent" ? "Assistant: " : "") + (c.resolution ?? "Resolved.");
-      card.appendChild(res);
-      const reopen = document.createElement("button");
-      reopen.type = "button";
-      reopen.className = "artifact-comment-link";
-      reopen.textContent = "Reopen";
-      reopen.addEventListener("click", async () => {
-        await api.reopenArtifactComment(artView!.id, c.id);
-        await reloadArtViewComments();
-      });
-      card.appendChild(reopen);
-    } else {
-      const row = document.createElement("div");
-      row.className = "artifact-comment-actions";
-      const ask = document.createElement("button");
-      ask.type = "button";
-      ask.className = "artifact-comment-link primary";
-      ask.textContent = "Ask AI";
-      ask.addEventListener("click", () => void resolveComments([c.id]));
-      // Every comment gets a plain Resolve button, whether or not the AI
-      // ever touches it — a human can just mark it done.
-      const resolveBtn = document.createElement("button");
-      resolveBtn.type = "button";
-      resolveBtn.className = "artifact-comment-link";
-      resolveBtn.textContent = "Resolve";
-      resolveBtn.addEventListener("click", async () => {
+    const card = renderCommentThreadCard(c, {
+      authorLabel: nameForSender(c.userId),
+      onQuoteClick: () => artifactFrame.contentWindow?.postMessage({ type: "artifact:scrollTo", id: c.id }, "*"),
+      onReply: async (body) => {
+        const res = await api.replyToArtifactComment(artView!.id, c.id, body);
+        const idx = artView!.comments.findIndex((x) => x.id === c.id);
+        if (idx >= 0) artView!.comments[idx] = res.comment;
+        artifactFrame.srcdoc = res.artifact.document; // reloads → the runtime re-seeds from the fresh comment list
+        renderCommentRail();
+        pushCommentsToFrame();
+      },
+      onResolve: async () => {
         await api.resolveArtifactComment(artView!.id, c.id);
         await reloadArtViewComments();
-      });
-      const del = document.createElement("button");
-      del.type = "button";
-      del.className = "artifact-comment-link danger";
-      del.textContent = "Delete";
-      del.addEventListener("click", async () => {
+      },
+      onReopen: async () => {
+        await api.reopenArtifactComment(artView!.id, c.id);
+        await reloadArtViewComments();
+      },
+      onDelete: async () => {
         await api.deleteArtifactComment(artView!.id, c.id);
         await reloadArtViewComments();
         void refreshArtifacts();
-      });
-      row.append(ask, resolveBtn, del);
-      card.appendChild(row);
-    }
-    card.querySelector(".artifact-comment-quote")?.addEventListener("click", () => {
-      artifactFrame.contentWindow?.postMessage({ type: "artifact:scrollTo", id: c.id }, "*");
+      },
     });
     rail.appendChild(card);
   }

@@ -235,6 +235,22 @@ export interface WikiPage {
   updatedAt: string;
 }
 
+/** Highlight-and-comment on a wiki page — same threaded shape as an
+ *  artifact's, fully shared (no ownership check on who can reply). */
+export interface WikiComment {
+  id: string;
+  pageId: string;
+  userId: string;
+  userName: string;
+  body: string;
+  quote: string | null;
+  prefix: string | null;
+  suffix: string | null;
+  status: "open" | "resolved";
+  createdAt: string;
+  replies: CommentReply[];
+}
+
 export interface GalleryPhoto {
   id: string;
   scope: NoteScope;
@@ -361,7 +377,18 @@ export interface Artifact extends ArtifactSummary {
   document: string;
 }
 
-/** A highlight-and-comment left on an artifact. */
+/** One reply in a comment thread — a family member, or the assistant
+ *  (`author === "agent"`). See docs/DECISIONS.md → "Threaded comments". */
+export interface CommentReply {
+  id: string;
+  commentId: string;
+  author: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+}
+
+/** A highlight-and-comment left on an artifact — now a real thread. */
 export interface ArtifactComment {
   id: string;
   artifactId: string;
@@ -371,11 +398,12 @@ export interface ArtifactComment {
   prefix: string | null;
   suffix: string | null;
   status: "open" | "resolved";
-  /** The assistant's reply, or a note on what it changed. */
+  /** Legacy single-resolution fields — pre-thread comments only. */
   resolution: string | null;
   resolvedBy: "agent" | "user" | null;
   createdAt: string;
   resolvedAt: string | null;
+  replies: CommentReply[];
 }
 
 /** Per-comment outcome from POST /artifacts/:id/resolve-comments. */
@@ -1067,6 +1095,22 @@ export const api = {
     request<{ page: WikiPage }>(`/wiki/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   revertWikiPage: (id: string) => request<{ page: WikiPage }>(`/wiki/${id}/revert`, { method: "POST" }),
   deleteWikiPage: (id: string) => request<{ deleted: true }>(`/wiki/${id}`, { method: "DELETE" }),
+  wikiComments: (id: string) => request<{ comments: WikiComment[] }>(`/wiki/${id}/comments`),
+  addWikiComment: (id: string, body: string, anchor?: { quote?: string; prefix?: string; suffix?: string }) =>
+    request<{ comment: WikiComment }>(`/wiki/${id}/comments`, { method: "POST", body: JSON.stringify({ body, ...anchor }) }),
+  deleteWikiComment: (id: string, cid: string) =>
+    request<{ deleted: true }>(`/wiki/${id}/comments/${cid}`, { method: "DELETE" }),
+  resolveWikiComment: (id: string, cid: string) =>
+    request<{ comment: WikiComment }>(`/wiki/${id}/comments/${cid}/resolve`, { method: "POST" }),
+  reopenWikiComment: (id: string, cid: string) =>
+    request<{ comment: WikiComment }>(`/wiki/${id}/comments/${cid}/reopen`, { method: "POST" }),
+  /** Reply into a thread — mention "@agent" in `body` to bring the
+   *  assistant into the same discussion; it can be invoked again and again. */
+  replyToWikiComment: (id: string, cid: string, body: string) =>
+    request<{ comment: WikiComment; page: WikiPage }>(`/wiki/${id}/comments/${cid}/replies`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    }),
 
   // ---- gallery ----
   listGalleryPhotos: (scope: NoteScope) => request<{ photos: GalleryPhoto[] }>(`/gallery?scope=${scope}`),
@@ -1151,6 +1195,13 @@ export const api = {
     }),
   deleteArtifactComment: (id: string, cid: string) =>
     request<{ deleted: true }>(`/artifacts/${id}/comments/${cid}`, { method: "DELETE" }),
+  /** Reply into a thread — mention "@agent" in `body` to bring the
+   *  assistant into the same discussion; it can be invoked again and again. */
+  replyToArtifactComment: (id: string, cid: string, body: string) =>
+    request<{ comment: ArtifactComment; artifact: Artifact }>(`/artifacts/${id}/comments/${cid}/replies`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    }),
   resolveArtifactComment: (id: string, cid: string, resolution?: string) =>
     request<{ comment: ArtifactComment }>(`/artifacts/${id}/comments/${cid}/resolve`, {
       method: "POST",

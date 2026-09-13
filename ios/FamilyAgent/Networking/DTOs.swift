@@ -117,6 +117,17 @@ struct Artifact: Codable, Sendable, Hashable, Identifiable {
     var document: String = ""
 }
 
+/// One reply in a comment thread — a family member, or the assistant
+/// (`author == "agent"`). See docs/DECISIONS.md → "Threaded comments".
+struct CommentReply: Codable, Sendable, Hashable, Identifiable {
+    let id: String
+    var commentId: String = ""
+    var author: String = ""
+    var authorName: String = ""
+    var body: String
+    var createdAt: String = ""
+}
+
 struct ArtifactComment: Codable, Sendable, Hashable, Identifiable {
     let id: String
     var artifactId: String = ""
@@ -126,10 +137,40 @@ struct ArtifactComment: Codable, Sendable, Hashable, Identifiable {
     var prefix: String? = nil
     var suffix: String? = nil
     var status: String = "open"
+    /// Legacy single-resolution fields — pre-thread comments only.
     var resolution: String? = nil
     var resolvedBy: String? = nil
     var createdAt: String = ""
     var resolvedAt: String? = nil
+    var replies: [CommentReply] = []
+}
+
+/// Highlight-and-comment on a wiki page — same threaded shape as an
+/// artifact's, fully shared (no ownership check on who can reply).
+struct WikiComment: Codable, Sendable, Hashable, Identifiable {
+    let id: String
+    var pageId: String = ""
+    var userId: String = ""
+    var userName: String = "Someone"
+    var body: String
+    var quote: String? = nil
+    var prefix: String? = nil
+    var suffix: String? = nil
+    var status: String = "open"
+    var createdAt: String = ""
+    var replies: [CommentReply] = []
+}
+struct WikiCommentsResponse: Codable, Sendable { var comments: [WikiComment] = [] }
+struct WikiCommentResponse: Codable, Sendable { let comment: WikiComment }
+struct WikiCommentReplyResponse: Codable, Sendable {
+    let comment: WikiComment
+    let page: WikiPage
+}
+struct NewWikiCommentRequest: Codable, Sendable {
+    let body: String
+    var quote: String? = nil
+    var prefix: String? = nil
+    var suffix: String? = nil
 }
 
 struct CommentOutcome: Codable, Sendable, Hashable {
@@ -158,6 +199,10 @@ struct NewArtifactCommentRequest: Codable, Sendable {
     var quote: String? = nil
     var prefix: String? = nil
     var suffix: String? = nil
+}
+struct ArtifactCommentReplyResponse: Codable, Sendable {
+    let comment: ArtifactComment
+    let artifact: Artifact
 }
 
 struct User: Codable, Sendable, Identifiable, Hashable {

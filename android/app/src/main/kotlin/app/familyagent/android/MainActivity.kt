@@ -461,6 +461,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                     WikiPageScreen(
                         pageId = id,
                         load = viewModel::loadWikiPage,
+                        vm = viewModel,
                         onSave = viewModel::saveWikiPage,
                         onRevert = viewModel::revertWikiPage,
                         onDelete = { pid -> viewModel.deleteWikiPage(pid) { navController.popBackStack() } },

@@ -195,6 +195,18 @@ data class Artifact(
     val document: String = "",
 )
 
+/** One reply in a comment thread — a family member, or the assistant
+ *  (`author == "agent"`). See docs/DECISIONS.md → "Threaded comments". */
+@Serializable
+data class CommentReply(
+    val id: String,
+    val commentId: String = "",
+    val author: String = "",
+    val authorName: String = "",
+    val body: String,
+    val createdAt: String = "",
+)
+
 @Serializable
 data class ArtifactComment(
     val id: String,
@@ -205,11 +217,38 @@ data class ArtifactComment(
     val prefix: String? = null,
     val suffix: String? = null,
     val status: String = "open",
+    /** Legacy single-resolution fields — pre-thread comments only. */
     val resolution: String? = null,
     val resolvedBy: String? = null,
     val createdAt: String = "",
     val resolvedAt: String? = null,
+    val replies: List<CommentReply> = emptyList(),
 )
+
+/** Highlight-and-comment on a wiki page — same threaded shape as an
+ *  artifact's, fully shared (no ownership check on who can reply). */
+@Serializable
+data class WikiComment(
+    val id: String,
+    val pageId: String = "",
+    val userId: String = "",
+    val userName: String = "Someone",
+    val body: String,
+    val quote: String? = null,
+    val prefix: String? = null,
+    val suffix: String? = null,
+    val status: String = "open",
+    val createdAt: String = "",
+    val replies: List<CommentReply> = emptyList(),
+)
+@Serializable
+data class WikiCommentsResponse(val comments: List<WikiComment> = emptyList())
+@Serializable
+data class WikiCommentResponse(val comment: WikiComment)
+@Serializable
+data class WikiCommentReplyResponse(val comment: WikiComment, val page: WikiPage)
+@Serializable
+data class NewWikiCommentRequest(val body: String, val quote: String? = null, val prefix: String? = null, val suffix: String? = null)
 
 @Serializable
 data class CommentOutcome(val id: String, val action: String, val resolution: String)
@@ -263,6 +302,11 @@ data class NewArtifactCommentRequest(
 
 @Serializable
 data class ResolveCommentsRequest(val commentIds: List<String>? = null)
+
+@Serializable
+data class ReplyRequest(val body: String)
+@Serializable
+data class ArtifactCommentReplyResponse(val comment: ArtifactComment, val artifact: Artifact)
 
 @Serializable
 data class ReopenCommentRequest(val status: String = "open")

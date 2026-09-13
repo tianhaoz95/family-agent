@@ -129,6 +129,22 @@ class RichTextController(initial: String) {
     var value by mutableStateOf(TextFieldValue(initial, TextRange(initial.length)))
         private set
 
+    /** The current selection's text, plus a little surrounding context to
+     *  disambiguate a repeated phrase — the same anchor shape a comment
+     *  thread uses on the artifact viewer. `null` selection (just a caret,
+     *  or none) means "comment on the whole page" to the caller. */
+    fun currentSelectionQuote(): Triple<String, String, String>? {
+        val sel = value.selection
+        if (sel.collapsed) return null
+        val text = value.text
+        val start = minOf(sel.start, sel.end)
+        val end = maxOf(sel.start, sel.end)
+        val quote = text.substring(start, end)
+        val prefix = text.substring(maxOf(0, start - 48), start)
+        val suffix = text.substring(end, minOf(text.length, end + 48))
+        return Triple(quote, prefix, suffix)
+    }
+
     fun onValueChange(new: TextFieldValue) {
         value = new
     }

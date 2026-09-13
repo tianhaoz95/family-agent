@@ -289,6 +289,27 @@ function rowToArtifact_(r: any): ArtifactRecord {
   };
 }
 
+export interface CommentReplyRecord {
+  id: string;
+  commentId: string;
+  /** A user id, or the literal string "agent". */
+  author: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+}
+
+function rowToCommentReply_(r: any): CommentReplyRecord {
+  return {
+    id: r.id,
+    commentId: r.comment_id,
+    author: r.author,
+    authorName: r.author_name,
+    body: r.body,
+    createdAt: r.created_at,
+  };
+}
+
 export interface ArtifactCommentRecord {
   id: string;
   artifactId: string;
@@ -305,6 +326,8 @@ export interface ArtifactCommentRecord {
   resolvedBy: "agent" | "user" | null;
   createdAt: string;
   resolvedAt: string | null;
+  /** The thread — every reply after the original comment, oldest first. */
+  replies: CommentReplyRecord[];
 }
 
 function rowToArtifactComment_(r: any): ArtifactCommentRecord {
@@ -319,6 +342,7 @@ function rowToArtifactComment_(r: any): ArtifactCommentRecord {
     status: r.status === "resolved" ? "resolved" : "open",
     resolution: r.resolution ?? null,
     resolvedBy: r.resolved_by ?? null,
+    replies: [],
     createdAt: r.created_at,
     resolvedAt: r.resolved_at ?? null,
   };
@@ -465,6 +489,35 @@ export interface WikiPageRecord {
   updatedBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface WikiCommentRecord {
+  id: string;
+  pageId: string;
+  /** Who left the anchor comment. */
+  userId: string;
+  body: string;
+  quote: string | null;
+  prefix: string | null;
+  suffix: string | null;
+  status: "open" | "resolved";
+  createdAt: string;
+  replies: CommentReplyRecord[];
+}
+
+function rowToWikiComment(r: any): WikiCommentRecord {
+  return {
+    id: r.id,
+    pageId: r.page_id,
+    userId: r.user_id,
+    body: r.body,
+    quote: r.quote ?? null,
+    prefix: r.prefix ?? null,
+    suffix: r.suffix ?? null,
+    status: r.status === "resolved" ? "resolved" : "open",
+    createdAt: r.created_at,
+    replies: [],
+  };
 }
 
 export interface GalleryPhotoRecord {
@@ -678,6 +731,24 @@ CREATE TABLE IF NOT EXISTS artifact_comments (
 );
 CREATE INDEX IF NOT EXISTS idx_artifact_comments ON artifact_comments(artifact_id, created_at);
 
+-- A comment's actual conversation — a real thread, not a single reply.
+-- @agent (or @ai) in a reply's body triggers another off-planner turn (see
+-- agents/threadReply.ts) with the artifact's full HTML, the anchored quote,
+-- and every prior reply as context; the assistant's answer lands here as
+-- just another reply (author = 'agent'), so it can be invoked again and
+-- again in the same discussion. status/resolution/resolved_by on the
+-- parent row above are now purely a human "mark this done" flag — the
+-- thread itself, not a resolution field, is the record of what was said.
+CREATE TABLE IF NOT EXISTS artifact_comment_replies (
+  id TEXT PRIMARY KEY,
+  comment_id TEXT NOT NULL,
+  author TEXT NOT NULL,        -- a user id, or 'agent'
+  author_name TEXT NOT NULL,   -- display name at the time (or "Assistant")
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_comment_replies ON artifact_comment_replies(comment_id, created_at);
+
 CREATE TABLE IF NOT EXISTS channels (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -742,6 +813,35 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_wiki_pages_updated ON wiki_pages(updated_at DESC);
+
+-- Highlight-and-comment on a wiki page — same anchored-quote shape as
+-- artifact_comments, and the same real-thread shape as
+-- artifact_comment_replies (see the comment on that table). Lives on the
+-- base Store next to wiki_pages, not ScopedStore: a page has no owner, so
+-- neither does its discussion — any signed-in family member can reply, and
+-- @agent in a reply gets the page's current body + the quote + the thread
+-- so far as context (agents/threadReply.ts, shared with artifacts).
+CREATE TABLE IF NOT EXISTS wiki_comments (
+  id TEXT PRIMARY KEY,
+  page_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  quote TEXT,
+  prefix TEXT,
+  suffix TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_comments ON wiki_comments(page_id, created_at);
+CREATE TABLE IF NOT EXISTS wiki_comment_replies (
+  id TEXT PRIMARY KEY,
+  comment_id TEXT NOT NULL,
+  author TEXT NOT NULL,
+  author_name TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_comment_replies ON wiki_comment_replies(comment_id, created_at);
 
 -- A family photo gallery, private-or-shared exactly like sticky notes. Both
 -- the display image and its thumbnail are generated client-side (the same
@@ -1688,8 +1788,107 @@ export class Store {
 
   deleteWikiPage(id: string): boolean {
     if (!this.getWikiPage(id)) return false;
+    this.db
+      .prepare(
+        "DELETE FROM wiki_comment_replies WHERE comment_id IN (SELECT id FROM wiki_comments WHERE page_id = ?)"
+      )
+      .run(id);
+    this.db.prepare("DELETE FROM wiki_comments WHERE page_id = ?").run(id);
     this.db.prepare("DELETE FROM wiki_pages WHERE id = ?").run(id);
     return true;
+  }
+
+  // ---- wiki page comments (highlight + discuss; see docs/DECISIONS.md →
+  // "Threaded comments") — fully shared, like the pages themselves: no
+  // ownership check, any signed-in member reads/writes any thread. ----
+
+  private loadWikiCommentReplies_(commentId: string): CommentReplyRecord[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM wiki_comment_replies WHERE comment_id = ? ORDER BY created_at ASC")
+        .all(commentId) as any[]
+    ).map(rowToCommentReply_);
+  }
+
+  listWikiComments(pageId: string): WikiCommentRecord[] {
+    return (
+      this.db.prepare("SELECT * FROM wiki_comments WHERE page_id = ? ORDER BY created_at ASC").all(pageId) as any[]
+    ).map((r) => {
+      const c = rowToWikiComment(r);
+      c.replies = this.loadWikiCommentReplies_(c.id);
+      return c;
+    });
+  }
+
+  getWikiComment(pageId: string, id: string): WikiCommentRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM wiki_comments WHERE id = ? AND page_id = ?").get(id, pageId) as any;
+    if (!row) return undefined;
+    const c = rowToWikiComment(row);
+    c.replies = this.loadWikiCommentReplies_(c.id);
+    return c;
+  }
+
+  addWikiComment(input: {
+    pageId: string;
+    userId: string;
+    body: string;
+    quote?: string | null;
+    prefix?: string | null;
+    suffix?: string | null;
+  }): WikiCommentRecord | undefined {
+    if (!this.getWikiPage(input.pageId)) return undefined;
+    const rec: WikiCommentRecord = {
+      id: shortId(),
+      pageId: input.pageId,
+      userId: input.userId,
+      body: input.body.trim().slice(0, 2000),
+      quote: input.quote?.slice(0, 1000) ?? null,
+      prefix: input.prefix?.slice(0, 80) ?? null,
+      suffix: input.suffix?.slice(0, 80) ?? null,
+      status: "open",
+      createdAt: new Date().toISOString(),
+      replies: [],
+    };
+    this.db
+      .prepare(
+        "INSERT INTO wiki_comments (id, page_id, user_id, body, quote, prefix, suffix, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run(rec.id, rec.pageId, rec.userId, rec.body, rec.quote, rec.prefix, rec.suffix, rec.createdAt);
+    return rec;
+  }
+
+  deleteWikiComment(pageId: string, id: string): boolean {
+    this.db.prepare("DELETE FROM wiki_comment_replies WHERE comment_id = ?").run(id);
+    const info = this.db.prepare("DELETE FROM wiki_comments WHERE id = ? AND page_id = ?").run(id, pageId);
+    return Number(info.changes ?? 0) > 0;
+  }
+
+  resolveWikiComment(pageId: string, id: string): WikiCommentRecord | undefined {
+    this.db.prepare("UPDATE wiki_comments SET status = 'resolved' WHERE id = ? AND page_id = ?").run(id, pageId);
+    return this.getWikiComment(pageId, id);
+  }
+
+  reopenWikiComment(pageId: string, id: string): WikiCommentRecord | undefined {
+    this.db.prepare("UPDATE wiki_comments SET status = 'open' WHERE id = ? AND page_id = ?").run(id, pageId);
+    return this.getWikiComment(pageId, id);
+  }
+
+  addWikiCommentReply(pageId: string, commentId: string, author: string, authorName: string, body: string): CommentReplyRecord | undefined {
+    if (!this.db.prepare("SELECT 1 FROM wiki_comments WHERE id = ? AND page_id = ?").get(commentId, pageId)) return undefined;
+    const rec: CommentReplyRecord = {
+      id: shortId(),
+      commentId,
+      author,
+      authorName,
+      body: body.trim().slice(0, 4000),
+      createdAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare(
+        "INSERT INTO wiki_comment_replies (id, comment_id, author, author_name, body, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+      )
+      .run(rec.id, rec.commentId, rec.author, rec.authorName, rec.body, rec.createdAt);
+    return rec;
   }
 
   /** Hand every row still owned by the legacy sentinel to a real user. */
@@ -2782,6 +2981,9 @@ export class ScopedStore {
     const a = this.getArtifact(id);
     if (!a) return undefined;
     this.db.prepare("DELETE FROM artifacts WHERE id = ? AND user_id = ?").run(id, this.userId);
+    this.db
+      .prepare("DELETE FROM artifact_comment_replies WHERE comment_id IN (SELECT id FROM artifact_comments WHERE artifact_id = ?)")
+      .run(id);
     this.db.prepare("DELETE FROM artifact_comments WHERE artifact_id = ?").run(id);
     this.logActivity("user", "artifact.deleted", `Deleted artifact "${a.title}"`);
     return a;
@@ -2844,6 +3046,7 @@ export class ScopedStore {
       resolvedBy: null,
       createdAt: new Date().toISOString(),
       resolvedAt: null,
+      replies: [],
     };
     this.db
       .prepare(
@@ -2853,13 +3056,25 @@ export class ScopedStore {
     return rec;
   }
 
+  private loadCommentReplies_(commentId: string): CommentReplyRecord[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM artifact_comment_replies WHERE comment_id = ? ORDER BY created_at ASC")
+        .all(commentId) as any[]
+    ).map(rowToCommentReply_);
+  }
+
   listArtifactComments(artifactId: string): ArtifactCommentRecord[] {
     if (!this.ownsArtifact_(artifactId)) return [];
     return (
       this.db
         .prepare("SELECT * FROM artifact_comments WHERE artifact_id = ? ORDER BY created_at ASC")
         .all(artifactId) as any[]
-    ).map(rowToArtifactComment_);
+    ).map((r) => {
+      const c = rowToArtifactComment_(r);
+      c.replies = this.loadCommentReplies_(c.id);
+      return c;
+    });
   }
 
   getArtifactComment(artifactId: string, id: string): ArtifactCommentRecord | undefined {
@@ -2867,7 +3082,38 @@ export class ScopedStore {
     const row = this.db
       .prepare("SELECT * FROM artifact_comments WHERE id = ? AND artifact_id = ?")
       .get(id, artifactId) as any;
-    return row ? rowToArtifactComment_(row) : undefined;
+    if (!row) return undefined;
+    const c = rowToArtifactComment_(row);
+    c.replies = this.loadCommentReplies_(c.id);
+    return c;
+  }
+
+  /** A reply in the thread — from a family member, or the assistant
+   *  (`author: "agent"`). See docs/DECISIONS.md → "Threaded comments". */
+  addArtifactCommentReply(
+    artifactId: string,
+    commentId: string,
+    author: string,
+    authorName: string,
+    body: string
+  ): CommentReplyRecord | undefined {
+    if (!this.ownsArtifact_(artifactId)) return undefined;
+    if (!this.db.prepare("SELECT 1 FROM artifact_comments WHERE id = ? AND artifact_id = ?").get(commentId, artifactId))
+      return undefined;
+    const rec: CommentReplyRecord = {
+      id: shortId(),
+      commentId,
+      author,
+      authorName,
+      body: body.trim().slice(0, 4000),
+      createdAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare(
+        "INSERT INTO artifact_comment_replies (id, comment_id, author, author_name, body, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+      )
+      .run(rec.id, rec.commentId, rec.author, rec.authorName, rec.body, rec.createdAt);
+    return rec;
   }
 
   updateArtifactComment(artifactId: string, id: string, body: string): ArtifactCommentRecord | undefined {
@@ -2880,6 +3126,7 @@ export class ScopedStore {
 
   deleteArtifactComment(artifactId: string, id: string): boolean {
     if (!this.ownsArtifact_(artifactId)) return false;
+    this.db.prepare("DELETE FROM artifact_comment_replies WHERE comment_id = ?").run(id);
     const info = this.db
       .prepare("DELETE FROM artifact_comments WHERE id = ? AND artifact_id = ?")
       .run(id, artifactId);

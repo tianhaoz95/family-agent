@@ -311,8 +311,18 @@ fun ArtifactViewScreen(
                 }
             },
             onDelete = { cid -> scope.launch { if (vm.deleteArtifactComment(artifactId, cid)) comments = comments.filterNot { it.id == cid } } },
+            onResolve = { cid -> scope.launch { vm.resolveArtifactComment(artifactId, cid)?.let { r -> comments = comments.map { if (it.id == cid) r else it } } } },
             onReopen = { cid -> scope.launch { vm.reopenArtifactComment(artifactId, cid)?.let { r -> comments = comments.map { if (it.id == cid) r else it } } } },
+            onReply = { cid, body ->
+                scope.launch {
+                    vm.replyToArtifactComment(artifactId, cid, body)?.let { r ->
+                        artifact = r.artifact
+                        comments = comments.map { if (it.id == cid) r.comment else it }
+                    }
+                }
+            },
             onRevert = { scope.launch { vm.revertArtifact(artifactId)?.let { artifact = it.artifact; comments = it.comments } } },
+            nameForUserId = { id -> vm.nameForUserId(id) },
         )
     }
 }
@@ -328,8 +338,11 @@ private fun ArtifactCommentsSheet(
     onAdd: (String) -> Unit,
     onAskAI: (List<String>?) -> Unit,
     onDelete: (String) -> Unit,
+    onResolve: (String) -> Unit,
     onReopen: (String) -> Unit,
+    onReply: (String, String) -> Unit,
     onRevert: () -> Unit,
+    nameForUserId: (String) -> String,
 ) {
     var draft by remember(pendingQuote) { mutableStateOf("") }
     val open = comments.filter { it.status == "open" }
@@ -373,30 +386,17 @@ private fun ArtifactCommentsSheet(
                 Text("Select text in the page to leave a comment.", style = MaterialTheme.typography.bodyMedium, color = AppAccents.textSecondary)
             }
             comments.forEach { c ->
-                Surface(
-                    tonalElevation = if (c.status == "resolved") 0.dp else 1.dp,
-                    shape = MaterialTheme.shapes.medium,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                ) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        if (!c.quote.isNullOrEmpty()) {
-                            Text("“${c.quote.take(120)}”", style = MaterialTheme.typography.bodySmall, color = AppAccents.textSecondary)
-                        }
-                        Text(c.body, style = MaterialTheme.typography.bodyMedium)
-                        if (c.status == "resolved") {
-                            Text(
-                                (if (c.resolvedBy == "agent") "Assistant: " else "") + (c.resolution ?: "Resolved."),
-                                style = MaterialTheme.typography.bodySmall, color = AppAccents.textSecondary,
-                            )
-                            TextButton(onClick = { onReopen(c.id) }, contentPadding = PaddingValues(0.dp)) { Text("Reopen") }
-                        } else {
-                            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                                TextButton(onClick = { onAskAI(listOf(c.id)) }, enabled = !working, contentPadding = PaddingValues(0.dp)) { Text("Ask AI") }
-                                TextButton(onClick = { onDelete(c.id) }, contentPadding = PaddingValues(0.dp)) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-                            }
-                        }
-                    }
-                }
+                CommentThreadCard(
+                    quote = c.quote,
+                    commentBody = c.body,
+                    authorLabel = nameForUserId(c.userId),
+                    replies = c.replies,
+                    status = c.status,
+                    onReply = { body -> onReply(c.id, body) },
+                    onResolve = { onResolve(c.id) },
+                    onReopen = { onReopen(c.id) },
+                    onDelete = { onDelete(c.id) },
+                )
             }
         }
     }

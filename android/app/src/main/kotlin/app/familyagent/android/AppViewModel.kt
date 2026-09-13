@@ -9,6 +9,11 @@ import app.familyagent.android.data.AGENT_SENDER_ID
 import app.familyagent.android.data.ActivityEntry
 import app.familyagent.android.data.Artifact
 import app.familyagent.android.data.ArtifactComment
+import app.familyagent.android.data.ArtifactCommentReplyResponse
+import app.familyagent.android.data.CommentReply
+import app.familyagent.android.data.NewWikiCommentRequest
+import app.familyagent.android.data.WikiComment
+import app.familyagent.android.data.WikiCommentReplyResponse
 import app.familyagent.android.data.ArtifactResponse
 import app.familyagent.android.data.ArtifactSummary
 import app.familyagent.android.data.NewArtifactCommentRequest
@@ -507,6 +512,12 @@ class AppViewModel(
     }
     suspend fun reopenArtifactComment(id: String, cid: String): ArtifactComment? =
         apiCall { api.reopenArtifactComment(id, cid) }.getOrNull()
+    suspend fun resolveArtifactComment(id: String, cid: String): ArtifactComment? =
+        apiCall { api.resolveArtifactComment(id, cid) }.getOrNull()
+    /** A reply — mentioning @agent brings the assistant into the thread,
+     *  possibly with a revised artifact, which the caller applies too. */
+    suspend fun replyToArtifactComment(id: String, cid: String, body: String): ArtifactCommentReplyResponse? =
+        apiCall { api.replyToArtifactComment(id, cid, body) }.getOrNull()
     suspend fun resolveArtifactComments(id: String, commentIds: List<String>?): ResolveCommentsResponse? {
         val r = apiCall { api.resolveArtifactComments(id, commentIds) }.getOrNull()
         if (r != null) refreshArtifacts()
@@ -1107,6 +1118,24 @@ class AppViewModel(
         }
     }
 
+    /** Fetched lazily (not at app start) since only a few screens need to
+     *  resolve a raw user id to a name — Messages (`refreshChannels`), and
+     *  now the artifact/wiki comment threads (`nameForUserId`). */
+    fun ensureFamilyMembersLoaded() {
+        if (_state.value.familyMembers.isNotEmpty()) return
+        viewModelScope.launch {
+            apiCall { api.listFamilyMembers() }.onSuccess { _state.value = _state.value.copy(familyMembers = it) }
+        }
+    }
+
+    /** A user id from a comment/channel record -> a name worth showing. */
+    fun nameForUserId(id: String): String {
+        if (id == "agent") return "Assistant"
+        val me = (_state.value.auth as? AuthState.Authenticated)?.user
+        if (id == me?.id) return "You"
+        return _state.value.familyMembers.firstOrNull { it.id == id }?.displayName ?: "Someone"
+    }
+
     fun refreshChannels() {
         viewModelScope.launch {
             apiCall { api.listChannels() }.onSuccess { _state.value = _state.value.copy(channels = it) }
@@ -1347,6 +1376,25 @@ class AppViewModel(
             onDone()
         }
     }
+
+    // ---- wiki page comments (highlight + discuss) — see docs/DECISIONS.md
+    // -> "Threaded comments". Same shape as artifact comments; unlike
+    // those, no ownership check on who can comment/reply/resolve.
+
+    suspend fun wikiComments(pageId: String): List<WikiComment> =
+        apiCall { api.wikiComments(pageId) }.getOrNull() ?: emptyList()
+    suspend fun addWikiComment(pageId: String, req: NewWikiCommentRequest): WikiComment? =
+        apiCall { api.addWikiComment(pageId, req) }.getOrNull()
+    suspend fun deleteWikiComment(pageId: String, cid: String): Boolean =
+        apiCall { api.deleteWikiComment(pageId, cid) }.isSuccess
+    suspend fun resolveWikiComment(pageId: String, cid: String): WikiComment? =
+        apiCall { api.resolveWikiComment(pageId, cid) }.getOrNull()
+    suspend fun reopenWikiComment(pageId: String, cid: String): WikiComment? =
+        apiCall { api.reopenWikiComment(pageId, cid) }.getOrNull()
+    /** A reply — mentioning @agent brings the assistant into the thread,
+     *  possibly with a revised page body, which the caller applies too. */
+    suspend fun replyToWikiComment(pageId: String, cid: String, body: String): WikiCommentReplyResponse? =
+        apiCall { api.replyToWikiComment(pageId, cid, body) }.getOrNull()
 
     // ---- family gallery ---- (see docs/DECISIONS.md → "Family gallery")
 

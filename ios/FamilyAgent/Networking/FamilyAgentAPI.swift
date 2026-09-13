@@ -436,9 +436,39 @@ struct FamilyAgentAPI: Sendable {
     func reopenArtifactComment(_ id: String, _ cid: String) async throws -> ArtifactComment {
         try await send("PATCH", "/artifacts/\(id)/comments/\(cid)", body: ["status": "open"], as: ArtifactCommentResponse.self).comment
     }
+    func resolveArtifactComment(_ id: String, _ cid: String) async throws -> ArtifactComment {
+        try await send("POST", "/artifacts/\(id)/comments/\(cid)/resolve", as: ArtifactCommentResponse.self).comment
+    }
+    /// Reply into a thread — mention "@agent" in `body` to bring the
+    /// assistant into the same discussion; it can be invoked again and
+    /// again. See docs/DECISIONS.md → "Threaded comments".
+    func replyToArtifactComment(_ id: String, _ cid: String, body: String) async throws -> ArtifactCommentReplyResponse {
+        try await send("POST", "/artifacts/\(id)/comments/\(cid)/replies", body: ["body": body], as: ArtifactCommentReplyResponse.self)
+    }
     func resolveArtifactComments(_ id: String, commentIds: [String]?) async throws -> ResolveCommentsResponse {
         struct Req: Codable { var commentIds: [String]? }
         return try await send("POST", "/artifacts/\(id)/resolve-comments", body: Req(commentIds: commentIds), as: ResolveCommentsResponse.self)
+    }
+
+    // MARK: - Wiki page comments (highlight + discuss)
+
+    func wikiComments(_ id: String) async throws -> [WikiComment] {
+        try await get("/wiki/\(id.pathEscaped)/comments", as: WikiCommentsResponse.self).comments
+    }
+    func addWikiComment(_ id: String, _ req: NewWikiCommentRequest) async throws -> WikiComment {
+        try await send("POST", "/wiki/\(id.pathEscaped)/comments", body: req, as: WikiCommentResponse.self).comment
+    }
+    func deleteWikiComment(_ id: String, _ cid: String) async throws {
+        try await sendVoid("DELETE", "/wiki/\(id.pathEscaped)/comments/\(cid)")
+    }
+    func resolveWikiComment(_ id: String, _ cid: String) async throws -> WikiComment {
+        try await send("POST", "/wiki/\(id.pathEscaped)/comments/\(cid)/resolve", as: WikiCommentResponse.self).comment
+    }
+    func reopenWikiComment(_ id: String, _ cid: String) async throws -> WikiComment {
+        try await send("POST", "/wiki/\(id.pathEscaped)/comments/\(cid)/reopen", as: WikiCommentResponse.self).comment
+    }
+    func replyToWikiComment(_ id: String, _ cid: String, body: String) async throws -> WikiCommentReplyResponse {
+        try await send("POST", "/wiki/\(id.pathEscaped)/comments/\(cid)/replies", body: ["body": body], as: WikiCommentReplyResponse.self)
     }
 
     // MARK: - Vault

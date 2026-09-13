@@ -153,6 +153,10 @@ export async function resolveArtifactComments(
   for (const c of open) {
     const reply = result.replies.get(c.id);
     if (reply) {
+      // Land the outcome as a real reply in the thread (not just the legacy
+      // `resolution` field) so it shows up the same way a per-thread @agent
+      // reply would — see docs/DECISIONS.md → "Threaded comments".
+      store.addArtifactCommentReply(artifactId, c.id, "agent", "Assistant", reply);
       store.resolveArtifactComment(artifactId, c.id, { resolution: reply, resolvedBy: "agent" });
       outcomes.push({ id: c.id, action: edited ? "edited" : "replied", resolution: reply });
     } else {

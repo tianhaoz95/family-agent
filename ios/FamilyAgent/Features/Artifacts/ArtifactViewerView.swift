@@ -48,6 +48,7 @@ struct ArtifactViewerView: View {
             }
         }
         .task(id: artifactId) { await load() }
+        .task { await model.ensureFamilyMembersLoaded() }
         .onChange(of: comments) { pushComments() }
         .onAppear {
             bridge.onSelection = { req in
@@ -66,7 +67,14 @@ struct ArtifactViewerView: View {
     private var viewerContent: some View {
         Group {
             if let artifact {
+                // `.id` forces a fresh WKWebView (SealedFullWebView's own
+                // updateUIView is deliberately a no-op — a sealed page loads
+                // once) whenever the content actually changes underneath,
+                // e.g. an @agent reply editing the artifact — otherwise the
+                // now-stale page would just sit there until the view closed
+                // and reopened.
                 SealedFullWebView(html: artifact.document, bridge: bridge)
+                    .id(artifact.revision)
                     .ignoresSafeArea(edges: .bottom)
             } else if let error {
                 ContentUnavailableView {
@@ -132,7 +140,9 @@ struct ArtifactViewerView: View {
                 onAdd: { req in await addComment(req) },
                 onAskAI: { ids in await resolve(ids) },
                 onDelete: { cid in await deleteComment(cid) },
+                onResolve: { cid in await resolveOne(cid) },
                 onReopen: { cid in await reopen(cid) },
+                onReply: { cid, body in await reply(cid, body) },
                 onRevert: { await revert() }
             )
             .presentationDetents([.medium, .large])
@@ -173,6 +183,19 @@ struct ArtifactViewerView: View {
             comments[i] = c
         }
     }
+    private func resolveOne(_ cid: String) async {
+        if let c = await model.perform({ try await model.api.resolveArtifactComment(artifactId, cid) }),
+           let i = comments.firstIndex(where: { $0.id == cid }) {
+            comments[i] = c
+        }
+    }
+    /// A reply — mentioning @agent brings the assistant into the thread,
+    /// possibly with a revised artifact, which lands back here too.
+    private func reply(_ cid: String, _ body: String) async {
+        guard let r = await model.perform({ try await model.api.replyToArtifactComment(artifactId, cid, body: body) }) else { return }
+        artifact = r.artifact
+        if let i = comments.firstIndex(where: { $0.id == cid }) { comments[i] = r.comment }
+    }
     private func resolve(_ ids: [String]?) async {
         working = true
         defer { working = false }
@@ -201,9 +224,12 @@ private struct ArtifactCommentsSheet: View {
     let onAdd: (NewArtifactCommentRequest) async -> Void
     let onAskAI: ([String]?) async -> Void
     let onDelete: (String) async -> Void
+    let onResolve: (String) async -> Void
     let onReopen: (String) async -> Void
+    let onReply: (String, String) async -> Void
     let onRevert: () async -> Void
 
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var draft = ""
 
@@ -249,27 +275,20 @@ private struct ArtifactCommentsSheet: View {
                             .font(.inter(13)).foregroundStyle(Theme.textMuted)
                     }
                     ForEach(comments) { c in
-                        VStack(alignment: .leading, spacing: 5) {
-                            if let q = c.quote, !q.isEmpty {
-                                Text("“\(q.prefix(120))”")
-                                    .font(.inter(12)).foregroundStyle(Theme.textMuted)
-                                    .padding(.leading, 6)
-                                    .overlay(alignment: .leading) { Rectangle().fill(Color.orange.opacity(0.6)).frame(width: 2) }
-                            }
-                            Text(c.body).font(.inter(14))
-                            if c.status == "resolved" {
-                                Text((c.resolvedBy == "agent" ? "Assistant: " : "") + (c.resolution ?? "Resolved."))
-                                    .font(.inter(12)).foregroundStyle(Theme.textMuted)
-                                Button("Reopen") { Task { await onReopen(c.id) } }.font(.inter(12))
-                            } else {
-                                HStack(spacing: 16) {
-                                    Button("Ask AI") { Task { await onAskAI([c.id]) } }.disabled(working)
-                                    Button("Delete", role: .destructive) { Task { await onDelete(c.id) } }
-                                }
-                                .font(.inter(12))
-                            }
-                        }
-                        .opacity(c.status == "resolved" ? 0.7 : 1)
+                        CommentThreadCard(
+                            quote: c.quote,
+                            commentBody: c.body,
+                            authorLabel: model.nameForUserId(c.userId),
+                            replies: c.replies,
+                            status: c.status,
+                            onReply: { body in await onReply(c.id, body) },
+                            onResolve: { await onResolve(c.id) },
+                            onReopen: { await onReopen(c.id) },
+                            onDelete: { await onDelete(c.id) }
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .padding(.vertical, 4)
                     }
                 }
             }

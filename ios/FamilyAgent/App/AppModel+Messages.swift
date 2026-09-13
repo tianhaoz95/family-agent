@@ -9,6 +9,13 @@ extension AppModel {
             channels = c
             notifyOfResolvedAgentReplies(in: c)
         }
+        await ensureFamilyMembersLoaded()
+    }
+
+    /// Fetched lazily (not at app start) since only a few screens need to
+    /// resolve a raw user id to a name — Messages, and now the artifact/wiki
+    /// comment threads (`AppModel.nameForUserId`).
+    func ensureFamilyMembersLoaded() async {
         if familyMembers.isEmpty {
             familyMembers = (await perform { try await api.listFamilyMembers() }) ?? []
         }

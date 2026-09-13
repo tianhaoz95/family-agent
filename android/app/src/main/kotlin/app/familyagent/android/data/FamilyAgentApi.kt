@@ -558,10 +558,40 @@ class FamilyAgentApi(
             send("PATCH", "/artifacts/$id/comments/$cid", json.encodeToString(ReopenCommentRequest()))
         ).comment
 
+    suspend fun resolveArtifactComment(id: String, cid: String): ArtifactComment =
+        json.decodeFromString<ArtifactCommentResponse>(sendNoBody("POST", "/artifacts/$id/comments/$cid/resolve")).comment
+
+    /** Reply into a thread — mention "@agent" in [body] to bring the
+     *  assistant into the same discussion; it can be invoked again and
+     *  again. See docs/DECISIONS.md → "Threaded comments". */
+    suspend fun replyToArtifactComment(id: String, cid: String, body: String): ArtifactCommentReplyResponse =
+        json.decodeFromString(send("POST", "/artifacts/$id/comments/$cid/replies", json.encodeToString(ReplyRequest(body))))
+
     suspend fun resolveArtifactComments(id: String, commentIds: List<String>?): ResolveCommentsResponse =
         json.decodeFromString(
             send("POST", "/artifacts/$id/resolve-comments", json.encodeToString(ResolveCommentsRequest(commentIds)))
         )
+
+    // ---- wiki page comments (highlight + discuss) ----
+
+    suspend fun wikiComments(id: String): List<WikiComment> =
+        json.decodeFromString<WikiCommentsResponse>(get("/wiki/$id/comments")).comments
+
+    suspend fun addWikiComment(id: String, req: NewWikiCommentRequest): WikiComment =
+        json.decodeFromString<WikiCommentResponse>(send("POST", "/wiki/$id/comments", json.encodeToString(req))).comment
+
+    suspend fun deleteWikiComment(id: String, cid: String) {
+        sendNoBody("DELETE", "/wiki/$id/comments/$cid")
+    }
+
+    suspend fun resolveWikiComment(id: String, cid: String): WikiComment =
+        json.decodeFromString<WikiCommentResponse>(sendNoBody("POST", "/wiki/$id/comments/$cid/resolve")).comment
+
+    suspend fun reopenWikiComment(id: String, cid: String): WikiComment =
+        json.decodeFromString<WikiCommentResponse>(sendNoBody("POST", "/wiki/$id/comments/$cid/reopen")).comment
+
+    suspend fun replyToWikiComment(id: String, cid: String, body: String): WikiCommentReplyResponse =
+        json.decodeFromString(send("POST", "/wiki/$id/comments/$cid/replies", json.encodeToString(ReplyRequest(body))))
 
     // ---- password vault ----
 
