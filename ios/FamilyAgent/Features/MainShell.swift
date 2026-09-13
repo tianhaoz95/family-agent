@@ -15,8 +15,8 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     }
     var systemImage: String {
         switch self {
-        case .chat: "bubble.left.and.bubble.right"
-        case .messages: "text.bubble"
+        case .chat: "bubble.left"
+        case .messages: "bubble.left.and.bubble.right"
         case .events: "checkmark.circle"
         case .board: "square.grid.2x2"
         case .documents: "doc.text"

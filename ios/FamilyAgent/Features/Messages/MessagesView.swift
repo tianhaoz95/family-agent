@@ -33,7 +33,7 @@ struct MessagesView: View {
                 }
 
                 if model.channels.isEmpty {
-                    EmptyState(text: "No conversations yet. Start one above.", systemImage: "text.bubble")
+                    EmptyState(text: "No conversations yet. Start one above.", systemImage: "bubble.left.and.bubble.right")
                 } else {
                     ForEach(model.channels) { ch in
                         AppCard(onTap: { route = ch.id }) {

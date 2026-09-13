@@ -44,7 +44,7 @@ struct ChatView: View {
                             if model.chatMessages.isEmpty && !model.chatSending {
                                 EmptyState(
                                     text: "Start a conversation. Try \u{201C}Remind me to renew the car registration by Nov 1\u{201D}, or attach a photo.",
-                                    systemImage: "bubble.left.and.bubble.right"
+                                    systemImage: "bubble.left"
                                 )
                                 .padding(.top, 40)
                             }

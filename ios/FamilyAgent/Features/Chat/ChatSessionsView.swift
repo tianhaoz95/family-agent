@@ -13,7 +13,7 @@ struct ChatSessionsView: View {
                            subtitle: "Past conversations with the assistant \u{2014} pick one to pick up where it left off.",
                            hasMenuButton: false) {
                 if model.chatSessions.isEmpty {
-                    EmptyState(text: "No conversations yet.", systemImage: "bubble.left.and.bubble.right")
+                    EmptyState(text: "No conversations yet.", systemImage: "bubble.left")
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(model.chatSessions) { s in
