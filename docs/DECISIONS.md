@@ -3151,3 +3151,44 @@ model to switch languages reliably is unverified here.
 
 Files: `agent-core/src/tools/builder.ts` (`HTML_SYSTEM`,
 `HTML_WITH_OPS_SYSTEM`).
+
+## Remote restart/update polling gave up silently
+
+Reported as: tapped "Restart the host" on iOS, and the screen sat on
+"Waiting for the host to pick this up…" indefinitely, with no error, no
+indication anything had stopped.
+
+Two separate things were true at once here. First, and most likely what the
+user actually hit: the request genuinely never got a response from the host,
+almost certainly because the host's desktop process was in some stuck or
+stale state of its own — a real, if separate, situation this client-side fix
+can't paper over (if the host is a wedged process, telling it to restart
+can't work by definition; someone has to restart it by hand once, after
+which the fixes in "Chat sessions generate independently" and the original
+"Desktop update" `relaunchWithTimeout` guard prevent it happening again).
+
+Second, and the part actually fixed here: **the mobile clients' own polling
+loop made that situation look identical to "still working" forever.**
+`pollDesktopUpdateStatus()` (iOS `AppModel+Data.swift`, Android
+`AppViewModel.kt`) polls for ~90 seconds and stops early on a terminal state
+(`no-update`/`error`) or three consecutive network failures (folded into a
+`restarting` state, since that almost always just means the host is mid-
+relaunch) — but if the host answers every poll just fine and simply never
+moves the status past `requested`, the loop runs out its full 90 seconds,
+sets `desktopUpdatePolling = false`, and stops — while `desktopUpdateStatus`
+is left exactly as it was, still `requested`. The UI's text is driven purely
+by `desktopUpdateStatus.state`, with no separate "still polling vs. gave up"
+signal, so it kept showing "Waiting for the host to pick this up…" with
+nothing on screen ever indicating the app itself had stopped trying.
+
+Fixed on both clients: after the loop exhausts without reaching a terminal
+state, if the status is still `requested`, synthesize an `error` status with
+an actionable message ("The host didn't respond within 90 seconds. Check
+that Family Agent is open on that computer, then try again.") — reusing the
+existing `error`-state rendering (already shown in the danger color on both
+platforms), so this needed no new UI, just an honest terminal state instead
+of an indefinite stall.
+
+Files: `ios/FamilyAgent/App/AppModel+Data.swift`
+(`pollDesktopUpdateStatus`), `android/.../AppViewModel.kt`
+(`pollDesktopUpdateStatus`).

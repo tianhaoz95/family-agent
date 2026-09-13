@@ -1730,7 +1730,24 @@ class AppViewModel(
                     stop = true
                 }
             }
-            if (stop) break
+            if (stop) return
+        }
+        // The loop ran its full ~90s without the host ever budging past
+        // "requested" (still answering fine — no network failures — just
+        // never picking the request up) — the host app almost certainly
+        // isn't running, isn't signed in, or is on a build too old to know
+        // what this request even is. Left alone, the UI would just keep
+        // showing "Waiting for the host to pick this up…" forever with no
+        // indication anything had stopped — this turns that silent stall
+        // into an explicit, actionable error instead. See docs/DECISIONS.md
+        // → "Remote restart/update polling gave up silently".
+        if (_state.value.desktopUpdateStatus?.state == "requested") {
+            _state.value = _state.value.copy(
+                desktopUpdateStatus = _state.value.desktopUpdateStatus?.copy(
+                    state = "error",
+                    message = "The host didn't respond within 90 seconds. Check that Family Agent is open on that computer, then try again.",
+                )
+            )
         }
     }
 

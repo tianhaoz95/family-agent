@@ -425,13 +425,14 @@ extension AppModel {
     private func pollDesktopUpdateStatus() async {
         desktopUpdatePolling = true
         var consecutiveFailures = 0
+        var reachedTerminalState = false
         for _ in 0..<45 { // ~90s at 2s/tick — comfortably covers check+download+install
             try? await Task.sleep(for: .seconds(2))
             do {
                 let status = try await api.getDesktopUpdateStatus()
                 desktopUpdateStatus = status
                 consecutiveFailures = 0
-                if status.state == "no-update" || status.state == "error" { break }
+                if status.state == "no-update" || status.state == "error" { reachedTerminalState = true; break }
             } catch {
                 consecutiveFailures += 1
                 // A few misses in a row almost certainly means the host is
@@ -441,9 +442,28 @@ extension AppModel {
                         state: "restarting", requestedAt: desktopUpdateStatus?.requestedAt,
                         requestedBy: desktopUpdateStatus?.requestedBy, requestedMode: desktopUpdateStatus?.requestedMode
                     )
+                    reachedTerminalState = true
                     break
                 }
             }
+        }
+        // The loop ran its full ~90s without the host ever budging past
+        // "requested" (still answering fine — no network failures — just
+        // never picking the request up) — the host app almost certainly
+        // isn't running, isn't signed in, or is on a build too old to know
+        // what this request even is. Left alone, the UI would just keep
+        // showing "Waiting for the host to pick this up…" forever with no
+        // indication anything had stopped — this turns that silent stall
+        // into an explicit, actionable error instead. See docs/DECISIONS.md
+        // → "Remote restart/update polling gave up silently".
+        if !reachedTerminalState, desktopUpdateStatus?.state == "requested" {
+            desktopUpdateStatus = DesktopUpdateStatus(
+                state: "error",
+                message: "The host didn't respond within 90 seconds. Check that Family Agent is open on that computer, then try again.",
+                requestedAt: desktopUpdateStatus?.requestedAt,
+                requestedBy: desktopUpdateStatus?.requestedBy,
+                requestedMode: desktopUpdateStatus?.requestedMode
+            )
         }
         desktopUpdatePolling = false
     }
