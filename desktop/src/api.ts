@@ -220,6 +220,33 @@ export interface StickyNote {
   updatedAt: string;
 }
 
+export interface WikiPage {
+  id: string;
+  title: string;
+  body: string;
+  prevBody: string | null;
+  revision: number;
+  createdBy: string;
+  updatedBy: string;
+  /** Resolved server-side at read time — prefer these for display. */
+  createdByName: string;
+  updatedByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GalleryPhoto {
+  id: string;
+  scope: NoteScope;
+  userId: string;
+  caption: string | null;
+  /** "" in a list response (the grid only needs `thumb`) — populated by
+   *  getGalleryPhoto. */
+  image: string;
+  thumb: string;
+  createdAt: string;
+}
+
 export interface ActivityEntry {
   id: string;
   ts: string;
@@ -1030,6 +1057,26 @@ export const api = {
   updateNote: (id: string, patch: { text?: string; image?: string | null; color?: string; x?: number; y?: number }) =>
     request<{ note: StickyNote }>(`/notes/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteNote: (id: string) => request<{ note: StickyNote }>(`/notes/${id}`, { method: "DELETE" }),
+
+  // ---- family wiki ----
+  listWikiPages: () => request<{ pages: WikiPage[] }>("/wiki"),
+  getWikiPage: (id: string) => request<{ page: WikiPage }>(`/wiki/${id}`),
+  createWikiPage: (title: string, body = "") =>
+    request<{ page: WikiPage }>("/wiki", { method: "POST", body: JSON.stringify({ title, body }) }),
+  updateWikiPage: (id: string, patch: { title?: string; body?: string }) =>
+    request<{ page: WikiPage }>(`/wiki/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  revertWikiPage: (id: string) => request<{ page: WikiPage }>(`/wiki/${id}/revert`, { method: "POST" }),
+  deleteWikiPage: (id: string) => request<{ deleted: true }>(`/wiki/${id}`, { method: "DELETE" }),
+
+  // ---- gallery ----
+  listGalleryPhotos: (scope: NoteScope) => request<{ photos: GalleryPhoto[] }>(`/gallery?scope=${scope}`),
+  getGalleryPhoto: (id: string) => request<{ photo: GalleryPhoto }>(`/gallery/${id}`),
+  createGalleryPhoto: (input: { scope: NoteScope; image: string; thumb: string; caption?: string }) =>
+    request<{ photo: GalleryPhoto }>("/gallery", { method: "POST", body: JSON.stringify(input) }),
+  updateGalleryPhotoCaption: (id: string, caption: string | null) =>
+    request<{ photo: GalleryPhoto }>(`/gallery/${id}`, { method: "PATCH", body: JSON.stringify({ caption }) }),
+  deleteGalleryPhoto: (id: string) => request<{ photo: GalleryPhoto }>(`/gallery/${id}`, { method: "DELETE" }),
+
   // ---- password vault ----
   vaultStatus: () => request<VaultStatus>("/vault/status"),
   vaultSetup: (password: string) =>

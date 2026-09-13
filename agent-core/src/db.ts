@@ -453,6 +453,34 @@ export interface StickyNoteRecord {
   updatedAt: string;
 }
 
+export interface WikiPageRecord {
+  id: string;
+  title: string;
+  body: string;
+  /** Set right after an edit, cleared by a revert — one-step undo, same
+   *  shape as ArtifactRecord.prevHtml/revision. */
+  prevBody: string | null;
+  revision: number;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GalleryPhotoRecord {
+  id: string;
+  scope: NoteScope;
+  /** Uploader. */
+  userId: string;
+  caption: string | null;
+  /** Full display image, as a data: URI — already downscaled client-side. */
+  image: string;
+  /** Small grid thumbnail, as a data: URI — a second, separately-downscaled
+   *  copy, not derived server-side from `image`. */
+  thumb: string;
+  createdAt: string;
+}
+
 // ---- scheduled routines ----
 // Per-user, like tasks/documents: a `user_id` column, scoped through
 // ScopedStore. `trigger` and `action` are JSON (RoutineTrigger / RoutineAction
@@ -696,6 +724,41 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sticky_scope ON sticky_notes(scope, user_id);
+
+-- A centralized family wiki: every page is shared (readable/editable by any
+-- signed-in family member) — there is no private wiki page, unlike sticky
+-- notes. Lives on the base Store (like channels), not ScopedStore, for the
+-- same reason. One prior body is kept for a one-step undo, the same shape
+-- as artifacts' prev_html/revision. See docs/DECISIONS.md → "Family wiki".
+CREATE TABLE IF NOT EXISTS wiki_pages (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  prev_body TEXT,
+  revision INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_updated ON wiki_pages(updated_at DESC);
+
+-- A family photo gallery, private-or-shared exactly like sticky notes. Both
+-- the display image and its thumbnail are generated client-side (the same
+-- downscale-to-JPEG-data-URI helper every client already uses for a chat
+-- image attachment) and stored inline as data URIs — no server-side image
+-- library, no on-disk file store; see docs/DECISIONS.md → "Family gallery"
+-- for why, and its honest scale trade-off.
+CREATE TABLE IF NOT EXISTS gallery_photos (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL DEFAULT 'private',
+  user_id TEXT NOT NULL,
+  caption TEXT,
+  image TEXT NOT NULL,
+  thumb TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gallery_scope ON gallery_photos(scope, user_id);
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
   id TEXT PRIMARY KEY,
@@ -1550,6 +1613,82 @@ export class Store {
     this.db.prepare("DELETE FROM messages WHERE channel_id = ?").run(channelId);
     this.db.prepare("DELETE FROM channel_members WHERE channel_id = ?").run(channelId);
     this.db.prepare("DELETE FROM channels WHERE id = ?").run(channelId);
+    return true;
+  }
+
+  // ---- family wiki ----
+  // Every page is shared — no membership/ownership check, unlike channels:
+  // any signed-in family member reads and edits any page. Lives on the base
+  // Store for the same reason sticky notes' "shared" scope does, just
+  // without a "private" half. See docs/DECISIONS.md → "Family wiki".
+
+  listWikiPages(): WikiPageRecord[] {
+    const rows = this.db.prepare("SELECT * FROM wiki_pages ORDER BY updated_at DESC").all() as any[];
+    return rows.map(rowToWikiPage);
+  }
+
+  getWikiPage(id: string): WikiPageRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM wiki_pages WHERE id = ?").get(id) as any;
+    return row ? rowToWikiPage(row) : undefined;
+  }
+
+  createWikiPage(title: string, body: string, userId: string): WikiPageRecord {
+    const now = new Date().toISOString();
+    const rec: WikiPageRecord = {
+      id: shortId(),
+      title: title.trim().slice(0, 160) || "Untitled page",
+      body,
+      prevBody: null,
+      revision: 0,
+      createdBy: userId,
+      updatedBy: userId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(
+        "INSERT INTO wiki_pages (id, title, body, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run(rec.id, rec.title, rec.body, rec.createdBy, rec.updatedBy, rec.createdAt, rec.updatedAt);
+    return rec;
+  }
+
+  /** Replace a page's title/body, keeping the current body for a one-step
+   *  revert (title changes aren't versioned — only the body, matching
+   *  artifacts' own prev_html scope). */
+  updateWikiPage(id: string, patch: { title?: string; body?: string }, userId: string): WikiPageRecord | undefined {
+    const cur = this.getWikiPage(id);
+    if (!cur) return undefined;
+    const now = new Date().toISOString();
+    if (patch.body !== undefined && patch.body !== cur.body) {
+      this.db
+        .prepare(
+          "UPDATE wiki_pages SET prev_body = body, body = ?, revision = revision + 1, updated_by = ?, updated_at = ? WHERE id = ?"
+        )
+        .run(patch.body, userId, now, id);
+    }
+    if (patch.title !== undefined) {
+      const t = patch.title.trim().slice(0, 160) || "Untitled page";
+      this.db.prepare("UPDATE wiki_pages SET title = ?, updated_by = ?, updated_at = ? WHERE id = ?").run(t, userId, now, id);
+    }
+    return this.getWikiPage(id);
+  }
+
+  /** Swap back to the body before the last edit (one level). */
+  revertWikiPage(id: string, userId: string): WikiPageRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM wiki_pages WHERE id = ?").get(id) as any;
+    if (!row || !row.prev_body) return this.getWikiPage(id);
+    this.db
+      .prepare(
+        "UPDATE wiki_pages SET body = prev_body, prev_body = NULL, revision = revision + 1, updated_by = ?, updated_at = ? WHERE id = ?"
+      )
+      .run(userId, new Date().toISOString(), id);
+    return this.getWikiPage(id);
+  }
+
+  deleteWikiPage(id: string): boolean {
+    if (!this.getWikiPage(id)) return false;
+    this.db.prepare("DELETE FROM wiki_pages WHERE id = ?").run(id);
     return true;
   }
 
@@ -2932,6 +3071,65 @@ export class ScopedStore {
     return note;
   }
 
+  // ---- gallery ----
+  // "private" is this user's own; "shared" is the family gallery, any member
+  // sees it — same split as sticky notes, author tracked in user_id.
+
+  listGalleryPhotos(scope: NoteScope): GalleryPhotoRecord[] {
+    const rows = (
+      scope === "private"
+        ? this.db
+            .prepare("SELECT id, scope, user_id, caption, thumb, created_at FROM gallery_photos WHERE scope = 'private' AND user_id = ? ORDER BY created_at DESC")
+            .all(this.userId)
+        : this.db
+            .prepare("SELECT id, scope, user_id, caption, thumb, created_at FROM gallery_photos WHERE scope = 'shared' ORDER BY created_at DESC")
+            .all()
+    ) as any[];
+    // The grid only ever needs the thumbnail — the full `image` is fetched
+    // separately (getGalleryPhoto) only when the viewer opens one photo, so
+    // listing a few hundred photos doesn't ship every full-size image at once.
+    return rows.map((r) => rowToGalleryPhoto({ ...r, image: "" }));
+  }
+
+  getGalleryPhoto(id: string): GalleryPhotoRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM gallery_photos WHERE id = ?").get(id) as any;
+    if (!row) return undefined;
+    const photo = rowToGalleryPhoto(row);
+    if (photo.scope === "private" && photo.userId !== this.userId) return undefined;
+    return photo;
+  }
+
+  createGalleryPhoto(input: { scope: NoteScope; caption?: string | null; image: string; thumb: string }): GalleryPhotoRecord {
+    const rec: GalleryPhotoRecord = {
+      id: shortId(),
+      scope: input.scope,
+      userId: this.userId,
+      caption: input.caption?.trim() || null,
+      image: input.image,
+      thumb: input.thumb,
+      createdAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare("INSERT INTO gallery_photos (id, scope, user_id, caption, image, thumb, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(rec.id, rec.scope, rec.userId, rec.caption, rec.image, rec.thumb, rec.createdAt);
+    this.logActivity("user", "gallery.added", `Added a photo to the ${rec.scope} gallery`);
+    return rec;
+  }
+
+  updateGalleryPhotoCaption(id: string, caption: string | null): GalleryPhotoRecord | undefined {
+    if (!this.getGalleryPhoto(id)) return undefined;
+    this.db.prepare("UPDATE gallery_photos SET caption = ? WHERE id = ?").run(caption?.trim() || null, id);
+    return this.getGalleryPhoto(id);
+  }
+
+  deleteGalleryPhoto(id: string): GalleryPhotoRecord | undefined {
+    const photo = this.getGalleryPhoto(id);
+    if (!photo) return undefined;
+    this.db.prepare("DELETE FROM gallery_photos WHERE id = ?").run(id);
+    this.logActivity("user", "gallery.deleted", `Removed a photo from the ${photo.scope} gallery`);
+    return photo;
+  }
+
   // ---- password vault entries ----
   // Metadata columns (title/username/url) are plaintext so the list works
   // locked; `secret` is opaque bytes to the store — the caller (VaultService)
@@ -3574,6 +3772,32 @@ function parseSteps(raw: unknown): AgentStep[] {
   } catch {
     return [];
   }
+}
+
+function rowToWikiPage(r: any): WikiPageRecord {
+  return {
+    id: r.id,
+    title: r.title,
+    body: r.body,
+    prevBody: r.prev_body ?? null,
+    revision: Number(r.revision ?? 0),
+    createdBy: r.created_by,
+    updatedBy: r.updated_by,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function rowToGalleryPhoto(r: any): GalleryPhotoRecord {
+  return {
+    id: r.id,
+    scope: (r.scope as NoteScope) ?? "private",
+    userId: r.user_id,
+    caption: r.caption ?? null,
+    image: r.image,
+    thumb: r.thumb,
+    createdAt: r.created_at,
+  };
 }
 
 function rowToStickyNote(r: any): StickyNoteRecord {

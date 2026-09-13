@@ -5511,3 +5511,145 @@ input[type="file"]::file-selector-button:hover {
 .chat-card.is-clamped .chat-card-more {
   display: block;
 }
+
+/* ---------- Wiki ---------- */
+.wiki-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 20px;
+  gap: 12px;
+}
+.wiki-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.wiki-title-input {
+  flex: 1;
+  min-width: 200px;
+  font: inherit;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  padding: 4px 2px;
+}
+.wiki-title-input:focus {
+  outline: none;
+  border-bottom: 1px solid var(--accent);
+}
+.wiki-body-input,
+.wiki-preview {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
+  background: var(--surface);
+}
+.wiki-body-input {
+  font: 14px/1.6 var(--font-mono, ui-monospace, monospace);
+  color: var(--text);
+  resize: none;
+}
+.wiki-body-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.wiki-preview {
+  font-size: 0.92rem;
+}
+.wiki-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.wiki-editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ---------- Gallery ---------- */
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+.gallery-tile {
+  aspect-ratio: 1;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition: transform 0.15s ease;
+}
+.gallery-tile:hover {
+  transform: scale(1.02);
+}
+.gallery-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.gallery-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(20, 16, 12, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+.gallery-viewer-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: min(90vw, 1000px);
+  max-height: 90vh;
+  position: relative;
+}
+.gallery-viewer-img {
+  max-width: 100%;
+  max-height: 72vh;
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop, 0 20px 60px rgba(0, 0, 0, 0.4));
+  object-fit: contain;
+}
+.gallery-viewer-close {
+  position: absolute;
+  top: -12px;
+  right: -12px;
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 8px;
+  box-shadow: var(--shadow-pop, 0 4px 16px rgba(0, 0, 0, 0.3));
+}
+.gallery-viewer-footer {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  max-width: 480px;
+}
+.gallery-viewer-footer input {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}

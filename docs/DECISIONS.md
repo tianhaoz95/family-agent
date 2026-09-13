@@ -3343,3 +3343,116 @@ Files: `ios/FamilyAgent/Networking/DTOs.swift` (`ChatRequest.documentIds`),
 (`ChatAttachedDoc`), `AppModel+Chat.swift` (`attachDocumentToChat`,
 `sendChat`), `Features/Chat/ChatView.swift` (the "+" `Menu`, camera/photos/
 files wiring), `Features/Shared/ImageAttach.swift` (`DocTray`).
+
+## Family wiki
+
+A centralized markdown notebook the whole family collaborates on — pages
+anyone can create, read, and edit. Deliberately not connected to the
+assistant yet (per the request that shipped it): a plain human-editing
+surface first, with the AI hookup as a clearly-scoped follow-up.
+
+**Every page is shared — there is no private wiki page**, unlike sticky
+notes or the gallery. "A centralized notebook for the family" is the whole
+point; a half where only one person can see a page would just be a second,
+worse Documents. This is also why `wiki_pages` lives on the base `Store`
+(like `channels`), not `ScopedStore` — there's no per-user scoping question
+to answer. Fully collaborative in the most literal sense: any signed-in
+member can edit or delete *any* page, no ownership/authorship gate at all —
+`updateWikiPage`/`deleteWikiPage` take no `userId` check beyond "are you
+signed in." `created_by`/`updated_by` are still tracked (for the "Edited by
+…" line and someday, an audit trail), just never used to restrict a write.
+
+**No real-time collaborative editing (OT/CRDT), and deliberately so.** That
+class of problem — the thing that makes Google Docs/Notion hard to build,
+with live cursors and merge algorithms for concurrent keystrokes — is a
+large engineering undertaking a family notebook doesn't need. Instead: a
+plain "load, edit, save" flow plus the exact one-step-undo shape artifacts
+already established (`prev_body`/`revision`, `POST /wiki/:id/revert`) — if
+two people edit the same page around the same time, the second save wins,
+and the loser's version is one Undo click away, not lost. This is the
+honest, adequate answer for a household, not a simulation of what a
+real-time editor would do.
+
+**Title edits don't touch the revert history.** `updateWikiPage` only
+snapshots `prev_body`/bumps `revision` when `body` actually changes — a
+rename alone is not something anyone would want "undo" to revert, and
+keeping it out of the revision keeps that button's meaning ("undo my last
+content edit") unambiguous.
+
+**Desktop UI** mirrors Chat's own history list+detail layout (the exact same
+`session-pane`/`conversation-pane` CSS, a right-click context menu for
+delete) rather than inventing a new shape, with an Edit/Preview toggle
+reusing the markdown renderer chat bubbles already use (`renderMarkdown`) —
+no new markdown library, no new styling, just the existing `.bubble-markdown`
+class. iOS/Android UI: not done in this pass (see "Scope notes" below).
+
+Files: `agent-core/src/db.ts` (`wiki_pages`, `WikiPageRecord`,
+`Store.{list,get,create,update,revert,delete}WikiPage`),
+`agent-core/src/server.ts` (`/wiki*` routes, `withWikiNames`). Desktop:
+`desktop/src/api.ts` (`WikiPage`), `desktop/src/main.ts` (the Wiki section),
+`desktop/index.html` (`#view-wiki`). Tests:
+`agent-core/test/wikiGallery.test.ts`.
+
+## Family gallery
+
+A photo library distinct from both Documents (a searchable file *list* —
+the wrong UX for browsing photos, and cluttered with document metadata that
+doesn't apply to a vacation photo) and the sticky Board (a handful of
+*pinned* photos on a corkboard, not a scrollable library). Grid of
+thumbnails, tap to open a full-size viewer with a caption and a delete
+button. Private-vs-shared exactly mirrors the sticky-note board: `scope`
+column, `'shared'` visible to every member, `'private'` visible only to its
+uploader (`GalleryPhotoRecord`/`gallery_photos`, `ScopedStore` methods
+alongside sticky notes' own).
+
+**No server-side image processing, and deliberately so — the display image
+and its thumbnail are two independently-downscaled copies generated
+client-side**, both uploaded and stored as data URIs directly in SQLite
+columns (`image`, `thumb`), the exact same shape sticky notes' own `image`
+column already uses for a photo/drawing note. The alternative — a real
+on-disk file store plus a server-side resize step — would need either a
+native image library (this codebase's one clear precedent, `onnxruntime-node`
+for ASR/TTS, is a deliberately-isolated, already-justified exception, not a
+reason to reach for another native dependency casually) or a hand-rolled
+WASM decoder (real effort for a solved problem, not worth it under the time
+this shipped in). Reusing the browser canvas downscaler every client already
+has for a chat/note image attachment (`fileToScaledDataUrl` on desktop,
+`ImageAttach.scaledJpegDataURI` on iOS) — called twice, once per target
+size — cost nothing new to build. **The honest trade-off**: this scales to a
+family's normal photo collection, not a professional archive of tens of
+thousands of RAW files — a deliberate, stated choice for what this app is
+(a household tool), not an oversight.
+
+**The list response never carries the full image, only the thumbnail** —
+`listGalleryPhotos` explicitly blanks `image` to `""` before returning a row;
+the grid only ever needs `thumb`, and shipping every full-size photo on
+every page load would make a gallery of any real size slow to open. The
+viewer fetches one photo's full `image` on demand (`GET /gallery/:id`),
+exactly the same "list is light, one item is heavy" shape `chat_sessions`
+already uses (a session's `lastMessage` preview vs. its full message list).
+
+**Desktop UI**: a CSS grid of square thumbnails, a full-screen viewer
+overlay (click outside or an explicit close button to dismiss) with an
+inline caption editor. iOS/Android UI: not done in this pass.
+
+Files: `agent-core/src/db.ts` (`gallery_photos`, `GalleryPhotoRecord`,
+`ScopedStore.{list,get,create,updateCaption,delete}GalleryPhoto`),
+`agent-core/src/server.ts` (`/gallery*` routes). Desktop: `desktop/src/api.ts`
+(`GalleryPhoto`), `desktop/src/main.ts` (`fileToScaledDataUrl`'s new
+`maxEdge` param, the Gallery section), `desktop/index.html` (`#view-gallery`,
+`#gallery-viewer`). Tests: `agent-core/test/wikiGallery.test.ts`.
+
+## Scope notes (Wiki + Gallery)
+
+Agent-core, desktop, and iOS all shipped in this pass. Desktop was verified
+with a real headless-Chromium render (page create/edit/preview/save/undo for
+Wiki; upload/grid/viewer/caption/delete, and private-vs-shared isolation, for
+Gallery); iOS was verified interactively on a real simulator the same way
+(page create/edit/preview/save/undo pushed via `WikiView`/`WikiPageEditorView`;
+photo upload/grid/full-screen viewer/caption via `GalleryView`/
+`GalleryPhotoViewer`) — plus the full server test suite for both.
+
+Android UI is the one deliberate fast-follow — the backend is complete and
+platform-agnostic (plain JSON + data-URI images, no desktop- or iOS-specific
+mechanism), so it needs only its own screens (mirroring `WikiScreen.kt` /
+`GalleryScreen.kt` off the iOS views above), not any server change.

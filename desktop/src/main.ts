@@ -29,6 +29,8 @@ import {
   type FamilyMember,
   type StickyNote,
   type NoteScope,
+  type WikiPage,
+  type GalleryPhoto,
   type ChatReference,
   type ChatLocation,
   type ChatSession,
@@ -96,6 +98,8 @@ function showView(name: string) {
   if (name === "tasks") void refreshTasks();
   if (name === "messages") void enterMessages();
   if (name === "board") void enterBoard();
+  if (name === "wiki") void refreshWikiPages();
+  if (name === "gallery") void refreshGallery();
   if (name === "documents") {
     // Opening the tab: if anything is still extracting (e.g. a job left
     // running by a previous session), resume polling so it self-updates.
@@ -721,22 +725,25 @@ function appendUserMessage(text: string, images: string[]) {
   return el;
 }
 
-// Load a file, downscale to at most MAX_IMAGE_EDGE on the long side, return a
-// JPEG data URI.
-function fileToScaledDataUrl(file: File): Promise<string> {
+// Load a file, downscale to at most `maxEdge` on the long side (default
+// MAX_IMAGE_EDGE), return a JPEG data URI. Used for chat/note attachments at
+// the default size, and for the gallery's two independently-sized copies
+// (a display image and a small grid thumbnail) — see docs/DECISIONS.md →
+// "Family gallery".
+function fileToScaledDataUrl(file: File, maxEdge: number = MAX_IMAGE_EDGE, quality = 0.85): Promise<string> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(url);
-      const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(img.width, img.height));
+      const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
       const canvas = document.createElement("canvas");
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
       const ctx = canvas.getContext("2d");
       if (!ctx) return reject(new Error("no canvas 2d context"));
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL("image/jpeg", 0.85));
+      resolve(canvas.toDataURL("image/jpeg", quality));
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -6998,6 +7005,307 @@ async function enterBoard() {
 // the Board view isn't currently visible/laid out — entering it re-applies.
 window.addEventListener("resize", () => {
   if (noteBoard.clientWidth > 0) applyBoardZoom();
+});
+
+// ---------- Wiki (centralized family markdown notebook) ----------
+// Every page is shared — no private/shared toggle here, unlike Board/
+// Gallery. List+detail layout, reusing the same session-pane/conversation-
+// pane CSS Chat's history list already established. See docs/DECISIONS.md
+// → "Family wiki".
+const wikiPageList = document.getElementById("wiki-page-list")!;
+const wikiNewBtn = document.getElementById("wiki-new-btn") as HTMLButtonElement;
+const wikiEmptyEl = document.getElementById("wiki-empty")!;
+const wikiEditorEl = document.getElementById("wiki-editor")!;
+const wikiTitleInput = document.getElementById("wiki-title-input") as HTMLInputElement;
+const wikiBodyInput = document.getElementById("wiki-body-input") as HTMLTextAreaElement;
+const wikiPreviewEl = document.getElementById("wiki-preview")!;
+const wikiStatusEl = document.getElementById("wiki-status")!;
+const wikiUndoBtn = document.getElementById("wiki-undo-btn") as HTMLButtonElement;
+const wikiDeleteBtn = document.getElementById("wiki-delete-btn") as HTMLButtonElement;
+const wikiSaveBtn = document.getElementById("wiki-save-btn") as HTMLButtonElement;
+
+let wikiPages: WikiPage[] = [];
+let activeWikiPageId: string | null = null;
+let wikiDirty = false;
+
+function wikiHasUnsavedChanges(): boolean {
+  const page = wikiPages.find((p) => p.id === activeWikiPageId);
+  if (!page) return false;
+  return page.title !== wikiTitleInput.value || page.body !== wikiBodyInput.value;
+}
+
+function renderWikiPageList() {
+  wikiPageList.innerHTML = "";
+  if (wikiPages.length === 0) {
+    wikiPageList.innerHTML = `<li class="empty-state"><span>No pages yet.</span></li>`;
+    return;
+  }
+  for (const p of wikiPages) {
+    const li = document.createElement("li");
+    li.className = "channel-row session-row" + (p.id === activeWikiPageId ? " is-active" : "");
+    li.innerHTML = `
+      <span class="channel-row-title">${escapeHtml(p.title)}</span>
+      <span class="channel-row-preview">Edited by ${escapeHtml(p.updatedByName)}</span>
+    `;
+    li.addEventListener("click", () => void openWikiPage(p.id));
+    li.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openContextMenu(e.clientX, e.clientY, [
+        { label: "Delete", danger: true, onSelect: () => void deleteWikiPageRow(p.id) },
+      ]);
+    });
+    wikiPageList.appendChild(li);
+  }
+}
+
+async function refreshWikiPages() {
+  try {
+    wikiPages = (await api.listWikiPages()).pages;
+  } catch {
+    return;
+  }
+  renderWikiPageList();
+  // Re-resolve the currently-open page's own row (updatedBy/title may have
+  // changed from another device) without touching unsaved edits in progress.
+  if (activeWikiPageId && !wikiDirty) {
+    const fresh = wikiPages.find((p) => p.id === activeWikiPageId);
+    if (fresh) {
+      wikiTitleInput.value = fresh.title;
+      wikiBodyInput.value = fresh.body;
+      wikiUndoBtn.hidden = !fresh.prevBody;
+    }
+  }
+}
+
+async function openWikiPage(id: string) {
+  if (wikiDirty && !confirm("Discard unsaved changes to this page?")) return;
+  let page: WikiPage;
+  try {
+    page = (await api.getWikiPage(id)).page;
+  } catch (err) {
+    wikiStatusEl.textContent = `Couldn't open that page: ${err instanceof Error ? err.message : String(err)}`;
+    return;
+  }
+  activeWikiPageId = id;
+  wikiDirty = false;
+  wikiTitleInput.value = page.title;
+  wikiBodyInput.value = page.body;
+  wikiUndoBtn.hidden = !page.prevBody;
+  wikiStatusEl.textContent = "";
+  wikiEmptyEl.hidden = true;
+  wikiEditorEl.hidden = false;
+  setWikiMode("edit");
+  renderWikiPageList();
+}
+
+function setWikiMode(mode: "edit" | "preview") {
+  for (const b of document.querySelectorAll<HTMLButtonElement>("[data-wikimode]")) {
+    b.classList.toggle("is-active", b.dataset.wikimode === mode);
+  }
+  wikiBodyInput.hidden = mode !== "edit";
+  wikiPreviewEl.hidden = mode !== "preview";
+  if (mode === "preview") wikiPreviewEl.innerHTML = renderMarkdown(wikiBodyInput.value);
+}
+document.querySelectorAll<HTMLButtonElement>("[data-wikimode]").forEach((b) => {
+  b.addEventListener("click", () => setWikiMode(b.dataset.wikimode as "edit" | "preview"));
+});
+
+wikiTitleInput.addEventListener("input", () => {
+  wikiDirty = wikiHasUnsavedChanges();
+});
+wikiBodyInput.addEventListener("input", () => {
+  wikiDirty = wikiHasUnsavedChanges();
+});
+
+wikiNewBtn.addEventListener("click", async () => {
+  if (wikiDirty && !confirm("Discard unsaved changes to this page?")) return;
+  const title = prompt("New page title:");
+  if (!title?.trim()) return;
+  try {
+    const page = (await api.createWikiPage(title.trim())).page;
+    await refreshWikiPages();
+    await openWikiPage(page.id);
+  } catch (err) {
+    wikiStatusEl.textContent = `Couldn't create that page: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+
+wikiSaveBtn.addEventListener("click", async () => {
+  if (!activeWikiPageId) return;
+  wikiStatusEl.textContent = "Saving…";
+  try {
+    const page = (
+      await api.updateWikiPage(activeWikiPageId, { title: wikiTitleInput.value, body: wikiBodyInput.value })
+    ).page;
+    wikiDirty = false;
+    wikiUndoBtn.hidden = !page.prevBody;
+    wikiStatusEl.textContent = `Saved — last edited by ${page.updatedByName}.`;
+    void refreshWikiPages();
+  } catch (err) {
+    wikiStatusEl.textContent = `Couldn't save: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+
+wikiUndoBtn.addEventListener("click", async () => {
+  if (!activeWikiPageId) return;
+  if (!confirm("Undo the last edit to this page?")) return;
+  try {
+    const page = (await api.revertWikiPage(activeWikiPageId)).page;
+    wikiTitleInput.value = page.title;
+    wikiBodyInput.value = page.body;
+    wikiDirty = false;
+    wikiUndoBtn.hidden = !page.prevBody;
+    wikiStatusEl.textContent = "Reverted to the previous version.";
+    if (wikiPreviewEl.hidden === false) wikiPreviewEl.innerHTML = renderMarkdown(page.body);
+    void refreshWikiPages();
+  } catch (err) {
+    wikiStatusEl.textContent = `Couldn't undo: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+
+async function deleteWikiPageRow(id: string) {
+  try {
+    await api.deleteWikiPage(id);
+  } catch (err) {
+    wikiStatusEl.textContent = `Couldn't delete that page: ${err instanceof Error ? err.message : String(err)}`;
+    return;
+  }
+  if (id === activeWikiPageId) {
+    activeWikiPageId = null;
+    wikiDirty = false;
+    wikiEditorEl.hidden = true;
+    wikiEmptyEl.hidden = false;
+  }
+  await refreshWikiPages();
+}
+
+wikiDeleteBtn.addEventListener("click", async () => {
+  if (!activeWikiPageId) return;
+  if (!confirm(`Delete "${wikiTitleInput.value}"? This can't be undone.`)) return;
+  await deleteWikiPageRow(activeWikiPageId);
+});
+
+// ---------- Gallery (family photo library) ----------
+// "shared" (the family gallery) vs "private" (this user's own) — same split
+// as Board. Both the display image and its thumbnail are downscaled
+// client-side (fileToScaledDataUrl) and stored as data URIs; there is no
+// server-side image processing. See docs/DECISIONS.md → "Family gallery".
+const GALLERY_THUMB_EDGE = 360;
+const GALLERY_DISPLAY_EDGE = 1600;
+const galleryGrid = document.getElementById("gallery-grid")!;
+const galleryEmptyEl = document.getElementById("gallery-empty")!;
+const galleryStatusEl = document.getElementById("gallery-status")!;
+const galleryAddBtn = document.getElementById("gallery-add-btn") as HTMLButtonElement;
+const galleryPhotoInput = document.getElementById("gallery-photo-input") as HTMLInputElement;
+const galleryViewerEl = document.getElementById("gallery-viewer")!;
+const galleryViewerImg = document.getElementById("gallery-viewer-img") as HTMLImageElement;
+const galleryViewerCaption = document.getElementById("gallery-viewer-caption") as HTMLInputElement;
+const galleryViewerSaveCaptionBtn = document.getElementById("gallery-viewer-save-caption") as HTMLButtonElement;
+const galleryViewerDeleteBtn = document.getElementById("gallery-viewer-delete") as HTMLButtonElement;
+const galleryViewerCloseBtn = document.getElementById("gallery-viewer-close") as HTMLButtonElement;
+
+let galleryScope: NoteScope = "shared";
+let galleryPhotos: GalleryPhoto[] = [];
+let activeGalleryPhotoId: string | null = null;
+
+function renderGalleryGrid() {
+  galleryGrid.innerHTML = "";
+  galleryEmptyEl.hidden = galleryPhotos.length > 0;
+  for (const p of galleryPhotos) {
+    const li = document.createElement("li");
+    li.className = "gallery-tile";
+    const img = document.createElement("img");
+    img.src = p.thumb;
+    img.alt = p.caption ?? "";
+    img.loading = "lazy";
+    li.appendChild(img);
+    li.addEventListener("click", () => void openGalleryViewer(p.id));
+    galleryGrid.appendChild(li);
+  }
+}
+
+async function refreshGallery() {
+  galleryStatusEl.textContent = "";
+  try {
+    galleryPhotos = (await api.listGalleryPhotos(galleryScope)).photos;
+    renderGalleryGrid();
+  } catch (err) {
+    galleryStatusEl.textContent = `Couldn't load the gallery: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+document.querySelectorAll<HTMLButtonElement>('.seg-toggle [data-gallery]').forEach((btn) => {
+  btn.addEventListener("click", () => {
+    galleryScope = btn.dataset.gallery as NoteScope;
+    document
+      .querySelectorAll<HTMLButtonElement>("[data-gallery]")
+      .forEach((b) => b.classList.toggle("is-active", b === btn));
+    void refreshGallery();
+  });
+});
+
+galleryAddBtn.addEventListener("click", () => galleryPhotoInput.click());
+galleryPhotoInput.addEventListener("change", async () => {
+  const files = Array.from(galleryPhotoInput.files ?? []);
+  galleryPhotoInput.value = "";
+  if (files.length === 0) return;
+  galleryStatusEl.textContent = files.length > 1 ? `Uploading ${files.length} photos…` : "Uploading…";
+  for (const file of files) {
+    try {
+      const [image, thumb] = await Promise.all([
+        fileToScaledDataUrl(file, GALLERY_DISPLAY_EDGE),
+        fileToScaledDataUrl(file, GALLERY_THUMB_EDGE, 0.75),
+      ]);
+      await api.createGalleryPhoto({ scope: galleryScope, image, thumb });
+    } catch (err) {
+      galleryStatusEl.textContent = `Couldn't add ${file.name}: ${err instanceof Error ? err.message : String(err)}`;
+      await refreshGallery();
+      return;
+    }
+  }
+  galleryStatusEl.textContent = "";
+  await refreshGallery();
+});
+
+async function openGalleryViewer(id: string) {
+  try {
+    const photo = (await api.getGalleryPhoto(id)).photo;
+    activeGalleryPhotoId = id;
+    galleryViewerImg.src = photo.image;
+    galleryViewerCaption.value = photo.caption ?? "";
+    galleryViewerEl.hidden = false;
+  } catch (err) {
+    galleryStatusEl.textContent = `Couldn't open that photo: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+function closeGalleryViewer() {
+  galleryViewerEl.hidden = true;
+  activeGalleryPhotoId = null;
+  galleryViewerImg.src = "";
+}
+galleryViewerCloseBtn.addEventListener("click", closeGalleryViewer);
+galleryViewerEl.addEventListener("click", (e) => {
+  if (e.target === galleryViewerEl) closeGalleryViewer();
+});
+galleryViewerSaveCaptionBtn.addEventListener("click", async () => {
+  if (!activeGalleryPhotoId) return;
+  try {
+    await api.updateGalleryPhotoCaption(activeGalleryPhotoId, galleryViewerCaption.value.trim() || null);
+    void refreshGallery();
+  } catch (err) {
+    galleryStatusEl.textContent = `Couldn't save the caption: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+galleryViewerDeleteBtn.addEventListener("click", async () => {
+  if (!activeGalleryPhotoId) return;
+  if (!confirm("Delete this photo? This can't be undone.")) return;
+  try {
+    await api.deleteGalleryPhoto(activeGalleryPhotoId);
+    closeGalleryViewer();
+    void refreshGallery();
+  } catch (err) {
+    galleryStatusEl.textContent = `Couldn't delete that photo: ${err instanceof Error ? err.message : String(err)}`;
+  }
 });
 
 // ---------- side panel (document preview + chat references) ----------

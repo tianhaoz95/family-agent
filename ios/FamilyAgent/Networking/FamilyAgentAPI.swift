@@ -302,6 +302,43 @@ struct FamilyAgentAPI: Sendable {
     }
     func deleteNote(_ id: String) async throws { try await sendVoid("DELETE", "/notes/\(id)") }
 
+    // MARK: - Family wiki
+
+    func listWikiPages() async throws -> [WikiPage] { try await get("/wiki", as: WikiPagesEnvelope.self).pages }
+    func getWikiPage(_ id: String) async throws -> WikiPage { try await get("/wiki/\(id.pathEscaped)", as: WikiPageEnvelope.self).page }
+    func createWikiPage(title: String, body: String = "") async throws -> WikiPage {
+        try await send("POST", "/wiki", body: CreateWikiPageRequest(title: title, body: body), as: WikiPageEnvelope.self).page
+    }
+    func updateWikiPage(_ id: String, title: String? = nil, body: String? = nil) async throws -> WikiPage {
+        try await send("PATCH", "/wiki/\(id.pathEscaped)", body: UpdateWikiPageRequest(title: title, body: body), as: WikiPageEnvelope.self).page
+    }
+    func revertWikiPage(_ id: String) async throws -> WikiPage {
+        try await send("POST", "/wiki/\(id.pathEscaped)/revert", as: WikiPageEnvelope.self).page
+    }
+    func deleteWikiPage(_ id: String) async throws { try await sendVoid("DELETE", "/wiki/\(id.pathEscaped)") }
+
+    // MARK: - Gallery
+
+    func listGalleryPhotos(scope: String) async throws -> [GalleryPhoto] {
+        try await get("/gallery", query: [URLQueryItem(name: "scope", value: scope)], as: GalleryPhotosEnvelope.self).photos
+    }
+    func getGalleryPhoto(_ id: String) async throws -> GalleryPhoto {
+        try await get("/gallery/\(id.pathEscaped)", as: GalleryPhotoEnvelope.self).photo
+    }
+    func createGalleryPhoto(scope: String, image: String, thumb: String, caption: String? = nil) async throws -> GalleryPhoto {
+        try await send(
+            "POST", "/gallery", body: CreateGalleryPhotoRequest(scope: scope, caption: caption, image: image, thumb: thumb),
+            as: GalleryPhotoEnvelope.self
+        ).photo
+    }
+    func updateGalleryPhotoCaption(_ id: String, caption: String?) async throws -> GalleryPhoto {
+        try await send(
+            "PATCH", "/gallery/\(id.pathEscaped)", body: UpdateGalleryPhotoCaptionRequest(caption: caption),
+            as: GalleryPhotoEnvelope.self
+        ).photo
+    }
+    func deleteGalleryPhoto(_ id: String) async throws { try await sendVoid("DELETE", "/gallery/\(id.pathEscaped)") }
+
     // MARK: - Routines
 
     func listRoutines() async throws -> [Routine] { try await get("/routines", as: RoutinesEnvelope.self).routines }

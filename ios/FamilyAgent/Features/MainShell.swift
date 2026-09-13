@@ -1,13 +1,14 @@
 import SwiftUI
 
 enum Destination: String, CaseIterable, Identifiable, Hashable {
-    case chat, messages, events, board, documents, tools, artifacts, routines, skills, connections, vault, family, activity, settings
+    case chat, messages, events, board, wiki, gallery, documents, tools, artifacts, routines, skills, connections, vault, family, activity, settings
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .chat: "Chat"; case .messages: "Messages"; case .events: "Events"
-        case .board: "Board"; case .documents: "Documents"; case .tools: "Tools"
+        case .board: "Board"; case .wiki: "Wiki"; case .gallery: "Gallery"
+        case .documents: "Documents"; case .tools: "Tools"
         case .artifacts: "Artifacts"
         case .routines: "Routines"; case .skills: "Skills"; case .connections: "Connections"
         case .vault: "Vault"; case .family: "Family"; case .activity: "Activity"; case .settings: "Settings"
@@ -19,6 +20,8 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .messages: "bubble.left.and.bubble.right"
         case .events: "checkmark.circle"
         case .board: "square.grid.2x2"
+        case .wiki: "book"
+        case .gallery: "photo.stack"
         case .documents: "doc.text"
         case .tools: "wrench.and.screwdriver"
         case .artifacts: "rectangle.on.rectangle.angled"
@@ -219,6 +222,8 @@ struct MainShell: View {
         case .messages:    MessagesView(initialChannelId: pendingChannelId, onConsumedInitialRoute: { pendingChannelId = nil })
         case .events:      TasksView()
         case .board:       BoardView()
+        case .wiki:        WikiView()
+        case .gallery:     GalleryView()
         case .documents:   DocumentsView()
         case .tools:       ToolsView()
         case .artifacts:   ArtifactsView()

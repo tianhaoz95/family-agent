@@ -932,6 +932,12 @@ export function buildServer(
     // AI-generated full-page artifacts (render_artifact + the Artifacts tab).
     // Clients hide the tab and the open-artifact chip when "off".
     artifacts: config.artifactsEnabled ? "on" : "off",
+    // Family wiki and gallery — always on (no admin toggle, no new trust
+    // boundary), reported anyway so clients gate their nav items off /health
+    // the same way as every other tab, and so a future off-switch needs no
+    // client change. See docs/DECISIONS.md → "Family wiki" / "Family gallery".
+    wiki: true,
+    gallery: true,
     // Which backend answers the chat/planner model — additive, see
     // config.ts. "mistralrs" additionally reports load status/error, since
     // that backend loads a model into this process rather than talking to
@@ -2007,6 +2013,119 @@ export function buildServer(
     const note = req.userStore.deleteStickyNote(id);
     if (!note) return reply.code(404).send({ error: "note not found" });
     return { note };
+  });
+
+  // ---- family wiki ----
+  // Every page is shared — any signed-in user reads/writes any page, no
+  // membership or ownership check. See docs/DECISIONS.md → "Family wiki".
+  // createdBy/updatedBy on the record itself stay user ids (a stable
+  // reference); withWikiNames adds the display names clients actually want
+  // to show, resolved fresh at read time rather than duplicated per-client.
+  const withWikiNames = <T extends { createdBy: string; updatedBy: string }>(page: T) => ({
+    ...page,
+    createdByName: store.getUser(page.createdBy)?.displayName ?? "Someone",
+    updatedByName: store.getUser(page.updatedBy)?.displayName ?? "Someone",
+  });
+  app.get("/wiki", async () => ({ pages: store.listWikiPages().map(withWikiNames) }));
+
+  const CreateWikiBody = z.object({
+    title: z.string().trim().min(1).max(160),
+    body: z.string().max(500_000).default(""),
+  });
+  app.post("/wiki", { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) => {
+    const parsed = CreateWikiBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const page = store.createWikiPage(parsed.data.title, parsed.data.body, req.authUser.id);
+    req.userStore.logActivity("user", "wiki.created", `Created the wiki page "${page.title}"`);
+    return { page: withWikiNames(page) };
+  });
+
+  app.get("/wiki/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const page = store.getWikiPage(id);
+    if (!page) return reply.code(404).send({ error: "page not found" });
+    return { page: withWikiNames(page) };
+  });
+
+  const UpdateWikiBody = z
+    .object({
+      title: z.string().trim().min(1).max(160).optional(),
+      body: z.string().max(500_000).optional(),
+    })
+    .refine((b) => b.title !== undefined || b.body !== undefined, { message: "Nothing to update." });
+  app.patch("/wiki/:id", { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) => {
+    const parsed = UpdateWikiBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const { id } = req.params as { id: string };
+    const page = store.updateWikiPage(id, parsed.data, req.authUser.id);
+    if (!page) return reply.code(404).send({ error: "page not found" });
+    req.userStore.logActivity("user", "wiki.edited", `Edited the wiki page "${page.title}"`);
+    return { page: withWikiNames(page) };
+  });
+
+  app.post("/wiki/:id/revert", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const page = store.revertWikiPage(id, req.authUser.id);
+    if (!page) return reply.code(404).send({ error: "page not found" });
+    req.userStore.logActivity("user", "wiki.reverted", `Reverted the wiki page "${page.title}"`);
+    return { page: withWikiNames(page) };
+  });
+
+  app.delete("/wiki/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const existed = store.getWikiPage(id);
+    if (!store.deleteWikiPage(id) || !existed) return reply.code(404).send({ error: "page not found" });
+    req.userStore.logActivity("user", "wiki.deleted", `Deleted the wiki page "${existed.title}"`);
+    return { deleted: true };
+  });
+
+  // ---- gallery ----
+  // "private" (this user's own) vs "shared" (the family gallery) — same
+  // split, and the same request shape (image as a data: URI in the JSON
+  // body, not multipart), as sticky notes. See docs/DECISIONS.md → "Family
+  // gallery".
+  app.get("/gallery", async (req) => {
+    const scope = (req.query as any)?.scope === "private" ? "private" : "shared";
+    return { photos: req.userStore.listGalleryPhotos(scope) };
+  });
+
+  const galleryImage = z.string().regex(/^data:image\/[a-z+.-]+;base64,/i);
+  const CreateGalleryBody = z.object({
+    scope: z.enum(["shared", "private"]),
+    caption: z.string().trim().max(300).optional(),
+    image: galleryImage,
+    thumb: galleryImage,
+  });
+  // A generous bodyLimit — a display-size image (client-capped, but still a
+  // real photo) plus its thumbnail, both base64.
+  app.post("/gallery", { bodyLimit: 24 * 1024 * 1024 }, async (req, reply) => {
+    const parsed = CreateGalleryBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    return { photo: req.userStore.createGalleryPhoto(parsed.data) };
+  });
+
+  app.get("/gallery/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const photo = req.userStore.getGalleryPhoto(id);
+    if (!photo) return reply.code(404).send({ error: "photo not found" });
+    return { photo };
+  });
+
+  const UpdateGalleryBody = z.object({ caption: z.string().trim().max(300).nullable() });
+  app.patch("/gallery/:id", async (req, reply) => {
+    const parsed = UpdateGalleryBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: firstIssue(parsed.error) });
+    const { id } = req.params as { id: string };
+    const photo = req.userStore.updateGalleryPhotoCaption(id, parsed.data.caption);
+    if (!photo) return reply.code(404).send({ error: "photo not found" });
+    return { photo };
+  });
+
+  app.delete("/gallery/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const photo = req.userStore.deleteGalleryPhoto(id);
+    if (!photo) return reply.code(404).send({ error: "photo not found" });
+    return { photo };
   });
 
   // ---- password vault ----

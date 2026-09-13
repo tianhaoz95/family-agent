@@ -216,6 +216,14 @@ final class AppModel {
     var notes: [StickyNote] = []
     var noteScope = "shared"
 
+    // ---- wiki ----
+    var wikiPages: [WikiPage] = []
+
+    // ---- gallery ----
+    var galleryPhotos: [GalleryPhoto] = []
+    var galleryScope = "shared"
+    var galleryUploading = false
+
     // ---- routines / skills / mcp ----
     var routines: [Routine] = []
     var routineStatus: String?

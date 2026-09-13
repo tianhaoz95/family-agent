@@ -494,6 +494,60 @@ struct UpdateNoteRequest: Codable, Sendable {
     var y: Double? = nil
 }
 
+// MARK: - Wiki (see docs/DECISIONS.md → "Family wiki")
+
+struct WikiPage: Codable, Sendable, Identifiable, Hashable {
+    let id: String
+    var title: String
+    var body: String
+    var prevBody: String? = nil
+    var revision: Int = 0
+    let createdBy: String
+    var updatedBy: String
+    /// Resolved server-side at read time — prefer these for display.
+    var createdByName: String = ""
+    var updatedByName: String = ""
+    let createdAt: String
+    var updatedAt: String
+}
+struct CreateWikiPageRequest: Codable, Sendable { let title: String; var body: String = "" }
+struct UpdateWikiPageRequest: Codable, Sendable { var title: String? = nil; var body: String? = nil }
+struct WikiPagesEnvelope: Codable, Sendable { let pages: [WikiPage] }
+struct WikiPageEnvelope: Codable, Sendable { let page: WikiPage }
+
+// MARK: - Gallery (see docs/DECISIONS.md → "Family gallery")
+
+struct GalleryPhoto: Codable, Sendable, Identifiable, Hashable {
+    let id: String
+    var scope: String
+    var userId: String
+    var caption: String? = nil
+    /// "" in a list response (the grid only needs `thumb`) — populated by
+    /// getGalleryPhoto.
+    var image: String = ""
+    var thumb: String
+    let createdAt: String
+}
+struct CreateGalleryPhotoRequest: Codable, Sendable {
+    let scope: String
+    var caption: String? = nil
+    let image: String
+    let thumb: String
+}
+/// Caption clears to `nil` (e.g. deleting all the text) as legitimately as it
+/// sets one — the server needs an explicit JSON `null`, which `JSONEncoder`
+/// silently omits for a plain `Optional`. Same shape as `RescheduleTaskRequest`.
+struct UpdateGalleryPhotoCaptionRequest: Codable, Sendable {
+    let caption: String?
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(caption, forKey: .caption)
+    }
+    enum CodingKeys: String, CodingKey { case caption }
+}
+struct GalleryPhotosEnvelope: Codable, Sendable { let photos: [GalleryPhoto] }
+struct GalleryPhotoEnvelope: Codable, Sendable { let photo: GalleryPhoto }
+
 // MARK: - Routines
 
 struct RoutineTrigger: Codable, Sendable, Hashable {
