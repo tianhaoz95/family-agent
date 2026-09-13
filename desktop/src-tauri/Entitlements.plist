@@ -5,6 +5,15 @@
   <!-- Microphone (Chat voice input, via the WKWebView). -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- Location (Settings → "Let the assistant use my location", via
+       navigator.geolocation in the WKWebView — see docs/DECISIONS.md →
+       "Caller geolocation"). Hardened runtime silently refuses CoreLocation
+       access without this: no permission prompt is ever shown,
+       getCurrentPosition just fails — which reads as "it isn't even
+       asking" rather than "permission denied", the actual bug this
+       entitlement fixes. -->
+  <key>com.apple.security.personal-information.location</key>
+  <true/>
   <!-- The app spawns a bundled `node` running agent-core; the hardened runtime
        needs these to allow executing a non-notarized helper + JIT. -->
   <key>com.apple.security.cs.allow-jit</key>

@@ -3074,3 +3074,46 @@ Files: `ios/FamilyAgent/App/Notifications.swift` (`BackgroundExecution`),
 `AppModel+Chat.swift` (`sendChat`), `AppModel+Messages.swift`
 (`catchUpChannelsInBackground`), `Features/MainShell.swift` (fires it on
 `scenePhase` → `.background`).
+
+## Desktop location silently failed on macOS: a missing entitlement, not a missing prompt
+
+Reported as: turning on Settings → "Let the assistant use my location" on
+the macOS desktop app immediately failed with "Couldn't get a location —
+check that this browser/OS allows Family Agent to access it," with no
+permission dialog ever appearing — not denied, never asked.
+
+The original geolocation design (see "Caller geolocation" above) assumed
+`navigator.geolocation` in the WKWebView would show the OS's native location
+prompt automatically, the same way it does for the microphone
+(`getUserMedia`) — and that assumption was only ever exercised against a
+real headless Chromium via Playwright for the end-to-end test, not the
+actual signed macOS app. Chromium fully implements the geolocation
+permission API on its own; **WKWebView's version of it goes through
+CoreLocation under the hood**, and the app's hardened-runtime code signing
+(required for notarization — see "Signing and notarizing the macOS app")
+only allows access to a protected resource the entitlements file explicitly
+declares. The microphone worked "for free" because
+`com.apple.security.device.audio-input` was already there from the
+voice-input feature; location had no entitlement at all. Without it, macOS's
+TCC subsystem doesn't even ask — `getCurrentPosition` just fails outright,
+which reads to a user as "it isn't even requesting permission" rather than
+"permission denied," because that's exactly what happens.
+
+Fixed by adding `com.apple.security.personal-information.location` to
+`Entitlements.plist`, alongside the existing microphone entitlement — the
+`NSLocationWhenInUseUsageDescription` Info.plist string added for the
+original feature was already correct and unaffected; it's the entitlement
+that authorizes the app to ask for the resource that string explains, and
+that piece was missing. Windows/WebView2 (Chromium-based, no hardened-runtime
+entitlement system) and Linux/WebKitGTK (the existing generic
+`grant_webview_media_permission` hook already auto-allows every
+`WebKitPermissionRequest`, geolocation included) were never affected — this
+is a macOS-specific gap.
+
+**Unverified against the real signed app in this pass** — entitlements only
+take effect on a properly codesigned + hardened-runtime build (`sign-
+desktop.sh`), which this sandbox can't produce or notarize; a plain
+`tauri dev` run isn't signed the same way and isn't a reliable stand-in.
+Confirming this actually fixes the prompt needs the next real signed release.
+
+Files: `desktop/src-tauri/Entitlements.plist`.
