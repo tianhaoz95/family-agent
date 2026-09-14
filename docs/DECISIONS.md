@@ -1183,6 +1183,33 @@ iOS `Networking/DTOs.swift`, `Networking/FamilyAgentAPI.swift`,
 `Features/Tools/ToolsView.swift`, `Features/Tools/ToolDatabaseView.swift`
 (new), `Features/MainShell.swift`.
 
+### Follow-up: "In chat you can…" on mobile too
+
+Requested directly: show a tool's operations on the Tools screen so a family
+member can tell what the assistant can actually do with it, matching
+desktop's own "In Chat you can" line under each ready server tool
+(`humanizeOperation`/`OP_VERBS` in `main.ts`). The API for this
+(`GET /tools/:id/operations`) already existed and both mobile clients had
+already gained a typed `ToolOperation`/`toolOperations()` client method as
+part of the DB-inspector work just above — this closed the one piece that
+was still unused: hand-porting `humanizeOperation`/`OP_VERBS` to Kotlin and
+Swift verbatim (same verb list, same "see X" fallback for a read op with no
+recognizable verb, same snake_case→spaces last resort) and fetching +
+rendering the phrase list under each ready tool's card. Fetched once per
+tool via a key on `(id, status, revisionCount)` — an improve can change what
+a tool exposes, so the list re-fetches exactly when that could have
+happened, not on every recomposition.
+
+Verified on Android against the real dev server: seeded a tool row plus a
+hand-written `mcp.json` manifest cache (the same file `toolMcp.ts` writes at
+build time) with three operations, confirmed the card rendered "record a
+new family expense with description, amount, and category" / "list recent
+family expenses" / "calculate total spending by category" — the exact
+`OP_VERBS`-driven humanization desktop produces for the same input — then
+deleted the fixture. iOS is build-verified only, same documented Simulator-
+input limitation as everywhere else in this file; the port is a line-for-line
+translation of the same regex and fallback logic already proven on Android.
+
 ## Tools as an agent API (MCP)
 
 A "server" tool used to be a standalone web app the chat agent knew nothing
@@ -1242,8 +1269,9 @@ shows, without opening it.
   `OPERATIONS_SYSTEM` also gained a full recipe-box worked example and an
   explicit "a tool with no add op is a dead end" rule.
 - Not done: MCP **resources** (reads are all `tools/call` for now), Streamable
-  HTTP transport + auth for external clients, Android surfacing of a tool's
-  operations. `docs/STATUS.md` has the shipped scope.
+  HTTP transport + auth for external clients. `docs/STATUS.md` has the shipped
+  scope. (iOS/Android now surface a tool's operations too — see the Tools
+  screen mobile-parity follow-up further down.)
 - Tests: `test/toolMcp.test.ts` (harness MCP endpoint + `/api` + `/__manifest`,
   JSON-RPC error codes, an operation that throws, the legacy `handler.ts`
   fallback, `refreshManifest`/`callOperation` round-trip, `validateInput`,

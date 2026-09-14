@@ -557,6 +557,7 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onIterate = viewModel::iterateTool,
                         onRevert = viewModel::revertTool,
                         onInspectData = { id -> navController.navigate("tooldb/$id") },
+                        onLoadOperations = viewModel::loadToolOperations,
                     )
                 }
                 composable(TOOL_VIEW_ROUTE) { entry ->

@@ -13,9 +13,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.data.Tool
+import app.familyagent.android.data.ToolOperation
 import app.familyagent.android.ui.theme.AppAccents
 
 @Composable
@@ -29,6 +31,7 @@ fun ToolsScreen(
     onIterate: (id: String, instruction: String) -> Unit = { _, _ -> },
     onRevert: (id: String) -> Unit = {},
     onInspectData: (id: String) -> Unit = {},
+    onLoadOperations: suspend (id: String) -> List<ToolOperation> = { emptyList() },
 ) {
     var prompt by remember { mutableStateOf("") }
 
@@ -78,7 +81,7 @@ fun ToolsScreen(
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(tools, key = { it.id }) { tool ->
-                    ToolCard(tool, toolsBaseUrl, onOpen, onDelete, onIterate, onRevert, onInspectData)
+                    ToolCard(tool, toolsBaseUrl, onOpen, onDelete, onIterate, onRevert, onInspectData, onLoadOperations)
                 }
             }
         }
@@ -94,12 +97,27 @@ private fun ToolCard(
     onIterate: (id: String, instruction: String) -> Unit,
     onRevert: (id: String) -> Unit,
     onInspectData: (id: String) -> Unit,
+    onLoadOperations: suspend (id: String) -> List<ToolOperation>,
 ) {
     // Which of "Fix it" / "Improve" is expanded into its inline instruction
     // field, if either — collapsed by default, one at a time (there's only
     // ever one visible per card anyway, but this also resets across recomposition).
     var improving by remember(tool.id) { mutableStateOf(false) }
     val revising = tool.revisionState == "revising"
+
+    // What the chat assistant can actually do with this tool — fetched once
+    // per ready tool (its operations don't change without an improve, which
+    // already re-keys this via tool.revisionCount below).
+    var operationPhrases by remember(tool.id) { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(tool.id, tool.status, tool.revisionCount) {
+        operationPhrases = if (tool.status == "ready") {
+            runCatching { onLoadOperations(tool.id) }.getOrDefault(emptyList())
+                .map { humanizeOperation(it) }
+                .filter { it.isNotBlank() }
+        } else {
+            emptyList()
+        }
+    }
 
     AppCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -218,9 +236,50 @@ private fun ToolCard(
                         color = AppAccents.textSecondary,
                     )
                 }
+                // What the assistant can do with this tool without opening
+                // it — the same operations the chat agent's call_family_tool
+                // sees, in plain language instead of a snake_case name.
+                if (operationPhrases.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "IN CHAT YOU CAN",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = AppAccents.textSecondary,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        operationPhrases.forEach { phrase ->
+                            Text(
+                                "• $phrase",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AppAccents.textSecondary,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+// Turn a tool operation into a plain imperative phrase a family member can
+// read, e.g. { name: "add_loan", description: "Record that someone borrowed
+// an item" } → "record that someone borrowed an item". No snake_case, no
+// jargon. Mirrors desktop's own humanizeOperation/OP_VERBS in main.ts.
+private val OP_VERBS = Regex(
+    "^(record|log|list|show|display|add|create|save|store|mark|remove|delete|update|edit|change|rename|find|" +
+        "look up|search|get|see|view|browse|track|check|set|clear|count|split|calculate|total|note|pick|choose|send)\\b",
+    RegexOption.IGNORE_CASE,
+)
+
+private fun humanizeOperation(o: ToolOperation): String {
+    val d = o.description.trim().removeSuffix(".")
+    if (d.isNotEmpty() && OP_VERBS.containsMatchIn(d)) return d.replaceFirstChar { it.lowercaseChar() }
+    if (d.isNotEmpty()) return "see ${d.replaceFirstChar { it.lowercaseChar() }}"
+    val name = o.name.replace("_", " ").trim()
+    if (name.isEmpty()) return ""
+    return if (o.access == "read") "see $name" else name
 }
 
 /** "Improve" / "Fix it": an inline text field + Send, same shape desktop's

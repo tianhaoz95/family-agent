@@ -526,6 +526,12 @@ class AppViewModel(
     suspend fun runToolDbQuery(id: String, sql: String): Result<ToolDbQueryResult> = apiCall { api.toolDbQuery(id, sql) }
     suspend fun loadToolDbState(id: String, key: String): Result<kotlinx.serialization.json.JsonElement?> = apiCall { api.toolDbState(id, key) }
 
+    /** What this tool exposes to the chat assistant — the Tools list's own
+     *  "In chat you can…" line, same data `tools-agent`'s `call_family_tool`
+     *  reads. Empty for a static tool or one built before this field existed. */
+    suspend fun loadToolOperations(id: String): List<app.familyagent.android.data.ToolOperation> =
+        apiCall { api.toolOperations(id) }.getOrDefault(emptyList())
+
     // ---- artifacts (render_artifact) ----
 
     fun refreshArtifacts() {

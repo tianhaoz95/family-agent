@@ -182,6 +182,13 @@ extension AppModel {
     func runToolDbQuery(_ id: String, sql: String) async throws -> ToolDbQueryResult { try await api.toolDbQuery(id, sql: sql) }
     func loadToolDbState(_ id: String, key: String) async throws -> JSONValue? { try await api.toolDbState(id, key: key) }
 
+    /// What this tool exposes to the chat assistant — the Tools list's own
+    /// "In chat you can…" line, same data `tools-agent`'s `call_family_tool`
+    /// reads. Empty for a static tool or one built before this field existed.
+    func loadToolOperations(_ id: String) async -> [ToolOperation] {
+        (try? await api.toolOperations(id)) ?? []
+    }
+
     // MARK: Artifacts (render_artifact)
 
     func refreshArtifacts() async {

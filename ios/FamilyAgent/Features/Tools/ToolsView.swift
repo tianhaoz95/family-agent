@@ -57,6 +57,10 @@ private struct ToolCard: View {
     @Binding var openURL: IdentURL?
     @Binding var openDbTool: Tool?
     @State private var improving = false
+    // What the chat assistant can actually do with this tool — fetched once
+    // per ready tool (its operations don't change without an improve, which
+    // already re-keys this `.task(id:)` via revisionCount below).
+    @State private var operationPhrases: [String] = []
 
     private var revising: Bool { tool.revisionState == "revising" }
 
@@ -135,9 +139,49 @@ private struct ToolCard: View {
                     Spacer().frame(height: 6)
                     Text("Improved \(tool.revisionCount) time\(tool.revisionCount == 1 ? "" : "s")").appLabelSmall().foregroundStyle(Theme.textMuted)
                 }
+                // What the assistant can do with this tool without opening
+                // it — the same operations the chat agent's call_family_tool
+                // sees, in plain language instead of a snake_case name.
+                if !operationPhrases.isEmpty {
+                    Spacer().frame(height: 10)
+                    Text("IN CHAT YOU CAN").font(.inter(11, .bold)).foregroundStyle(Theme.textMuted)
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(operationPhrases, id: \.self) { phrase in
+                            Text("\u{2022} \(phrase)").appBodySmall().foregroundStyle(Theme.textMuted)
+                        }
+                    }
+                }
             }
         }
+        .task(id: "\(tool.id)-\(tool.status)-\(tool.revisionCount)") {
+            guard tool.status == "ready" else { operationPhrases = []; return }
+            operationPhrases = await model.loadToolOperations(tool.id).map(humanizeOperation).filter { !$0.isEmpty }
+        }
     }
+}
+
+/// Turn a tool operation into a plain imperative phrase a family member can
+/// read, e.g. { name: "add_loan", description: "Record that someone
+/// borrowed an item" } \u{2192} "record that someone borrowed an item". No
+/// snake_case, no jargon. Mirrors desktop's own humanizeOperation/OP_VERBS
+/// in main.ts.
+private let opVerbsRegex = try? NSRegularExpression(
+    pattern: "^(record|log|list|show|display|add|create|save|store|mark|remove|delete|update|edit|change|rename|find|"
+        + "look up|search|get|see|view|browse|track|check|set|clear|count|split|calculate|total|note|pick|choose|send)\\b",
+    options: [.caseInsensitive]
+)
+
+private func humanizeOperation(_ o: ToolOperation) -> String {
+    var d = o.description.trimmingCharacters(in: .whitespaces)
+    if d.hasSuffix(".") { d.removeLast() }
+    func lowercasedFirst(_ s: String) -> String { s.isEmpty ? s : s.prefix(1).lowercased() + s.dropFirst() }
+    if !d.isEmpty, let regex = opVerbsRegex, regex.firstMatch(in: d, range: NSRange(d.startIndex..., in: d)) != nil {
+        return lowercasedFirst(d)
+    }
+    if !d.isEmpty { return "see \(lowercasedFirst(d))" }
+    let name = o.name.replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespaces)
+    if name.isEmpty { return "" }
+    return o.access == "read" ? "see \(name)" : name
 }
 
 /// "Improve" / "Fix it": an inline text field + Send, same shape desktop's own instruction box has.
