@@ -157,11 +157,97 @@ data class Tool(
     val status: String,
     val error: String? = null,
     val createdAt: String,
+    val updatedAt: String? = null,
+    /** How many times the tool has been improved. */
+    val revisionCount: Int = 0,
+    /** null = idle · "revising" = an improve is running · else = why the last improve failed. */
+    val revisionState: String? = null,
+    /** True when there's a snapshot to roll back to (one level). */
+    val canRevert: Boolean = false,
     val path: String? = null,
 )
 
 @Serializable
 data class ToolsResponse(val tools: List<Tool>)
+
+@Serializable
+data class ToolResponse(val tool: Tool)
+
+@Serializable
+data class IterateToolRequest(val instruction: String)
+
+@Serializable
+data class IterateToolResponse(val improving: Boolean, val instruction: String)
+
+@Serializable
+data class RevertToolResponse(val tool: Tool, val note: String)
+
+@Serializable
+data class ToolOperation(
+    val name: String,
+    val description: String,
+    val access: String,
+    val inputSchema: kotlinx.serialization.json.JsonElement? = null,
+)
+
+@Serializable
+data class ToolOperationsResponse(val operations: List<ToolOperation> = emptyList())
+
+// ---- tool database inspector (server-kind tools only; static tools show
+// their /__state blobs through the same overview instead) ----
+
+@Serializable
+data class ToolDbColumn(
+    val name: String,
+    val type: String,
+    val pk: Boolean,
+    val notNull: Boolean,
+)
+
+@Serializable
+data class ToolDbTable(
+    val name: String,
+    val type: String,
+    val rowCount: Int? = null,
+    val columns: List<ToolDbColumn> = emptyList(),
+    val sql: String? = null,
+)
+
+@Serializable
+data class ToolDbStateEntry(val key: String, val bytes: Int)
+
+@Serializable
+data class ToolDbOverview(
+    val kind: String,
+    val exists: Boolean,
+    val sizeBytes: Int? = null,
+    val tables: List<ToolDbTable> = emptyList(),
+    val stateEntries: List<ToolDbStateEntry> = emptyList(),
+)
+
+@Serializable
+data class ToolDbRowPage(
+    val table: String,
+    val columns: List<ToolDbColumn>,
+    val rows: List<Map<String, kotlinx.serialization.json.JsonElement>>,
+    val total: Int,
+    val limit: Int,
+    val offset: Int,
+)
+
+@Serializable
+data class ToolDbQueryRequest(val sql: String)
+
+@Serializable
+data class ToolDbQueryResult(
+    val columns: List<String>,
+    val rows: List<Map<String, kotlinx.serialization.json.JsonElement>>,
+    val rowCount: Int,
+    val truncated: Boolean,
+)
+
+@Serializable
+data class ToolDbStateValueResponse(val key: String, val value: kotlinx.serialization.json.JsonElement? = null)
 
 // ---- artifacts (render_artifact) ----
 

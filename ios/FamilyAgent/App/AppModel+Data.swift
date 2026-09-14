@@ -136,6 +136,52 @@ extension AppModel {
         Task { _ = await perform { try await api.deleteTool(id) }; await refreshTools() }
     }
 
+    /// "Improve" (a working tool) / "Fix it" (a failed one) — same instruction
+    /// flow desktop's Tools page already has. Polls the same way [buildTool]
+    /// does, just watching `revisionState == "revising"` instead of
+    /// `status == "building"`.
+    func iterateTool(_ id: String, instruction: String) {
+        guard !instruction.isEmpty else { return }
+        Task {
+            guard await perform({ try await api.iterateTool(id, instruction: instruction) }) != nil else {
+                toolStatus = "Couldn't start."
+                return
+            }
+            toolStatus = "Improving — it'll update in a minute."
+            await refreshActivity()
+            for _ in 0..<90 {
+                try? await Task.sleep(for: .seconds(4))
+                guard let t = await perform({ try await api.listTools() }) else { continue }
+                tools = t
+                if !t.contains(where: { $0.status == "building" || $0.revisionState == "revising" }) { return }
+            }
+        }
+    }
+
+    /// Roll back to the snapshot from before the last improve (one level).
+    func revertTool(_ id: String) {
+        Task {
+            do {
+                let r = try await api.revertTool(id)
+                toolStatus = r.note
+                if let i = tools.firstIndex(where: { $0.id == id }) { tools[i] = r.tool }
+            } catch {
+                toolStatus = "Couldn't undo: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    // MARK: Tool database inspector (read-only) — state lives in the view
+    // itself, not AppModel, since it's transient per-visit browsing rather
+    // than something worth keeping around after the user navigates away.
+    func loadTool(_ id: String) async -> Tool? { await perform { try await api.getTool(id) } }
+    func loadToolDb(_ id: String) async throws -> ToolDbOverview { try await api.toolDb(id) }
+    func loadToolDbRows(_ id: String, table: String, limit: Int? = nil, offset: Int? = nil, orderBy: String? = nil, dir: String? = nil) async throws -> ToolDbRowPage {
+        try await api.toolDbRows(id, table: table, limit: limit, offset: offset, orderBy: orderBy, dir: dir)
+    }
+    func runToolDbQuery(_ id: String, sql: String) async throws -> ToolDbQueryResult { try await api.toolDbQuery(id, sql: sql) }
+    func loadToolDbState(_ id: String, key: String) async throws -> JSONValue? { try await api.toolDbState(id, key: key) }
+
     // MARK: Artifacts (render_artifact)
 
     func refreshArtifacts() async {

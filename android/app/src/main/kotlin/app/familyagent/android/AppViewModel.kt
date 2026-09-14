@@ -39,6 +39,9 @@ import app.familyagent.android.data.WikiPage
 import app.familyagent.android.data.GalleryPhoto
 import app.familyagent.android.data.Task
 import app.familyagent.android.data.Tool
+import app.familyagent.android.data.ToolDbOverview
+import app.familyagent.android.data.ToolDbRowPage
+import app.familyagent.android.data.ToolDbQueryResult
 import app.familyagent.android.data.UnauthorizedException
 import app.familyagent.android.data.User
 import app.familyagent.android.data.CreateVaultEntryRequest
@@ -479,6 +482,49 @@ class AppViewModel(
             apiCall { api.deleteTool(id) }.onSuccess { refreshTools() }
         }
     }
+
+    /** "Improve" (a working tool) / "Fix it" (a failed one) — same instruction
+     *  flow desktop's Tools page already has. Polls the same way [buildTool]
+     *  does, just watching `revisionState == "revising"` instead of
+     *  `status == "building"`. */
+    fun iterateTool(id: String, instruction: String) {
+        if (instruction.isBlank()) return
+        viewModelScope.launch {
+            apiCall { api.iterateTool(id, instruction) }
+                .onSuccess {
+                    _state.value = _state.value.copy(toolStatus = "Improving — it'll update in a minute.")
+                    refreshActivity()
+                    repeat(90) {
+                        delay(4000)
+                        val tools = apiCall { api.listTools() }.getOrNull() ?: return@repeat
+                        _state.value = _state.value.copy(tools = tools)
+                        if (tools.none { t -> t.status == "building" || t.revisionState == "revising" }) return@launch
+                    }
+                }
+                .onFailure { _state.value = _state.value.copy(toolStatus = "Couldn't start: ${it.message}") }
+        }
+    }
+
+    /** Roll back to the snapshot from before the last improve (one level). */
+    fun revertTool(id: String) {
+        viewModelScope.launch {
+            apiCall { api.revertTool(id) }
+                .onSuccess { _state.value = _state.value.copy(toolStatus = it.note, tools = _state.value.tools.map { t -> if (t.id == id) it.tool else t }) }
+                .onFailure { _state.value = _state.value.copy(toolStatus = "Couldn't undo: ${it.message}") }
+        }
+    }
+
+    // ---- tool database inspector (read-only) — state lives in the screen
+    // itself (like WikiPageScreen's `load` pattern), not AppUiState, since
+    // it's transient per-visit browsing rather than something worth keeping
+    // around after the user navigates away. ----
+    suspend fun loadTool(id: String): Tool? = apiCall { api.getTool(id) }.getOrNull()
+    suspend fun loadToolDb(id: String): Result<ToolDbOverview> = apiCall { api.toolDb(id) }
+    suspend fun loadToolDbRows(
+        id: String, table: String, limit: Int? = null, offset: Int? = null, orderBy: String? = null, dir: String? = null,
+    ): Result<ToolDbRowPage> = apiCall { api.toolDbRows(id, table, limit, offset, orderBy, dir) }
+    suspend fun runToolDbQuery(id: String, sql: String): Result<ToolDbQueryResult> = apiCall { api.toolDbQuery(id, sql) }
+    suspend fun loadToolDbState(id: String, key: String): Result<kotlinx.serialization.json.JsonElement?> = apiCall { api.toolDbState(id, key) }
 
     // ---- artifacts (render_artifact) ----
 

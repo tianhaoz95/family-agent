@@ -527,13 +527,60 @@ class FamilyAgentApi(
 
     suspend fun listTools(): List<Tool> = json.decodeFromString<ToolsResponse>(get("/tools")).tools
 
+    suspend fun getTool(id: String): Tool = json.decodeFromString<ToolResponse>(get("/tools/${id.encodeQuery()}")).tool
+
     suspend fun buildTool(prompt: String) {
         send("POST", "/tools", json.encodeToString(BuildToolRequest(prompt)))
     }
 
+    /** Ask the builder to change an existing tool — same "Improve"/"Fix it"
+     *  flow desktop's Tools page already has. */
+    suspend fun iterateTool(id: String, instruction: String): IterateToolResponse =
+        json.decodeFromString(send("POST", "/tools/${id.encodeQuery()}/iterate", json.encodeToString(IterateToolRequest(instruction))))
+
+    /** Roll back to the snapshot from before the last improve (one level). */
+    suspend fun revertTool(id: String): RevertToolResponse =
+        json.decodeFromString(sendNoBody("POST", "/tools/${id.encodeQuery()}/revert"))
+
     suspend fun deleteTool(id: String) {
         sendNoBody("DELETE", "/tools/$id")
     }
+
+    /** What this tool exposes to the chat assistant — empty for a static
+     *  tool, or a server tool built before this field existed. */
+    suspend fun toolOperations(id: String): List<ToolOperation> =
+        json.decodeFromString<ToolOperationsResponse>(get("/tools/${id.encodeQuery()}/operations")).operations
+
+    // ---- tool database inspector (read-only) ----
+
+    suspend fun toolDb(id: String): ToolDbOverview = json.decodeFromString(get("/tools/${id.encodeQuery()}/db"))
+
+    suspend fun toolDbRows(
+        id: String,
+        table: String,
+        limit: Int? = null,
+        offset: Int? = null,
+        orderBy: String? = null,
+        dir: String? = null,
+    ): ToolDbRowPage {
+        val params = buildString {
+            append("table=").append(table.encodeQuery())
+            limit?.let { append("&limit=").append(it) }
+            offset?.let { append("&offset=").append(it) }
+            orderBy?.let { append("&orderBy=").append(it.encodeQuery()) }
+            dir?.let { append("&dir=").append(it.encodeQuery()) }
+        }
+        return json.decodeFromString(get("/tools/${id.encodeQuery()}/db/rows?$params"))
+    }
+
+    /** A single read-only statement (SELECT/WITH/EXPLAIN/PRAGMA only —
+     *  everything else is rejected server-side). */
+    suspend fun toolDbQuery(id: String, sql: String): ToolDbQueryResult =
+        json.decodeFromString(send("POST", "/tools/${id.encodeQuery()}/db/query", json.encodeToString(ToolDbQueryRequest(sql))))
+
+    /** A static (non-server) tool's saved `/__state` blob, by key. */
+    suspend fun toolDbState(id: String, key: String): kotlinx.serialization.json.JsonElement? =
+        json.decodeFromString<ToolDbStateValueResponse>(get("/tools/${id.encodeQuery()}/db/state?key=${key.encodeQuery()}")).value
 
     // ---- artifacts (render_artifact) ----
 

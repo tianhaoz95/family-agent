@@ -97,6 +97,7 @@ import app.familyagent.android.ui.SettingsScreen
 import app.familyagent.android.ui.SkillsScreen
 import app.familyagent.android.ui.StatusDot
 import app.familyagent.android.ui.TasksScreen
+import app.familyagent.android.ui.ToolDatabaseScreen
 import app.familyagent.android.ui.ToolWebViewScreen
 import app.familyagent.android.ui.ToolsScreen
 import app.familyagent.android.ui.theme.AppAccents
@@ -123,6 +124,7 @@ private enum class Destination(val route: String, val label: String, val icon: a
 }
 
 private const val TOOL_VIEW_ROUTE = "toolview/{url}"
+private const val TOOL_DB_ROUTE = "tooldb/{id}"
 private const val ARTIFACT_VIEW_ROUTE = "artifactview/{id}"
 private const val WIKI_PAGE_ROUTE = "wikipage/{id}"
 private const val GALLERY_PHOTO_ROUTE = "galleryphoto/{id}"
@@ -348,7 +350,8 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
             currentDestination?.route != CONVERSATION_ROUTE &&
             currentDestination?.route != ARTIFACT_VIEW_ROUTE &&
             currentDestination?.route != WIKI_PAGE_ROUTE &&
-            currentDestination?.route != GALLERY_PHOTO_ROUTE
+            currentDestination?.route != GALLERY_PHOTO_ROUTE &&
+            currentDestination?.route != TOOL_DB_ROUTE
         Scaffold(
             containerColor = Color.Transparent,
         ) { padding ->
@@ -551,11 +554,28 @@ fun FamilyAgentApp(viewModel: AppViewModel) {
                         onBuild = viewModel::buildTool,
                         onDelete = viewModel::deleteTool,
                         onOpen = { url -> navController.navigate("toolview/" + android.net.Uri.encode(url)) },
+                        onIterate = viewModel::iterateTool,
+                        onRevert = viewModel::revertTool,
+                        onInspectData = { id -> navController.navigate("tooldb/$id") },
                     )
                 }
                 composable(TOOL_VIEW_ROUTE) { entry ->
                     val url = android.net.Uri.decode(entry.arguments?.getString("url") ?: "")
                     ToolWebViewScreen(url = url, onClose = { navController.popBackStack() })
+                }
+                composable(TOOL_DB_ROUTE) { entry ->
+                    val id = entry.arguments?.getString("id") ?: ""
+                    ToolDatabaseScreen(
+                        toolId = id,
+                        loadTool = viewModel::loadTool,
+                        loadOverview = { toolId -> viewModel.loadToolDb(toolId) },
+                        loadRows = { toolId, table, limit, offset, orderBy, dir ->
+                            viewModel.loadToolDbRows(toolId, table, limit, offset, orderBy, dir)
+                        },
+                        runQuery = { toolId, sql -> viewModel.runToolDbQuery(toolId, sql) },
+                        loadStateValue = { toolId, key -> viewModel.loadToolDbState(toolId, key) },
+                        onClose = { navController.popBackStack() },
+                    )
                 }
                 composable(Destination.Artifacts.route) {
                     ArtifactsScreen(

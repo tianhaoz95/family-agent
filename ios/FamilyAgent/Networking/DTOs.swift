@@ -272,10 +272,70 @@ struct Tool: Codable, Sendable, Identifiable, Hashable {
     let status: String
     var error: String?
     let createdAt: String
+    var updatedAt: String?
+    /// How many times the tool has been improved.
+    var revisionCount: Int = 0
+    /// nil = idle · "revising" = an improve is running · else = why the last improve failed.
+    var revisionState: String?
+    /// True when there's a snapshot to roll back to (one level).
+    var canRevert: Bool = false
     var path: String?
 }
 struct ToolsResponse: Codable, Sendable { let tools: [Tool] }
+struct ToolResponse: Codable, Sendable { let tool: Tool }
 struct BuildToolRequest: Codable, Sendable { let prompt: String }
+struct IterateToolRequest: Codable, Sendable { let instruction: String }
+struct IterateToolResponse: Codable, Sendable { let improving: Bool; let instruction: String }
+struct RevertToolResponse: Codable, Sendable { let tool: Tool; let note: String }
+
+struct ToolOperation: Codable, Sendable {
+    let name: String
+    let description: String
+    let access: String
+    var inputSchema: JSONValue?
+}
+struct ToolOperationsResponse: Codable, Sendable { var operations: [ToolOperation] = [] }
+
+// MARK: - Tool database inspector (server-kind tools only; static tools show
+// their /__state blobs through the same overview instead)
+
+struct ToolDbColumn: Codable, Sendable, Hashable {
+    let name: String
+    let type: String
+    let pk: Bool
+    let notNull: Bool
+}
+struct ToolDbTable: Codable, Sendable, Hashable {
+    let name: String
+    let type: String
+    var rowCount: Int?
+    var columns: [ToolDbColumn] = []
+    var sql: String?
+}
+struct ToolDbStateEntry: Codable, Sendable, Hashable { let key: String; let bytes: Int }
+struct ToolDbOverview: Codable, Sendable {
+    let kind: String
+    let exists: Bool
+    var sizeBytes: Int?
+    var tables: [ToolDbTable] = []
+    var stateEntries: [ToolDbStateEntry] = []
+}
+struct ToolDbRowPage: Codable, Sendable {
+    let table: String
+    let columns: [ToolDbColumn]
+    let rows: [[String: JSONValue]]
+    let total: Int
+    let limit: Int
+    let offset: Int
+}
+struct ToolDbQueryRequest: Codable, Sendable { let sql: String }
+struct ToolDbQueryResult: Codable, Sendable {
+    let columns: [String]
+    let rows: [[String: JSONValue]]
+    let rowCount: Int
+    let truncated: Bool
+}
+struct ToolDbStateValueResponse: Codable, Sendable { let key: String; var value: JSONValue? }
 
 // MARK: - Chat
 

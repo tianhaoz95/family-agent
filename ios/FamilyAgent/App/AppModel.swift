@@ -218,6 +218,8 @@ final class AppModel {
     var artifactViewerPushed = false
     // Same idea, for WikiPageEditorView.
     var wikiPageOpen = false
+    // Same idea, for ToolDatabaseView.
+    var toolDbOpen = false
 
     // ---- family chat + board ----
     var familyMembers: [FamilyMember] = []

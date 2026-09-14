@@ -76,7 +76,7 @@ struct MainShell: View {
     /// Hidden inside a conversation, or a pushed artifact/wiki-page viewer
     /// (each has its own back control) — matches Android.
     private var showMenuButton: Bool {
-        model.activeChannel == nil && !model.artifactViewerPushed && !model.wikiPageOpen
+        model.activeChannel == nil && !model.artifactViewerPushed && !model.wikiPageOpen && !model.toolDbOpen
     }
 
     var body: some View {

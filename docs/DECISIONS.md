@@ -1121,12 +1121,67 @@ is no longer a black box you can only reach by using the tool's own UI.
   input above it. Static tools: the rail lists the saved `__state` keys
   (`__ls` shown as "browser storage") and the pane shows pretty-printed JSON;
   the query box is hidden. An "Inspect data" button appears on each ready tool
-  in the Tools list. Android was left out for now — the routes are there when
-  it's wanted.
+  in the Tools list.
 - Covered in `test/server.routes.test.ts`: schema/row-count shape, pagination
   + sort, `exists:false` for a fresh server tool, static-tool `stateEntries` +
   `/db/state` round-trip, the write-refusal of the query route (and that the
   blocked write didn't land), and the cross-user 404s.
+
+### Follow-up: iOS and Android had no way to reach any of this
+
+Reported as a screenshot of the iOS Tools screen: no "Inspect data", no
+"Improve"/"Fix it", no "Undo last change" — every route above (`iterate`,
+`revert`, `db`, `db/rows`, `db/query`, `db/state`, `operations`) was
+desktop-only client-side. The API itself needed nothing new; this was two
+client rewrites of the Tools screen plus one new screen each, mirroring
+desktop's shapes as closely as each platform's own idioms allow.
+
+- **Tool** gained `updatedAt`/`revisionCount`/`revisionState`/`canRevert` on
+  both clients (previously absent — there was no UI that needed them). The
+  DB inspector's row/query values travel as `kotlinx.serialization.json.JsonElement`
+  (Android) / the existing `JSONValue` enum already used for `ToolStep.input`
+  (iOS) — a table's columns are arbitrary and untyped from the client's point
+  of view, so a dynamic-JSON row shape was the only honest option, same
+  reasoning as the tool-call-arguments plumbing elsewhere in both clients.
+- **"Improve"/"Fix it" is an inline field that expands in place**, on both
+  platforms — a `Chip`/`OutlinedTextField`-then-`TextField` pattern matching
+  desktop's own inline `<form>`, rather than a separate screen or an alert
+  dialog, since the instruction is usually a short phrase typed once. Submitting
+  hands off to the exact same polling shape `buildTool` already used (watch
+  `tools` for `status == "building" || revisionState == "revising"`), just
+  reused for a second condition instead of a second poll loop.
+- **The DB inspector view mirrors desktop's tables-rail + query-box + paged
+  grid, adapted to a phone-width screen**: the table list becomes a
+  horizontally-scrollable chip row instead of a sidebar, and the row grid is
+  a horizontally-*and*-vertically scrollable fixed-column-width table (130pt/dp
+  per column) rather than a fluid one, since an arbitrary tool's columns can't
+  be pre-sized to content. Both clients reuse the exact `{__blob,bytes,preview}`
+  / NULL / plain-value cell rendering desktop's `renderDbGrid` established.
+  Pushed (never a sheet) on iOS, mirroring `WikiPageEditorView`/
+  `ArtifactViewerView` — a new `AppModel.toolDbOpen` flag added to
+  `MainShell`'s existing "hide the floating menu button" list. Android pushes
+  a `tooldb/{id}` route added to the same by-route exclusion list
+  `MainActivity.kt` already keeps for the wiki/artifact viewers.
+- **Verified end-to-end on Android against the real dev server**: seeded a
+  fake "server"-kind tool row plus a real `tool.db` with sample data directly
+  in the throwaway SQLite database (no live Ollama build needed to test the
+  UI), confirmed on a live emulator — the tool card's new buttons, the DB
+  inspector opening to real seeded rows with correct pagination, table
+  switching, and the Improve field expanding — then deleted the fixture via
+  `DELETE /tools/:id`. iOS is build-verified only (including the
+  warning-checking CI-matching build) — this sandbox's Simulator can't
+  receive synthetic taps, the same documented limitation as every other iOS
+  interactive-verification gap in this file; the wire format and logic are
+  identical to the Android implementation already confirmed against the
+  live server.
+
+Files: Android `data/ApiModels.kt` (`Tool` additions, `ToolDbOverview` etc.),
+`data/FamilyAgentApi.kt`, `AppViewModel.kt`, `ui/ToolsScreen.kt`,
+`ui/ToolDatabaseScreen.kt` (new), `MainActivity.kt` (`tooldb/{id}` route).
+iOS `Networking/DTOs.swift`, `Networking/FamilyAgentAPI.swift`,
+`App/AppModel+Data.swift`, `App/AppModel.swift` (`toolDbOpen`),
+`Features/Tools/ToolsView.swift`, `Features/Tools/ToolDatabaseView.swift`
+(new), `Features/MainShell.swift`.
 
 ## Tools as an agent API (MCP)
 

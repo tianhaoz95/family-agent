@@ -415,8 +415,40 @@ struct FamilyAgentAPI: Sendable {
     // MARK: - Tools
 
     func listTools() async throws -> [Tool] { try await get("/tools", as: ToolsResponse.self).tools }
+    func getTool(_ id: String) async throws -> Tool { try await get("/tools/\(id)", as: ToolResponse.self).tool }
     func buildTool(_ prompt: String) async throws { try await sendVoid("POST", "/tools", body: BuildToolRequest(prompt: prompt)) }
+    /// Ask the builder to change an existing tool — same "Improve"/"Fix it" flow desktop's Tools page already has.
+    func iterateTool(_ id: String, instruction: String) async throws -> IterateToolResponse {
+        try await send("POST", "/tools/\(id)/iterate", body: IterateToolRequest(instruction: instruction))
+    }
+    /// Roll back to the snapshot from before the last improve (one level).
+    func revertTool(_ id: String) async throws -> RevertToolResponse { try await send("POST", "/tools/\(id)/revert") }
     func deleteTool(_ id: String) async throws { try await sendVoid("DELETE", "/tools/\(id)") }
+    /// What this tool exposes to the chat assistant — empty for a static tool,
+    /// or a server tool built before this field existed.
+    func toolOperations(_ id: String) async throws -> [ToolOperation] {
+        try await get("/tools/\(id)/operations", as: ToolOperationsResponse.self).operations
+    }
+
+    // MARK: - Tool database inspector (read-only)
+
+    func toolDb(_ id: String) async throws -> ToolDbOverview { try await get("/tools/\(id)/db") }
+    func toolDbRows(_ id: String, table: String, limit: Int? = nil, offset: Int? = nil, orderBy: String? = nil, dir: String? = nil) async throws -> ToolDbRowPage {
+        var q = [URLQueryItem(name: "table", value: table)]
+        if let limit { q.append(URLQueryItem(name: "limit", value: String(limit))) }
+        if let offset { q.append(URLQueryItem(name: "offset", value: String(offset))) }
+        if let orderBy { q.append(URLQueryItem(name: "orderBy", value: orderBy)) }
+        if let dir { q.append(URLQueryItem(name: "dir", value: dir)) }
+        return try await get("/tools/\(id)/db/rows", query: q)
+    }
+    /// A single read-only statement (SELECT/WITH/EXPLAIN/PRAGMA only — everything else is rejected server-side).
+    func toolDbQuery(_ id: String, sql: String) async throws -> ToolDbQueryResult {
+        try await send("POST", "/tools/\(id)/db/query", body: ToolDbQueryRequest(sql: sql))
+    }
+    /// A static (non-server) tool's saved `/__state` blob, by key.
+    func toolDbState(_ id: String, key: String) async throws -> JSONValue? {
+        try await get("/tools/\(id)/db/state", query: [URLQueryItem(name: "key", value: key)], as: ToolDbStateValueResponse.self).value
+    }
 
     // MARK: - Artifacts (render_artifact)
 
