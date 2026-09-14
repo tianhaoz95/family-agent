@@ -161,6 +161,10 @@ final class AppModel {
     var useLocation: Bool = SettingsStore().useLocation {
         didSet { settings.useLocation = useLocation }
     }
+    /// Settings → "Watch companion" kill switch. Device-local, on by default.
+    var watchRelayEnabled: Bool = SettingsStore().watchRelayEnabled {
+        didSet { settings.watchRelayEnabled = watchRelayEnabled }
+    }
 
     // ---- "reply is ready" notifications: not persisted, just point-in-time
     // state read at the moment a reply lands, to skip a redundant

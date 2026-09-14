@@ -20,6 +20,13 @@ private val AUTO_READ_KEY = booleanPreferencesKey("auto_read_replies")
 private val MIC_ON_LEFT_KEY = booleanPreferencesKey("mic_button_on_left")
 private val NOTIFY_ON_REPLY_KEY = booleanPreferencesKey("notify_on_reply")
 private val USE_LOCATION_KEY = booleanPreferencesKey("use_location")
+// Settings → "Watch companion" kill switch — see PhoneWearListenerService,
+// which reads this fresh on every message rather than caching it, same as
+// every other setting a background-woken service reads. On by default: a
+// signed-in phone is the only thing that makes a watch companion request
+// meaningful in the first place, so there's no separate "is the watch
+// paired" gate to layer this under.
+private val WATCH_RELAY_ENABLED_KEY = booleanPreferencesKey("watch_relay_enabled")
 // Which chat session the Wear OS companion currently has open — read/written
 // by PhoneWearListenerService, which has no Activity/ViewModel around to hold
 // this as a plain field between separate wake-ups. See wear/WearProtocol.kt.
@@ -131,6 +138,15 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setUseLocation(on: Boolean) {
         context.dataStore.edit { it[USE_LOCATION_KEY] = on }
+    }
+
+    /** Whether the Wear OS companion app may relay chat through this phone
+     *  at all — Settings → "Watch companion". Device-local, survives
+     *  sign-out (matches the other device-local toggles above). */
+    val watchRelayEnabled = context.dataStore.data.map { it[WATCH_RELAY_ENABLED_KEY] ?: true }
+
+    suspend fun setWatchRelayEnabled(on: Boolean) {
+        context.dataStore.edit { it[WATCH_RELAY_ENABLED_KEY] = on }
     }
 
     suspend fun saveSession(serverUrl: String, token: String, displayName: String, serverName: String) {

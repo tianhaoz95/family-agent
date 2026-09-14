@@ -30,6 +30,15 @@ object WearPaths {
     /** Channel, watch -> phone: raw 16kHz mono WAV bytes, same format the
      *  phone's own mic composer already records and uploads. */
     const val SEND_VOICE = "/wear/send_voice"
+    /** Message, watch -> phone: empty payload. Ask the phone to push
+     *  [SESSIONS] again right now. The Data Layer's "last write wins"
+     *  catch-up read only ever finds a [SESSIONS] DataItem if the phone has
+     *  already pushed one — which, before this, only happened as a side
+     *  effect of opening/sending from the watch. A watch that's never done
+     *  either (the common first-launch case, with real chat history already
+     *  sitting on the phone) had nothing to catch up to and saw an
+     *  empty list. */
+    const val LIST_SESSIONS = "/wear/list_sessions"
 }
 
 @Serializable

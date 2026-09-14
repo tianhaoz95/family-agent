@@ -31,5 +31,10 @@ struct SessionsView: View {
             }
         }
         .navigationTitle("Family Agent")
+        // Re-ask every time this screen is shown, not just once at app
+        // launch — e.g. the phone wasn't reachable yet on cold start, or the
+        // watch is coming back from Chat after new sessions were created
+        // elsewhere. See WatchPath.listSessions's doc comment.
+        .task { bridge.refreshSessions() }
     }
 }

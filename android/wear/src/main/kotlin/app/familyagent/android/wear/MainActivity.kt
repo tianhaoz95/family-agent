@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -105,6 +106,11 @@ private fun SessionsScreen(bridge: WearBridge, onOpenSession: (String) -> Unit) 
     val phoneReachable by bridge.phoneReachable.collectAsState()
     val scope = rememberCoroutineScope()
     val listState = rememberScalingLazyListState()
+
+    // Re-ask every time this screen is shown, not just once at app start —
+    // e.g. the phone wasn't reachable yet on cold start, or the watch is
+    // coming back from Chat after new sessions were created elsewhere.
+    LaunchedEffect(Unit) { bridge.refreshSessions() }
 
     Scaffold(
         timeText = { TimeText() },

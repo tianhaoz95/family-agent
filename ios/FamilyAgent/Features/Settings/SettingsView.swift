@@ -1,4 +1,5 @@
 import SwiftUI
+import WatchConnectivity
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -108,7 +109,26 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, 4)
 
+                section("Watch companion")
+                WatchCompanionSection()
+
                 if let s = model.serverSettings {
+                    section("History & activity")
+                    Text("How much of your own chat history and activity log this server keeps. This is personal to your account \u{2014} it doesn\u{2019}t affect anyone else\u{2019}s.")
+                        .appLabelSmall().foregroundStyle(Theme.textMuted)
+                    Spacer().frame(height: 10)
+                    RetentionRow(
+                        label: "Chat sessions", unitWord: "sessions",
+                        mode: s.chatRetentionMode, value: s.chatRetentionValue,
+                        onSave: { mode, value in model.setChatRetention(mode: mode, value: value) }
+                    )
+                    Spacer().frame(height: 14)
+                    RetentionRow(
+                        label: "Activity log", unitWord: "entries",
+                        mode: s.activityRetentionMode, value: s.activityRetentionValue,
+                        onSave: { mode, value in model.setActivityRetention(mode: mode, value: value) }
+                    )
+
                     section("Assistant")
                     Toggle(isOn: Binding(get: { s.cardsEnabled }, set: { model.setCardsEnabled($0) })) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -265,6 +285,151 @@ struct SettingsView: View {
         case .connecting: "Connecting…"
         case .connected(let m): "Connected · local · \(m)"
         case .unreachable(let msg): "Unreachable: \(msg)"
+        }
+    }
+}
+
+/// Settings → "Watch companion". Status is read straight from `WCSession`
+/// (`isPaired`/`isWatchAppInstalled`/`isReachable`) rather than plumbed
+/// through `AppModel` — this is purely "is an Apple Watch paired and nearby
+/// right now", a fact only this screen cares about. `isPaired` is real
+/// pairing (unlike Android's Bluetooth-connected-node check, which can't
+/// tell "paired" from "just nearby") but still doesn't require the watch
+/// app to be open, or even installed, for `isPaired` alone to be true — see
+/// the toggle's own description for what the connection can actually do.
+private struct WatchCompanionSection: View {
+    @Environment(AppModel.self) private var model
+    @State private var isPaired = false
+    @State private var isInstalled = false
+    @State private var isReachable = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                StatusDot(color: statusColor)
+                Text(statusLabel).appBody()
+                Spacer(minLength: 0)
+            }
+            Spacer().frame(height: 12)
+            Toggle(isOn: Binding(get: { model.watchRelayEnabled }, set: { model.watchRelayEnabled = $0 })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Allow watch access").appBody()
+                    Text("Lets a paired Apple Watch open your chat sessions and send messages, relayed through this phone \u{2014} the watch never talks to the server directly. Off = the watch app shows a turned-off message instead.")
+                        .appLabelSmall().foregroundStyle(Theme.textMuted)
+                }
+            }
+        }
+        .task { refresh() }
+    }
+
+    private func refresh() {
+        guard WCSession.isSupported() else { return }
+        let s = WCSession.default
+        isPaired = s.isPaired
+        isInstalled = s.isWatchAppInstalled
+        isReachable = s.isReachable
+    }
+
+    private var statusColor: Color {
+        if isReachable { return Theme.ok }
+        if isPaired && isInstalled { return Theme.warn }
+        return Theme.textMuted
+    }
+    private var statusLabel: String {
+        if isReachable { return "Connected \u{00B7} Apple Watch" }
+        if isPaired && isInstalled { return "Paired \u{00B7} not reachable right now" }
+        if isPaired { return "Paired \u{00B7} app not installed on the watch" }
+        return "No Apple Watch paired"
+    }
+}
+
+/// One "keep how much" row — used for both chat sessions and the activity
+/// log (Settings → "History & activity"), self-service for any signed-in
+/// user (not admin-gated, unlike most of the settings around it). Mirrors
+/// the desktop Settings page's retention rows and agent-core's
+/// `RetentionMode` ("off" | "count" | "days").
+private struct RetentionRow: View {
+    let label: String
+    let unitWord: String
+    let mode: String
+    let value: Int?
+    let onSave: (String, Int?) -> Void
+
+    private static let modes: [(String, String)] = [
+        ("off", "Keep everything"),
+        ("count", "Keep the last N"),
+        ("days", "Keep the last N days"),
+    ]
+
+    @State private var draftMode = "off"
+    @State private var draftValue = ""
+    @State private var status: String?
+    // Skips the .onChange handler below firing from .onAppear's own initial
+    // assignment (loading the saved value into state is not a user edit) —
+    // same guard InternetAccessSection uses.
+    @State private var hasLoaded = false
+    @State private var saveTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).appBody()
+
+            Picker(label, selection: $draftMode) {
+                ForEach(Self.modes, id: \.0) { Text($0.1).tag($0.0) }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: draftMode) { _, newValue in
+                guard hasLoaded else { return }
+                let n = Int(draftValue)
+                if newValue == "off" {
+                    status = "Saving\u{2026}"
+                    onSave("off", nil)
+                } else if let n, n > 0 {
+                    // Switching count<->days with a number already typed
+                    // saves right away; switching off "off" with nothing
+                    // typed yet waits for the field below.
+                    status = "Saving\u{2026}"
+                    onSave(newValue, n)
+                }
+            }
+
+            if draftMode != "off" {
+                TextField(draftMode == "count" ? "How many \(unitWord)" : "How many days", text: $draftValue)
+                    .textFieldStyle(.app)
+                    .keyboardType(.numberPad)
+                    .onChange(of: draftValue) { _, newValue in
+                        guard hasLoaded else { return }
+                        draftValue = newValue.filter(\.isNumber)
+                        scheduleSave()
+                    }
+            }
+
+            Text(status ?? hint)
+                .appLabelSmall().foregroundStyle(Theme.textMuted)
+        }
+        .onAppear {
+            draftMode = mode
+            draftValue = value.map(String.init) ?? ""
+            hasLoaded = true
+        }
+    }
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(for: .seconds(0.7))
+            guard !Task.isCancelled else { return }
+            guard let n = Int(draftValue), n > 0 else { return }
+            status = "Saving\u{2026}"
+            onSave(draftMode, n)
+        }
+    }
+
+    private var hint: String {
+        switch mode {
+        case "count": return value.map { "Keeping the last \($0) \(unitWord)." } ?? "Pick a number above to turn this on."
+        case "days": return value.map { "Keeping the last \($0) days." } ?? "Pick a number above to turn this on."
+        default: return "Keeping everything \u{2014} no automatic cleanup."
         }
     }
 }

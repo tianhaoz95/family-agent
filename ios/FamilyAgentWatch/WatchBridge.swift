@@ -28,6 +28,14 @@ final class WatchBridge: NSObject {
         session.activate()
     }
 
+    /// Ask the phone to push the sessions list again right now — see
+    /// `WatchPath.listSessions`'s doc comment for why this is needed at all.
+    /// Safe to call freely (e.g. every time the sessions screen appears): a
+    /// no-op message with no state of its own.
+    func refreshSessions() {
+        send(["path": WatchPath.listSessions])
+    }
+
     func openSession(_ id: String) {
         send([
             "path": WatchPath.openSession,
@@ -89,6 +97,11 @@ extension WatchBridge: WCSessionDelegate {
         Task { @MainActor in
             self.phoneReachable = reachable
             self.applyContext(sessionsData: sessionsData, currentData: currentData)
+            // The catch-up read above (`receivedApplicationContext`) only
+            // has something if the phone already pushed a "sessions" entry
+            // at some point — ask for a fresh one regardless, same reasoning
+            // as `refreshSessions()`'s doc comment.
+            if reachable { self.refreshSessions() }
         }
     }
 
@@ -100,6 +113,12 @@ extension WatchBridge: WCSessionDelegate {
 
     nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
         let reachable = session.isReachable
-        Task { @MainActor in self.phoneReachable = reachable }
+        Task { @MainActor in
+            self.phoneReachable = reachable
+            // The phone may have just become reachable after the watch's
+            // very first request silently no-op'd (send() requires
+            // isReachable) — retry now that it's true.
+            if reachable { self.refreshSessions() }
+        }
     }
 }

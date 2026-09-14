@@ -383,6 +383,15 @@ data class ServerSettings(
     val serverName: String = "",
     val cardsEnabled: Boolean = true,
     val vaultEnabled: Boolean = false,
+    // How much of *this user's own* chat history / activity log the server
+    // keeps — self-service (any signed-in user, not just an admin), unlike
+    // most of the other fields here. "off" | "count" | "days"; a null value
+    // means no limit has been set for that mode yet. See agent-core's
+    // docs/DECISIONS.md → "Chat/activity retention limits".
+    val chatRetentionMode: String = "off",
+    val chatRetentionValue: Int? = null,
+    val activityRetentionMode: String = "off",
+    val activityRetentionValue: Int? = null,
     // Whether the desktop app installs a found update on its own instead of
     // waiting to be asked. Only meaningful to the desktop's own frontend —
     // shown here purely so an admin can see/change it from any client.
@@ -426,6 +435,10 @@ data class UpdateSettingsRequest(
     val webSearchProvider: String? = null,
     val webSearchUrl: String? = null,
     val webSearchApiKey: String? = null,
+    val chatRetentionMode: String? = null,
+    val chatRetentionValue: Int? = null,
+    val activityRetentionMode: String? = null,
+    val activityRetentionValue: Int? = null,
 )
 
 @Serializable

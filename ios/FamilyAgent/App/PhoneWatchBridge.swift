@@ -115,6 +115,20 @@ extension PhoneWatchBridge: WCSessionDelegate {
         let text = message["text"] as? String
         let wav = message["wav"] as? Data
         Task { @MainActor in
+            guard SettingsStore().watchRelayEnabled else {
+                // .listSessions has no error field to carry this in (see
+                // WatchSessionsPayload) — leaving the sessions list alone is
+                // fine there. Every other path pushes the disabled state into
+                // "current" so the watch's composer explains why nothing is
+                // happening, instead of spinning forever.
+                if path != WatchPath.listSessions {
+                    push(current: WatchCurrentSessionPayload(
+                        sessionID: currentSessionID, messages: lastKnownMessages,
+                        error: "Watch access is turned off in phone Settings."
+                    ))
+                }
+                return
+            }
             switch path {
             case WatchPath.openSession:
                 guard let sessionId else { return }
@@ -129,6 +143,8 @@ extension PhoneWatchBridge: WCSessionDelegate {
             case WatchPath.sendVoice:
                 guard let wav, !wav.isEmpty else { return }
                 await sendVoiceAndSync(wav)
+            case WatchPath.listSessions:
+                await pushSessions()
             default:
                 break
             }

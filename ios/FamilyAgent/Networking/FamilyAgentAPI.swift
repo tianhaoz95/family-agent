@@ -190,6 +190,16 @@ struct FamilyAgentAPI: Sendable {
     func setAutoUpdateEnabled(_ enabled: Bool) async throws -> ServerSettings {
         try await send("PUT", "/settings", body: UpdateSettingsRequest(autoUpdateEnabled: enabled))
     }
+    /// How much of *this user's own* chat history the server keeps —
+    /// self-service, any signed-in user. `mode` is "off" | "count" | "days";
+    /// `value` is required for "count"/"days" unless one is already saved.
+    func setChatRetention(mode: String, value: Int? = nil) async throws -> ServerSettings {
+        try await send("PUT", "/settings", body: UpdateSettingsRequest(chatRetentionMode: mode, chatRetentionValue: value))
+    }
+    /// Same as `setChatRetention`, for the activity log.
+    func setActivityRetention(mode: String, value: Int? = nil) async throws -> ServerSettings {
+        try await send("PUT", "/settings", body: UpdateSettingsRequest(activityRetentionMode: mode, activityRetentionValue: value))
+    }
 
     // MARK: - Remote update-and-restart of the host desktop app
 

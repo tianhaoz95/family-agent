@@ -3268,12 +3268,6 @@ immediate prune isn't a special case, it's just the sweep running early.
 `DELETE FROM activity WHERE id IN (...)` for the log. No undo, matching
 every other delete in this app (a chat session, a document, a task).
 
-Not implemented: iOS/Android Settings UI for this (desktop only, for now) —
-the feature is fully functional and testable via the API and desktop's
-Settings page; the mobile clients would need their own "keep the most
-recent / keep the last N days" controls added to their own Settings screens
-as a fast-follow.
-
 Files: `agent-core/src/db.ts` (`UserRecord.chatRetentionMode` /
 `activityRetentionMode`, `ScopedStore.pruneChatSessions` / `pruneActivity`),
 `agent-core/src/config.ts` (`retentionSweepMs`), `agent-core/src/server.ts`
@@ -3283,6 +3277,34 @@ Settings section). Tests: `agent-core/test/db.test.ts` ("ScopedStore —
 chat sessions" prune cases, "ScopedStore — activity retention"),
 `agent-core/test/server.routes.test.ts` ("chat/activity retention is
 self-service").
+
+### Follow-up: iOS/Android Settings UI
+
+Brought the mobile clients to parity with desktop's "History & activity"
+section, reported missing after the desktop-only version shipped. The API
+was already there and already self-service (`GET`/`PUT /settings`'s
+`chatRetentionMode`/`chatRetentionValue`/`activityRetentionMode`/
+`activityRetentionValue`, open to any signed-in user) — this was purely two
+client UIs catching up, no server changes.
+
+Both clients use the same shape: a mode picker (Keep everything / Keep the
+last N / Keep the last N days) plus a conditional number field, debounced
+into a save ~700-800ms after the user stops typing — the same pattern
+already used for Settings' Internet-access provider/URL/key fields on both
+platforms, reused here rather than invented fresh. Switching *between*
+`count` and `days` with a number already typed saves immediately (no need to
+retype); switching to `count`/`days` from `off` with nothing typed yet
+waits for the field. Not admin-gated, unlike the cards/vault/web toggles
+rendered right below it in the same screen — every signed-in user's own
+history is their own to manage, matching agent-core's `PUT /settings`
+already refusing to look at `role` for these two fields at all.
+
+Files: Android `data/ApiModels.kt` (`ServerSettings`/`UpdateSettingsRequest`
+retention fields), `data/FamilyAgentApi.kt` (`setChatRetention`/
+`setActivityRetention`), `AppViewModel.kt`, `ui/SettingsScreen.kt`
+(`RetentionRow`). iOS `Networking/DTOs.swift`, `Networking/FamilyAgentAPI.swift`,
+`App/AppModel+Data.swift`, `Features/Settings/SettingsView.swift`
+(`RetentionRow`).
 
 ## Chat attachments: camera, photo library, files (iOS)
 
@@ -3500,6 +3522,60 @@ keystroke, because styling is a pure function of the current text. The
 honest cost: unlike iOS/desktop, a heading's "# " and bold's "**" stay
 visible on screen rather than hiding — the trade for that robustness on this
 platform.
+
+### Follow-up: autosave, no explicit Save button
+
+All three wiki editors required an explicit Save button — reported as a bad
+fit for "a shared notebook," where the expected feel is closer to Notion/
+Google Docs than a form you submit. Converted all three to debounced
+autosave: every edit to the title or body writes itself to the server ~700-
+800ms after the user pauses, no button, no "discard unsaved changes?"
+prompt anywhere (there's nothing left to discard — it's already saved or
+about to be).
+
+**The one-step-undo feature (`prev_body`/revert, described above) makes
+naive "save on every keystroke" actively wrong, not just wasteful.** Every
+server-side body update sets `prev_body = body` (the body *before this
+write*) unconditionally — so if autosave fired on every keystroke, each
+tiny autosave would shift `prev_body` forward by one keystroke, and "Undo
+last edit" would only ever undo the last ~800ms of typing instead of the
+edit session that came before. The fix is the debounce interval itself
+(the same 700-800ms window already used for Settings' Internet-access and
+retention fields) plus a **no-op guard**: each client remembers the
+(title, body) pair the server actually has (`lastSavedTitle`/`lastSavedBody`
+— desktop's `wikiPages` cache serves the same role via
+`wikiHasPendingEdit()`) and skips firing a save at all when the current
+content already matches it. This matters most right after a revert or after
+the assistant edits the page via a resolved comment — both set the editor's
+content programmatically to something that's already correct on the server;
+without the guard, the very next autosave tick would re-PATCH that
+unchanged content right back, shifting `prev_body` forward for no reason and
+quietly breaking the undo the user just used.
+
+**Overlapping in-flight saves are handled explicitly, not left to chance.**
+A `saving`/`savePending` pair (`saving`/`savePending` on Android and iOS,
+`wikiSaving`/`wikiSavePending` on desktop) ensures a second edit that lands
+while a PATCH for the first is still in flight doesn't fire a concurrent
+request whose response could arrive out of order and stomp a newer save's
+own success state — it's queued and re-run once the in-flight one resolves,
+always with the freshest content at that moment rather than what was typed
+when it was first queued.
+
+**Desktop drops `wikiDirty` (a boolean) for `wikiHasPendingEdit()` (a
+function of the debounce timer + in-flight flag)** — the two call sites that
+used to ask "does the user have unsaved changes I'd clobber by reloading?"
+(a background page-list refresh, and the assistant's edit landing from a
+resolved comment) ask the identical question of the *new* autosave machinery
+instead: `wikiSaveTimer !== null || wikiSaving`. Deleting the active page
+also now explicitly cancels any pending timer for it, so a stray autosave
+can't fire a PATCH to an id that no longer exists.
+
+Files: desktop `desktop/src/main.ts` (`scheduleWikiSave`/`saveWikiPage`/
+`flushWikiSave`/`wikiHasPendingEdit`), `desktop/index.html` (Save button
+removed). Android `ui/WikiScreen.kt` (`performSave`, the two
+`LaunchedEffect`s keyed on `title`/`richController.value.text`). iOS
+`Features/Wiki/WikiView.swift` (`scheduleWikiSave`/`performWikiSave`,
+`.onChange(of:)` on `title`/`bodyAttributed`).
 
 ## The floating menu button hides behind a wiki page, like an open artifact
 
@@ -3891,3 +3967,55 @@ since a watch app and an app extension embed into different subfolders of
 the host bundle. One more thing to remember on the next version bump: there
 are now **three** `CURRENT_PROJECT_VERSION`/`MARKETING_VERSION` pairs in
 `project.pbxproj` (main app, widget extension, watch app) instead of two.
+
+### Follow-up: the watch never saw its own chat history
+
+Reported after shipping: a fresh watch install showed "No chats yet" and
+only "New Chat" worked — real chat history already sat on the phone, but
+the watch never learned about it. Root cause was structural, not a data bug:
+the phone only ever pushed a `SESSIONS` Data Layer item (Android) /
+`applicationContext["sessions"]` (watchOS) as a *side effect* of the watch
+itself opening or sending a message. A watch that had never done either —
+which is every watch on its very first launch, by definition — had nothing
+to catch up to; "last write wins" catch-up only finds something if a write
+already happened.
+
+Fix: a new watch→phone request, `LIST_SESSIONS` / `WatchPath.listSessions`
+(empty payload), that the phone answers by pushing the sessions list
+immediately, independent of any open/send. The watch sends it from three
+places rather than once, since any single trigger point has a plausible gap:
+`start()`/`WatchBridge.start()` (the obvious one, but the phone might not be
+reachable yet at that exact instant), the reachability-becomes-true callback
+(covers "phone app was closed when the watch launched, then opened"), and
+the sessions screen's own `.task`/`LaunchedEffect(Unit)` (covers "phone
+reconnected while the watch was already sitting on this screen" — reachability
+callbacks aren't guaranteed to fire for every kind of reconnect). All three
+are cheap, idempotent, no-ops when redundant.
+
+### Follow-up: a "watch companion" section in phone Settings
+
+Status + a kill switch, added to both phone Settings screens after shipping
+the feature — there was previously no way to tell from the phone whether a
+watch was even paired, or to turn the relay off.
+
+- **Status is read differently on each platform because the platforms expose
+  different facts.** iOS's `WCSession` has real pairing state
+  (`isPaired`/`isWatchAppInstalled`/`isReachable`) independent of whether the
+  watch app has ever been opened. Android's Wearable API has no phone-side
+  "is a watch paired" query at all — the closest fact reachable from the
+  phone is `NodeClient.connectedNodes` (a Bluetooth-connected node right
+  now), which can't distinguish "paired" from "nearby", but is what's there.
+  Both are read directly in the Settings view itself (`LocalContext`/
+  `WCSession.default` inline), not plumbed through the view model/AppModel —
+  same reasoning as the notification/location permission checks already
+  living there: it's a fact only this one screen needs.
+- **The kill switch is a plain persisted per-device setting**
+  (`watchRelayEnabled`, default on — DataStore / `UserDefaults`), read fresh
+  on every watch request by `PhoneWearListenerService` /
+  `PhoneWatchBridge`, same "no cached copy in a background-woken component"
+  discipline as `wearSessionId`. When off, every watch→phone path except
+  `LIST_SESSIONS` (which has no error field to carry a message in) responds
+  with an explicit "Watch access is turned off in phone Settings." error
+  string, so the watch's composer explains itself instead of spinning
+  forever — turning the phone's relay off shouldn't look like a network
+  failure the user might spend time retrying.

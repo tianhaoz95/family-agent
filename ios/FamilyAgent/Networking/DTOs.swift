@@ -342,6 +342,15 @@ struct ServerSettings: Codable, Sendable {
     var serverName: String = ""
     var cardsEnabled: Bool = true
     var vaultEnabled: Bool = false
+    /// How much of *this user's own* chat history / activity log the server
+    /// keeps — self-service (any signed-in user, not just an admin), unlike
+    /// most of the fields here. "off" | "count" | "days"; a nil value means
+    /// no limit has been set for that mode yet. See agent-core's
+    /// docs/DECISIONS.md → "Chat/activity retention limits".
+    var chatRetentionMode: String = "off"
+    var chatRetentionValue: Int? = nil
+    var activityRetentionMode: String = "off"
+    var activityRetentionValue: Int? = nil
     /// Whether the desktop app installs a found update on its own instead of
     /// waiting to be asked. Only meaningful to the desktop's own frontend —
     /// shown here purely so an admin can see/change it from any client.
@@ -383,6 +392,10 @@ struct UpdateSettingsRequest: Codable, Sendable {
     var webSearchProvider: String? = nil
     var webSearchUrl: String? = nil
     var webSearchApiKey: String? = nil
+    var chatRetentionMode: String? = nil
+    var chatRetentionValue: Int? = nil
+    var activityRetentionMode: String? = nil
+    var activityRetentionValue: Int? = nil
 }
 
 struct TurnStepsResponse: Codable, Sendable {

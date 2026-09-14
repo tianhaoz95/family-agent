@@ -84,6 +84,13 @@ class WearBridge(context: Context) {
                     buffer.release()
                 }
             }
+            // The catch-up read above only finds a SESSIONS DataItem if the
+            // phone happened to have already pushed one — which used to only
+            // happen as a side effect of opening/sending from the watch. Ask
+            // for a fresh push explicitly so a watch that's never done either
+            // (first launch, with real chat history already on the phone)
+            // doesn't just sit on an empty "no chats yet".
+            refreshSessions()
         }
     }
 
@@ -102,6 +109,12 @@ class WearBridge(context: Context) {
     suspend fun openSession(id: String) = sendToPhone(WearPaths.OPEN_SESSION, id.toByteArray(Charsets.UTF_8))
 
     suspend fun newSession() = sendToPhone(WearPaths.NEW_SESSION, ByteArray(0))
+
+    /** Ask the phone to push [WearPaths.SESSIONS] again right now — see
+     *  [start]'s catch-up comment for why this is needed at all. Safe to call
+     *  freely (e.g. every time the sessions screen appears): it's a no-op
+     *  message with no state of its own. */
+    suspend fun refreshSessions() = sendToPhone(WearPaths.LIST_SESSIONS, ByteArray(0))
 
     suspend fun sendText(text: String) =
         sendToPhone(WearPaths.SEND_MESSAGE, json.encodeToString(WearSendMessage(text)).toByteArray(Charsets.UTF_8))

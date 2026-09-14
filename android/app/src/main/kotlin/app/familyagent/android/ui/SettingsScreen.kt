@@ -5,6 +5,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -12,13 +13,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.ConnectionStatus
 import app.familyagent.android.ReplyNotifications
 import app.familyagent.android.data.ServerSettings
 import app.familyagent.android.ui.theme.AppAccents
+import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.tasks.await
 
 @Composable
 fun SettingsScreen(
@@ -36,10 +40,14 @@ fun SettingsScreen(
     onSetNotifyOnReply: (Boolean) -> Unit = {},
     useLocation: Boolean = false,
     onSetUseLocation: (Boolean) -> Unit = {},
+    watchRelayEnabled: Boolean = true,
+    onSetWatchRelayEnabled: (Boolean) -> Unit = {},
     serverSettings: ServerSettings? = null,
     onSetCardsEnabled: (Boolean) -> Unit = {},
     onSetVaultEnabled: (Boolean) -> Unit = {},
     onSetWebAccess: (provider: String, url: String?, apiKey: String?, onDone: () -> Unit, onError: (String) -> Unit) -> Unit = { _, _, _, _, _ -> },
+    onSetChatRetention: (mode: String, value: Int?, onDone: () -> Unit, onError: (String) -> Unit) -> Unit = { _, _, _, _ -> },
+    onSetActivityRetention: (mode: String, value: Int?, onDone: () -> Unit, onError: (String) -> Unit) -> Unit = { _, _, _, _ -> },
     desktopUpdateStatus: app.familyagent.android.data.DesktopUpdateStatus? = null,
     desktopUpdatePolling: Boolean = false,
     onTriggerDesktopUpdate: () -> Unit = {},
@@ -193,7 +201,39 @@ fun SettingsScreen(
             }
         }
 
+        Spacer(Modifier.height(18.dp))
+        WatchCompanionSection(
+            enabled = watchRelayEnabled,
+            onSetEnabled = onSetWatchRelayEnabled,
+        )
+
         if (serverSettings != null) {
+            Spacer(Modifier.height(18.dp))
+            SectionLabel("History & activity")
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "How much of your own chat history and activity log this server keeps. This is " +
+                    "personal to your account — it doesn't affect anyone else's.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppAccents.textSecondary,
+            )
+            Spacer(Modifier.height(10.dp))
+            RetentionRow(
+                label = "Chat sessions",
+                mode = serverSettings.chatRetentionMode,
+                value = serverSettings.chatRetentionValue,
+                unitWord = "sessions",
+                onSave = { mode, value -> onSetChatRetention(mode, value, {}, {}) },
+            )
+            Spacer(Modifier.height(14.dp))
+            RetentionRow(
+                label = "Activity log",
+                mode = serverSettings.activityRetentionMode,
+                value = serverSettings.activityRetentionValue,
+                unitWord = "entries",
+                onSave = { mode, value -> onSetActivityRetention(mode, value, {}, {}) },
+            )
+
             Spacer(Modifier.height(18.dp))
             SectionLabel("Assistant")
             Spacer(Modifier.height(4.dp))
@@ -533,6 +573,167 @@ private fun InternetAccessSection(
         style = MaterialTheme.typography.bodySmall,
         color = AppAccents.textSecondary,
     )
+}
+
+private val RETENTION_MODES = listOf(
+    "off" to "Keep everything",
+    "count" to "Keep the last N",
+    "days" to "Keep the last N days",
+)
+
+/**
+ * One "keep how much" row — used for both chat sessions and the activity
+ * log (Settings → "History & activity"), self-service for any signed-in
+ * user (not admin-gated, unlike most of the settings around it). Mirrors
+ * the desktop Settings page's retention rows and agent-core's
+ * `RetentionMode` (`"off" | "count" | "days"`).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RetentionRow(
+    label: String,
+    mode: String,
+    value: Int?,
+    unitWord: String,
+    onSave: (mode: String, value: Int?) -> Unit,
+) {
+    var draftMode by remember(mode) { mutableStateOf(mode) }
+    var draftValue by remember(value) { mutableStateOf(value?.toString() ?: "") }
+    var menuOpen by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<String?>(null) }
+    // Skips the very first LaunchedEffect firing below (loading the saved
+    // value into state on open, not a user edit) — same guard as
+    // InternetAccessSection's `hasLoaded`.
+    var hasLoaded by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { hasLoaded = true }
+
+    Text(label, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+    Spacer(Modifier.height(6.dp))
+
+    ExposedDropdownMenuBox(expanded = menuOpen, onExpandedChange = { menuOpen = it }) {
+        OutlinedTextField(
+            value = RETENTION_MODES.firstOrNull { it.first == draftMode }?.second ?: "Keep everything",
+            onValueChange = {},
+            readOnly = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuOpen) },
+            modifier = Modifier.fillMaxWidth().menuAnchor(),
+        )
+        ExposedDropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            RETENTION_MODES.forEach { (v, l) ->
+                DropdownMenuItem(
+                    text = { Text(l) },
+                    onClick = {
+                        draftMode = v
+                        menuOpen = false
+                        val n = draftValue.toIntOrNull()
+                        when {
+                            v == "off" -> { status = "Saving…"; onSave("off", null) }
+                            // Switching count<->days with a number already
+                            // typed saves right away; switching off "off"
+                            // with nothing typed yet waits for the field below.
+                            n != null && n > 0 -> { status = "Saving…"; onSave(v, n) }
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    if (draftMode != "off") {
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = draftValue,
+            onValueChange = { draftValue = it.filter(Char::isDigit).take(6) },
+            singleLine = true,
+            label = { Text(if (draftMode == "count") "How many $unitWord" else "How many days") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        // Debounced auto-save, same pattern as InternetAccessSection's URL/key fields.
+        LaunchedEffect(draftValue, draftMode) {
+            if (!hasLoaded) return@LaunchedEffect
+            val n = draftValue.toIntOrNull() ?: return@LaunchedEffect
+            if (n <= 0) return@LaunchedEffect
+            delay(700)
+            status = "Saving…"
+            onSave(draftMode, n)
+        }
+    }
+
+    Spacer(Modifier.height(4.dp))
+    Text(
+        status ?: when (mode) {
+            "count" -> value?.let { "Keeping the last $it $unitWord." } ?: "Pick a number above to turn this on."
+            "days" -> value?.let { "Keeping the last $it days." } ?: "Pick a number above to turn this on."
+            else -> "Keeping everything — no automatic cleanup."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = AppAccents.textSecondary,
+    )
+}
+
+/**
+ * Settings → "Watch companion". `connectedNodeName` is queried directly from
+ * [Wearable]'s NodeClient rather than plumbed through [AppViewModel] — this
+ * is purely "is a Wear OS device paired and nearby right now", a fact this
+ * screen alone cares about, so it's fetched inline the same way the
+ * notification/location permission checks above already read `LocalContext`
+ * directly. It's Bluetooth connectivity, not app-level pairing: a companion
+ * app doesn't need to be signed in (or even opened yet) on the watch side
+ * for this to say "connected" — see the enabled toggle's own description for
+ * what that connection can actually do.
+ */
+@Composable
+private fun WatchCompanionSection(enabled: Boolean, onSetEnabled: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    var connectedNodeName by remember { mutableStateOf<String?>(null) }
+    var checked by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        val nodes = runCatching { Wearable.getNodeClient(context).connectedNodes.await() }.getOrNull()
+        connectedNodeName = nodes?.firstOrNull()?.displayName
+        checked = true
+    }
+
+    SectionLabel("Watch companion")
+    Spacer(Modifier.height(4.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        StatusDot(
+            when {
+                !checked -> AppAccents.textSecondary
+                connectedNodeName != null -> AppAccents.success
+                else -> AppAccents.textSecondary
+            }
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            when {
+                !checked -> "Checking…"
+                connectedNodeName != null -> "Connected · $connectedNodeName"
+                else -> "No watch connected"
+            },
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(checked = enabled, onCheckedChange = onSetEnabled)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Allow watch access",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                "Lets a paired Wear OS watch open your chat sessions and send messages, relayed " +
+                    "through this phone — the watch never talks to the server directly. Off = the " +
+                    "watch app shows a turned-off message instead.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppAccents.textSecondary,
+            )
+        }
+    }
 }
 
 @Composable

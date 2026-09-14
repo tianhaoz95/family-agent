@@ -137,6 +137,9 @@ data class AppUiState(
     /** Let the assistant use this device's location for a "near me" Chat
      *  question (persisted in DataStore). Off by default. */
     val useLocation: Boolean = false,
+    /** Settings → "Watch companion" kill switch (persisted in DataStore). On
+     *  by default. */
+    val watchRelayEnabled: Boolean = true,
     /** The reply text currently being synthesized (null = none). */
     val speakLoadingText: String? = null,
     /** The reply text currently playing aloud (null = none). */
@@ -283,6 +286,11 @@ class AppViewModel(
         viewModelScope.launch {
             settings.useLocation.collect { on ->
                 _state.value = _state.value.copy(useLocation = on)
+            }
+        }
+        viewModelScope.launch {
+            settings.watchRelayEnabled.collect { on ->
+                _state.value = _state.value.copy(watchRelayEnabled = on)
             }
         }
         viewModelScope.launch {
@@ -728,6 +736,10 @@ class AppViewModel(
 
     fun setNotifyOnReply(on: Boolean) {
         viewModelScope.launch { settings.setNotifyOnReply(on) }
+    }
+
+    fun setWatchRelayEnabled(on: Boolean) {
+        viewModelScope.launch { settings.setWatchRelayEnabled(on) }
     }
 
     override fun onCleared() {
@@ -1901,6 +1913,24 @@ class AppViewModel(
     }
 
     /** Set internet access: provider "none" = off; searxng needs [url]; tavily/brave need [apiKey]. */
+    /** Self-service — works for any signed-in user, not just an admin. */
+    fun setChatRetention(mode: String, value: Int?, onDone: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.setChatRetention(mode, value) }
+                .onSuccess { _state.value = _state.value.copy(serverSettings = it); onDone() }
+                .onFailure { onError(it.message ?: "Couldn't change chat history settings") }
+        }
+    }
+
+    /** Self-service — works for any signed-in user, not just an admin. */
+    fun setActivityRetention(mode: String, value: Int?, onDone: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            apiCall { api.setActivityRetention(mode, value) }
+                .onSuccess { _state.value = _state.value.copy(serverSettings = it); onDone() }
+                .onFailure { onError(it.message ?: "Couldn't change activity settings") }
+        }
+    }
+
     fun setWebAccess(provider: String, url: String?, apiKey: String?, onDone: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
             apiCall { api.setWebAccess(provider, url, apiKey) }

@@ -10,6 +10,7 @@ enum WatchPath {
     static let newSession = "new_session"
     static let sendMessage = "send_message"
     static let sendVoice = "send_voice"
+    static let listSessions = "list_sessions"
 }
 
 struct WatchChatSession: Codable, Identifiable, Hashable {

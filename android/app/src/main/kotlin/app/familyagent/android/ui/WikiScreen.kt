@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.data.WikiPage
 import app.familyagent.android.ui.theme.AppAccents
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -164,14 +165,64 @@ fun WikiPageScreen(
     var showComments by remember { mutableStateOf(false) }
     var pendingQuote by remember { mutableStateOf<Triple<String, String, String>?>(null) }
 
+    // ---- autosave ----
+    // No Save button — every edit to the title or body debounces into a save
+    // a beat after the user pauses, the same pattern as other auto-saving
+    // fields elsewhere in the app (e.g. Settings' retention rows). `null`
+    // means "nothing loaded yet" (skip); once loaded, this is always the
+    // (title, body) pair the server actually has, so a programmatic content
+    // change that already matches it — right after a revert, or right after
+    // a save completes — doesn't trigger a redundant, no-op PATCH.
+    var lastSavedTitle by remember(pageId) { mutableStateOf<String?>(null) }
+    var lastSavedBody by remember(pageId) { mutableStateOf<String?>(null) }
+    var saving by remember(pageId) { mutableStateOf(false) }
+    var savePending by remember(pageId) { mutableStateOf(false) }
+
+    fun performSave() {
+        if (saving) {
+            // A newer edit arrived while a save was already in flight — this
+            // same call would otherwise overwrite it with a stale body.
+            // Re-run once the in-flight one lands.
+            savePending = true
+            return
+        }
+        saving = true
+        status = "Saving…"
+        val t = title
+        val body = richController.currentMarkdown()
+        onSave(pageId, t, body) { page ->
+            saving = false
+            if (page == null) {
+                status = "Couldn't save."
+            } else {
+                canUndo = page.prevBody != null
+                lastSavedTitle = t
+                lastSavedBody = body
+                status = "Saved — last edited by ${page.updatedByName}."
+            }
+            if (savePending) {
+                savePending = false
+                performSave()
+            }
+        }
+    }
+
     LaunchedEffect(pageId) {
         if (loaded) return@LaunchedEffect
         loaded = true
         load(pageId)?.let { page ->
             title = page.title; richController.setMarkdown(page.body); canUndo = page.prevBody != null
+            lastSavedTitle = page.title; lastSavedBody = page.body
         }
         vm.ensureFamilyMembersLoaded()
         comments = vm.wikiComments(pageId)
+    }
+
+    LaunchedEffect(title, richController.value.text) {
+        if (lastSavedTitle == null) return@LaunchedEffect
+        if (title == lastSavedTitle && richController.value.text == lastSavedBody) return@LaunchedEffect
+        delay(800)
+        performSave()
     }
 
     BackHandler { onClose() }
@@ -218,6 +269,7 @@ fun WikiPageScreen(
                                         onRevert(pageId) { page ->
                                             if (page != null) {
                                                 title = page.title; richController.setMarkdown(page.body); canUndo = page.prevBody != null
+                                                lastSavedTitle = page.title; lastSavedBody = page.body
                                                 status = "Reverted to the previous version."
                                             }
                                         }
@@ -261,20 +313,6 @@ fun WikiPageScreen(
             if (status.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 Text(status, style = MaterialTheme.typography.bodySmall, color = AppAccents.textSecondary)
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Button(onClick = {
-                    status = "Saving…"
-                    onSave(pageId, title, richController.currentMarkdown()) { page ->
-                        if (page == null) {
-                            status = "Couldn't save."
-                        } else {
-                            canUndo = page.prevBody != null
-                            status = "Saved — last edited by ${page.updatedByName}."
-                        }
-                    }
-                }) { Text("Save") }
             }
         }
     }

@@ -90,6 +90,20 @@ struct WikiPageEditorView: View {
     @State private var pendingCommentAnchor: NewWikiCommentRequest?
     private var openCommentCount: Int { comments.filter { $0.status == "open" }.count }
 
+    // ---- autosave ----
+    // No Save button — every edit to the title or body debounces into a save
+    // a beat after the user pauses, the same pattern as other auto-saving
+    // fields elsewhere in the app (e.g. Settings' retention rows). `nil`
+    // means "nothing loaded yet" (skip); once loaded, this is always the
+    // (title, body) pair the server actually has, so a programmatic content
+    // change that already matches it — right after a revert, or right after
+    // a save completes — doesn't trigger a redundant, no-op PATCH.
+    @State private var lastSavedTitle: String?
+    @State private var lastSavedMarkdown: String?
+    @State private var saving = false
+    @State private var savePending = false
+    @State private var saveTask: Task<Void, Never>?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             TextField("Page title", text: $title)
@@ -105,37 +119,28 @@ struct WikiPageEditorView: View {
             RichTextEditor(attributedText: $bodyAttributed, controller: richController)
                 .padding(.horizontal, 10)
 
-            if !status.isEmpty {
-                Text(status).appBodySmall().foregroundStyle(Theme.textMuted)
-                    .padding(.horizontal, 16).padding(.top, 4)
-            }
-
             HStack(spacing: 10) {
                 if canUndo {
                     Button("Undo last edit") {
                         model.revertWikiPage(pageId) { page in
                             guard let page else { return }
                             title = page.title; bodyAttributed = MarkdownRichText.toAttributed(page.body); canUndo = page.prevBody != nil
+                            lastSavedTitle = page.title; lastSavedMarkdown = page.body
                             status = "Reverted to the previous version."
                         }
                     }
                     .buttonStyle(.soft)
                 }
-                Spacer()
-                Button("Save") {
-                    status = "Saving\u{2026}"
-                    let markdown = MarkdownRichText.toMarkdown(bodyAttributed)
-                    model.saveWikiPage(pageId, title: title, body: markdown) { page in
-                        guard let page else { status = "Couldn't save."; return }
-                        canUndo = page.prevBody != nil
-                        status = "Saved \u{2014} last edited by \(page.updatedByName)."
-                    }
+                if !status.isEmpty {
+                    Text(status).appBodySmall().foregroundStyle(Theme.textMuted)
                 }
-                .buttonStyle(.primary)
+                Spacer()
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
+        .onChange(of: title) { _, _ in scheduleWikiSave() }
+        .onChange(of: bodyAttributed) { _, _ in scheduleWikiSave() }
         .navigationTitle(title.isEmpty ? "Page" : title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -181,9 +186,53 @@ struct WikiPageEditorView: View {
             loaded = true
             if let page = await model.perform({ try await model.api.getWikiPage(pageId) }) {
                 title = page.title; bodyAttributed = MarkdownRichText.toAttributed(page.body); canUndo = page.prevBody != nil
+                lastSavedTitle = page.title; lastSavedMarkdown = page.body
             }
             await model.ensureFamilyMembersLoaded()
             await refreshComments()
+        }
+    }
+
+    private func scheduleWikiSave() {
+        // Not loaded yet — the initial assignment above would otherwise
+        // schedule a spurious, idempotent save.
+        guard lastSavedTitle != nil else { return }
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(for: .seconds(0.8))
+            guard !Task.isCancelled else { return }
+            let markdown = MarkdownRichText.toMarkdown(bodyAttributed)
+            if title == lastSavedTitle && markdown == lastSavedMarkdown { return }
+            performWikiSave()
+        }
+    }
+
+    private func performWikiSave() {
+        if saving {
+            // A newer edit arrived while a save was already in flight — this
+            // same call would otherwise overwrite it with a stale body.
+            // Re-run once the in-flight one lands.
+            savePending = true
+            return
+        }
+        saving = true
+        status = "Saving\u{2026}"
+        let t = title
+        let markdown = MarkdownRichText.toMarkdown(bodyAttributed)
+        model.saveWikiPage(pageId, title: t, body: markdown) { page in
+            saving = false
+            if let page {
+                canUndo = page.prevBody != nil
+                lastSavedTitle = t
+                lastSavedMarkdown = markdown
+                status = "Saved \u{2014} last edited by \(page.updatedByName)."
+            } else {
+                status = "Couldn't save."
+            }
+            if savePending {
+                savePending = false
+                performWikiSave()
+            }
         }
     }
 
@@ -218,6 +267,8 @@ struct WikiPageEditorView: View {
         if let i = comments.firstIndex(where: { $0.id == cid }) { comments[i] = r.comment }
         bodyAttributed = MarkdownRichText.toAttributed(r.page.body)
         canUndo = r.page.prevBody != nil
+        lastSavedTitle = title
+        lastSavedMarkdown = r.page.body
     }
 }
 

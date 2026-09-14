@@ -20,6 +20,14 @@ enum WatchPath {
     static let newSession = "new_session"
     static let sendMessage = "send_message"
     static let sendVoice = "send_voice"
+    /// Watch -> phone, empty payload: ask the phone to push the sessions
+    /// list again right now. `applicationContext` is "last write wins" —
+    /// the watch only ever sees a "sessions" entry if the phone has already
+    /// pushed one, which used to happen only as a side effect of opening or
+    /// sending from the watch. A fresh watch launch with no prior watch
+    /// activity (the common case — real chat history already exists on the
+    /// phone) had nothing to catch up to and showed an empty list.
+    static let listSessions = "list_sessions"
 }
 
 struct WatchChatSession: Codable, Identifiable, Hashable {

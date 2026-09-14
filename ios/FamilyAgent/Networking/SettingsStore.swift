@@ -17,6 +17,7 @@ struct SettingsStore {
         static let notifyOnReply = "notify_on_reply"
         static let useLocation = "use_location"
         static let recentServers = "recent_servers"
+        static let watchRelayEnabled = "watch_relay_enabled"
     }
 
     struct Session {
@@ -121,5 +122,16 @@ struct SettingsStore {
     var useLocation: Bool {
         get { defaults.bool(forKey: K.useLocation) }
         nonmutating set { defaults.set(newValue, forKey: K.useLocation) }
+    }
+
+    /// Settings → "Watch companion" kill switch — `PhoneWatchBridge` reads
+    /// this fresh on every message rather than caching it, same as every
+    /// other setting a background-woken bridge reads. On by default: a
+    /// signed-in phone is the only thing that makes a watch companion
+    /// request meaningful in the first place, so there's no separate
+    /// "is a watch paired" gate to layer this under. Device-local.
+    var watchRelayEnabled: Bool {
+        get { defaults.object(forKey: K.watchRelayEnabled) == nil ? true : defaults.bool(forKey: K.watchRelayEnabled) }
+        nonmutating set { defaults.set(newValue, forKey: K.watchRelayEnabled) }
     }
 }

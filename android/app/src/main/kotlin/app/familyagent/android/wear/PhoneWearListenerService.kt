@@ -37,24 +37,32 @@ class PhoneWearListenerService : WearableListenerService() {
     private val json = Json { ignoreUnknownKeys = true }
 
     override fun onMessageReceived(event: MessageEvent) {
-        when (event.path) {
-            WearPaths.OPEN_SESSION -> {
-                val sessionId = String(event.data, Charsets.UTF_8)
-                scope.launch {
+        scope.launch {
+            if (!settings().watchRelayEnabled.first()) {
+                // LIST_SESSIONS has no error field to carry this in (see
+                // WearSessionsPayload) — leaving the sessions list alone is
+                // fine there. Every other path pushes the disabled state
+                // into CURRENT_SESSION so the watch's composer explains why
+                // nothing is happening, instead of spinning forever.
+                if (event.path != WearPaths.LIST_SESSIONS) pushWatchRelayDisabled()
+                return@launch
+            }
+            when (event.path) {
+                WearPaths.OPEN_SESSION -> {
+                    val sessionId = String(event.data, Charsets.UTF_8)
                     settings().setWearSessionId(sessionId)
                     syncCurrentSession(sessionId)
                 }
-            }
-            WearPaths.NEW_SESSION -> {
-                scope.launch {
+                WearPaths.NEW_SESSION -> {
                     settings().setWearSessionId(null)
                     pushCurrentSession(WearCurrentSessionPayload(sessionId = null, messages = emptyList()))
                 }
-            }
-            WearPaths.SEND_MESSAGE -> {
-                val text = runCatching { json.decodeFromString<WearSendMessage>(String(event.data, Charsets.UTF_8)).text }
-                    .getOrNull() ?: return
-                scope.launch { sendAndSync(text) }
+                WearPaths.SEND_MESSAGE -> {
+                    val text = runCatching { json.decodeFromString<WearSendMessage>(String(event.data, Charsets.UTF_8)).text }
+                        .getOrNull() ?: return@launch
+                    sendAndSync(text)
+                }
+                WearPaths.LIST_SESSIONS -> pushSessions()
             }
         }
     }
@@ -68,10 +76,21 @@ class PhoneWearListenerService : WearableListenerService() {
             }.getOrNull()
             runCatching { client.close(channel).await() }
             if (wav == null || wav.isEmpty()) return@launch
+            if (!settings().watchRelayEnabled.first()) {
+                pushWatchRelayDisabled()
+                return@launch
+            }
             val api = apiOrNull() ?: return@launch
             val transcript = runCatching { api.transcribe(wav).text }.getOrNull()
             if (!transcript.isNullOrBlank()) sendAndSync(transcript)
         }
+    }
+
+    private suspend fun pushWatchRelayDisabled() {
+        val sessionId = settings().wearSessionId.first()
+        pushCurrentSession(
+            WearCurrentSessionPayload(sessionId, _lastKnownMessages, error = "Watch access is turned off in phone Settings.")
+        )
     }
 
     private suspend fun settings() = SettingsStore(applicationContext)

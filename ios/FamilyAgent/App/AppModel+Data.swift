@@ -391,6 +391,23 @@ extension AppModel {
         }
     }
 
+    /// Self-service — works for any signed-in user, not just an admin.
+    func setChatRetention(mode: String, value: Int?) {
+        Task {
+            if let s = await perform({ try await api.setChatRetention(mode: mode, value: value) }) {
+                serverSettings = s
+            }
+        }
+    }
+    /// Same as `setChatRetention`, for the activity log.
+    func setActivityRetention(mode: String, value: Int?) {
+        Task {
+            if let s = await perform({ try await api.setActivityRetention(mode: mode, value: value) }) {
+                serverSettings = s
+            }
+        }
+    }
+
     // MARK: Remote update-and-restart of the host desktop app
     //
     // The desktop app itself does the actual check/download/install/relaunch

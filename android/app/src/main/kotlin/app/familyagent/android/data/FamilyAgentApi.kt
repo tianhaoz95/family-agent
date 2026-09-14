@@ -156,6 +156,20 @@ class FamilyAgentApi(
     suspend fun requestDesktopRestart(): DesktopUpdateStatus =
         json.decodeFromString(sendNoBody("POST", "/system/restart-request"))
 
+    /** How much of *this user's own* chat history the server keeps —
+     *  self-service, any signed-in user. `mode` is "off" | "count" | "days";
+     *  `value` is required for "count"/"days" unless one is already saved. */
+    suspend fun setChatRetention(mode: String, value: Int? = null): ServerSettings =
+        json.decodeFromString(
+            send("PUT", "/settings", json.encodeToString(UpdateSettingsRequest(chatRetentionMode = mode, chatRetentionValue = value)))
+        )
+
+    /** Same as [setChatRetention], for the activity log. */
+    suspend fun setActivityRetention(mode: String, value: Int? = null): ServerSettings =
+        json.decodeFromString(
+            send("PUT", "/settings", json.encodeToString(UpdateSettingsRequest(activityRetentionMode = mode, activityRetentionValue = value)))
+        )
+
     /** Set the internet-access provider (`"none"` = off) and its companion URL / API key. */
     suspend fun setWebAccess(provider: String, url: String? = null, apiKey: String? = null): ServerSettings =
         json.decodeFromString(

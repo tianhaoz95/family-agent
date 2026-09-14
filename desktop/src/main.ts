@@ -7023,11 +7023,9 @@ const wikiBodyEditor = document.getElementById("wiki-body-editor") as HTMLDivEle
 const wikiStatusEl = document.getElementById("wiki-status")!;
 const wikiUndoBtn = document.getElementById("wiki-undo-btn") as HTMLButtonElement;
 const wikiDeleteBtn = document.getElementById("wiki-delete-btn") as HTMLButtonElement;
-const wikiSaveBtn = document.getElementById("wiki-save-btn") as HTMLButtonElement;
 
 let wikiPages: WikiPage[] = [];
 let activeWikiPageId: string | null = null;
-let wikiDirty = false;
 
 // ---- rich text <-> Markdown ----
 // The editor is a `contenteditable` surface, not a textarea — a family
@@ -7120,10 +7118,73 @@ function wikiCurrentBody(): string {
   return htmlToMarkdown(wikiBodyEditor);
 }
 
-function wikiHasUnsavedChanges(): boolean {
-  const page = wikiPages.find((p) => p.id === activeWikiPageId);
-  if (!page) return false;
-  return page.title !== wikiTitleInput.value || page.body !== wikiCurrentBody();
+// ---- autosave ----
+// No Save button — every edit (title, body, or a toolbar command) debounces
+// into a PATCH a beat after the user pauses, the same pattern already used
+// for Settings' Internet-access / retention fields elsewhere in this file.
+// `wikiSaveTimer` doubles as "is there an edit not yet on the server" —
+// `wikiHasPendingEdit()` is what a caller checks before it would otherwise
+// clobber the editor with a fresher read (a page-list refresh, or the
+// assistant's own edit landing from a resolved comment).
+let wikiSaveTimer: number | null = null;
+let wikiSaving = false;
+let wikiSavePending = false;
+
+function wikiHasPendingEdit(): boolean {
+  return wikiSaveTimer !== null || wikiSaving;
+}
+
+function scheduleWikiSave() {
+  if (!activeWikiPageId) return;
+  if (wikiSaveTimer !== null) window.clearTimeout(wikiSaveTimer);
+  wikiSaveTimer = window.setTimeout(() => {
+    wikiSaveTimer = null;
+    void saveWikiPage();
+  }, 800);
+}
+
+async function saveWikiPage(): Promise<void> {
+  if (!activeWikiPageId) return;
+  if (wikiSaving) {
+    // A newer edit arrived mid-request — this same PATCH would otherwise
+    // overwrite it with a stale body. Re-run once the in-flight one lands.
+    wikiSavePending = true;
+    return;
+  }
+  wikiSaving = true;
+  wikiStatusEl.textContent = "Saving…";
+  const id = activeWikiPageId;
+  try {
+    const page = (
+      await api.updateWikiPage(id, { title: wikiTitleInput.value, body: wikiCurrentBody() })
+    ).page;
+    if (activeWikiPageId === id) {
+      wikiUndoBtn.hidden = !page.prevBody;
+      wikiStatusEl.textContent = `Saved — last edited by ${page.updatedByName}.`;
+    }
+    void refreshWikiPages();
+  } catch (err) {
+    if (activeWikiPageId === id) {
+      wikiStatusEl.textContent = `Couldn't save: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  } finally {
+    wikiSaving = false;
+    if (wikiSavePending) {
+      wikiSavePending = false;
+      void saveWikiPage();
+    }
+  }
+}
+
+/** Flush a pending debounced edit immediately — call before navigating away
+ *  from the page being edited (opening another, creating a new one) so
+ *  nothing typed is lost and there's no "discard unsaved changes?" prompt to
+ *  ask, since there's never anything left unsaved to discard. */
+async function flushWikiSave(): Promise<void> {
+  if (wikiSaveTimer === null) return;
+  window.clearTimeout(wikiSaveTimer);
+  wikiSaveTimer = null;
+  await saveWikiPage();
 }
 
 function renderWikiPageList() {
@@ -7159,7 +7220,7 @@ async function refreshWikiPages() {
   renderWikiPageList();
   // Re-resolve the currently-open page's own row (updatedBy/title may have
   // changed from another device) without touching unsaved edits in progress.
-  if (activeWikiPageId && !wikiDirty) {
+  if (activeWikiPageId && !wikiHasPendingEdit()) {
     const fresh = wikiPages.find((p) => p.id === activeWikiPageId);
     if (fresh) {
       wikiTitleInput.value = fresh.title;
@@ -7170,7 +7231,7 @@ async function refreshWikiPages() {
 }
 
 async function openWikiPage(id: string) {
-  if (wikiDirty && !confirm("Discard unsaved changes to this page?")) return;
+  await flushWikiSave();
   let page: WikiPage;
   try {
     page = (await api.getWikiPage(id)).page;
@@ -7179,7 +7240,6 @@ async function openWikiPage(id: string) {
     return;
   }
   activeWikiPageId = id;
-  wikiDirty = false;
   wikiTitleInput.value = page.title;
   wikiBodyEditor.innerHTML = renderMarkdown(page.body);
   wikiUndoBtn.hidden = !page.prevBody;
@@ -7227,19 +7287,19 @@ document.querySelectorAll<HTMLButtonElement>("[data-wikicmd]").forEach((b) => {
         document.execCommand("insertOrderedList");
         break;
     }
-    wikiDirty = wikiHasUnsavedChanges();
+    scheduleWikiSave();
   });
 });
 
 wikiTitleInput.addEventListener("input", () => {
-  wikiDirty = wikiHasUnsavedChanges();
+  scheduleWikiSave();
 });
 wikiBodyEditor.addEventListener("input", () => {
-  wikiDirty = wikiHasUnsavedChanges();
+  scheduleWikiSave();
 });
 
 wikiNewBtn.addEventListener("click", async () => {
-  if (wikiDirty && !confirm("Discard unsaved changes to this page?")) return;
+  await flushWikiSave();
   const title = prompt("New page title:");
   if (!title?.trim()) return;
   try {
@@ -7251,22 +7311,6 @@ wikiNewBtn.addEventListener("click", async () => {
   }
 });
 
-wikiSaveBtn.addEventListener("click", async () => {
-  if (!activeWikiPageId) return;
-  wikiStatusEl.textContent = "Saving…";
-  try {
-    const page = (
-      await api.updateWikiPage(activeWikiPageId, { title: wikiTitleInput.value, body: wikiCurrentBody() })
-    ).page;
-    wikiDirty = false;
-    wikiUndoBtn.hidden = !page.prevBody;
-    wikiStatusEl.textContent = `Saved — last edited by ${page.updatedByName}.`;
-    void refreshWikiPages();
-  } catch (err) {
-    wikiStatusEl.textContent = `Couldn't save: ${err instanceof Error ? err.message : String(err)}`;
-  }
-});
-
 wikiUndoBtn.addEventListener("click", async () => {
   if (!activeWikiPageId) return;
   if (!confirm("Undo the last edit to this page?")) return;
@@ -7274,7 +7318,6 @@ wikiUndoBtn.addEventListener("click", async () => {
     const page = (await api.revertWikiPage(activeWikiPageId)).page;
     wikiTitleInput.value = page.title;
     wikiBodyEditor.innerHTML = renderMarkdown(page.body);
-    wikiDirty = false;
     wikiUndoBtn.hidden = !page.prevBody;
     wikiStatusEl.textContent = "Reverted to the previous version.";
     void refreshWikiPages();
@@ -7291,8 +7334,10 @@ async function deleteWikiPageRow(id: string) {
     return;
   }
   if (id === activeWikiPageId) {
+    // A pending autosave for this now-deleted page would otherwise fire a
+    // PATCH to nothing (a harmless 404, but still worth not sending).
+    if (wikiSaveTimer !== null) { window.clearTimeout(wikiSaveTimer); wikiSaveTimer = null; }
     activeWikiPageId = null;
-    wikiDirty = false;
     wikiEditorEl.hidden = true;
     wikiEmptyEl.hidden = false;
     wikiCommentsFab.hidden = true;
@@ -7371,7 +7416,7 @@ function renderWikiCommentsPanel(): void {
         const idx = wikiComments.findIndex((x) => x.id === c.id);
         if (idx >= 0) wikiComments[idx] = res.comment;
         // The assistant may have edited the page — reload it in place.
-        if (activeWikiPageId === res.page.id && !wikiDirty) {
+        if (activeWikiPageId === res.page.id && !wikiHasPendingEdit()) {
           wikiTitleInput.value = res.page.title;
           wikiBodyEditor.innerHTML = renderMarkdown(res.page.body);
           wikiUndoBtn.hidden = !res.page.prevBody;
