@@ -13,24 +13,8 @@ struct MessagesView: View {
         ScreenScaffold(title: "Messages",
                        subtitle: "Chat with the family. Type @agent to pull in the assistant.") {
             VStack(alignment: .leading, spacing: 12) {
-                if composing {
-                    Button { composing = false } label: { Label("Cancel", systemImage: "xmark") }
-                        .buttonStyle(.ghost)
-                } else {
-                    Button { composing = true } label: { Label("New conversation", systemImage: "plus") }
-                        .buttonStyle(.primary)
-                }
-
-                if composing {
-                    NewConversationForm(
-                        members: model.familyMembers.filter { $0.id != model.currentUser?.id },
-                        onCancel: { composing = false },
-                        onStart: { ids, name in
-                            composing = false
-                            model.startConversation(memberIds: ids, name: name) { route = $0 }
-                        }
-                    )
-                }
+                Button { composing = true } label: { Label("New conversation", systemImage: "plus") }
+                    .buttonStyle(.primary)
 
                 if model.channels.isEmpty {
                     EmptyState(text: "No conversations yet. Start one above.", systemImage: "bubble.left.and.bubble.right")
@@ -66,6 +50,16 @@ struct MessagesView: View {
         .navigationDestination(item: $route) { id in
             ConversationView(channelId: id) { route = nil }
         }
+        .sheet(isPresented: $composing) {
+            NewConversationSheet(
+                members: model.familyMembers.filter { $0.id != model.currentUser?.id },
+                onStart: { ids, name in
+                    composing = false
+                    model.startConversation(memberIds: ids, name: name) { route = $0 }
+                }
+            )
+            .presentationDetents([.medium, .large])
+        }
     }
 
     private func preview(_ ch: Channel) -> String {
@@ -74,45 +68,56 @@ struct MessagesView: View {
     }
 }
 
-struct NewConversationForm: View {
+/// Presented as a `.sheet` (matching `ChatSessionsView`/`WikiCommentsSheet`'s
+/// own pattern) rather than pushed inline into the Messages list — inline
+/// used to shove the whole conversation list down the screen and duplicated
+/// "Cancel" in two places (a top button and one inside the card) once the
+/// list below it had scrolled out of view.
+struct NewConversationSheet: View {
     let members: [FamilyMember]
-    let onCancel: () -> Void
     let onStart: ([String], String?) -> Void
 
+    @Environment(\.dismiss) private var dismiss
     @State private var picked: Set<String> = []
     @State private var groupName = ""
 
     var body: some View {
-        AppCard {
-            Text("Pick people").appTitleSmall()
-            Spacer().frame(height: 8)
-            ForEach(members) { m in
-                Button {
-                    if picked.contains(m.id) { picked.remove(m.id) } else { picked.insert(m.id) }
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: picked.contains(m.id) ? "checkmark.square.fill" : "square")
-                            .font(.system(size: 20))
-                            .foregroundStyle(picked.contains(m.id) ? Theme.accentInk : Theme.textFaint)
-                        Text(m.displayName).appBody()
-                        Spacer()
+        NavigationStack {
+            List {
+                Section("Pick people") {
+                    ForEach(members) { m in
+                        Button {
+                            if picked.contains(m.id) { picked.remove(m.id) } else { picked.insert(m.id) }
+                        } label: {
+                            HStack {
+                                Text(m.displayName).appBody()
+                                Spacer()
+                                if picked.contains(m.id) {
+                                    Image(systemName: "checkmark").foregroundStyle(Theme.accentInk)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .padding(.vertical, 4)
                 }
-                .buttonStyle(.plain)
-            }
-            if picked.count > 1 {
-                Spacer().frame(height: 8)
-                TextField("Group name", text: $groupName).textFieldStyle(.app)
-            }
-            Spacer().frame(height: 12)
-            HStack(spacing: 8) {
-                Button("Start") {
-                    onStart(Array(picked), groupName.isEmpty ? nil : groupName)
+                if picked.count > 1 {
+                    Section("Group name") {
+                        TextField("Group name", text: $groupName)
+                    }
                 }
-                .buttonStyle(.primary)
-                .disabled(picked.isEmpty || (picked.count > 1 && groupName.isEmpty))
-                Button("Cancel", action: onCancel).font(.inter(14))
+            }
+            .navigationTitle("New conversation")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Start") {
+                        onStart(Array(picked), groupName.isEmpty ? nil : groupName)
+                    }
+                    .disabled(picked.isEmpty || (picked.count > 1 && groupName.isEmpty))
+                }
             }
         }
     }

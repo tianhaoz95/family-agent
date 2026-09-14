@@ -1,12 +1,19 @@
 import SwiftUI
+import WatchKit
 
 /// A chat session's history + composer — the watch's one screen for the one
 /// feature this companion app has. `sessionID == nil` means "a fresh,
-/// not-yet-started chat" (mirrors Android's `wearSessionId == null`); the
-/// text field is a plain SwiftUI `TextField`, which is already how watchOS
-/// itself decides to let the user type (Scribble / dictation / QWERTY /
-/// emoji keyboard, picked by the system) — no special input-sheet helper
-/// needed here, unlike Wear OS's `RemoteInputIntentHelper`.
+/// not-yet-started chat" (mirrors Android's `wearSessionId == null`).
+///
+/// The composer is three icon buttons, not a visible text field — tapping
+/// the keyboard icon calls `presentTextInputController`, WatchKit's own
+/// dedicated system interface for this (Scribble / dictation / QWERTY /
+/// emoji, picked by the system, with its own built-in confirmation screen
+/// before it hands text back), the real watchOS analog of Wear OS's
+/// `RemoteInputIntentHelper`. A plain SwiftUI `TextField` would have worked
+/// too (tapping it already hands off to that same system flow) but reads as
+/// an input field sitting in a row that's otherwise all icon buttons; this
+/// is the same picker with a consistent look.
 struct ChatView: View {
     let sessionID: String?
 
@@ -48,9 +55,20 @@ struct ChatView: View {
                 }
             }
 
+            if !input.isEmpty {
+                Text(input)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .padding(.horizontal, 8)
+            }
             HStack(spacing: 6) {
-                TextField("Message", text: $input)
-                    .textFieldStyle(.plain)
+                Button {
+                    openTextInput()
+                } label: {
+                    Image(systemName: "keyboard")
+                }
+                .buttonStyle(.bordered)
                 Button {
                     toggleRecording()
                 } label: {
@@ -79,6 +97,16 @@ struct ChatView: View {
         }
         .alert("Microphone access needed", isPresented: $micDenied) {
             Button("OK", role: .cancel) {}
+        }
+    }
+
+    private func openTextInput() {
+        WKApplication.shared().visibleInterfaceController?.presentTextInputController(
+            withSuggestions: nil,
+            allowedInputMode: .allowEmoji
+        ) { results in
+            guard let text = results?.first as? String, !text.isEmpty else { return }
+            Task { @MainActor in input = text }
         }
     }
 

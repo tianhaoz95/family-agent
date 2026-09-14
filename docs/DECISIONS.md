@@ -3223,6 +3223,24 @@ rather than an obvious error, so the underlying gap in `ChannelDetail` never
 surfaced as a crash there. Neither client's own code needed to change once
 the server response itself was fixed.
 
+### Follow-up: "Pick people" as a sheet, not pushed inline (iOS)
+
+Reported: tapping "New conversation" shoved the whole conversation list
+down the screen to make room for the picker card, and "Cancel" appeared
+twice at once (a plain button above the card, plus one inside it) once
+that list had scrolled out of view. `NewConversationForm` was appended
+directly into the Messages screen's own `VStack`, growing the page instead
+of presenting as its own surface.
+
+Replaced with `NewConversationSheet` — a `.sheet(isPresented:)` wrapping a
+`NavigationStack`/`List` with `Cancel`/`Start` in the nav bar
+(`.cancellationAction`/`.confirmationAction` placements), the same shape as
+`WikiCommentsSheet` and `ChatSessionsView` elsewhere in this app rather than
+a bespoke inline card. The Messages list itself no longer moves, and there's
+exactly one way to back out. Android has the identical inline-card pattern
+(`NewConversationForm` in `MessagesScreen.kt`) but wasn't reported and
+wasn't touched — worth the same fix as a fast-follow if it comes up there.
+
 Fixed by adding `title` to `ChannelDetail` and computing it in
 `getChannelForUser()` the exact same way `listChannelsForUser` already does
 — every other constructor of a `ChannelDetail` (`findOrCreateDm`,
@@ -3895,18 +3913,32 @@ active view (iOS) — no background service on the watch side, on either
 platform. This v1 scope doesn't need the watch to receive a chat update
 while its own screen isn't the one open, so the simpler thing was correct.
 
-**The text field needs no special handling on either platform, for the
-opposite reason on each.** watchOS: a plain SwiftUI `TextField` already
-delegates to the system's own input sheet (Scribble, dictation, the QWERTY/
-emoji keyboard — whichever the OS decides), so "leave it to the OS" is just
-"don't do anything special." Wear OS has no editable-`TextField` equivalent
-in Compose at all — the platform's own answer to "let the user type" is
-opening the system's dedicated input activity and getting a string back.
+**The text entry surface on both platforms is a dedicated system picker, not
+an inline field.** Wear OS has no editable-`TextField` equivalent in Compose
+at all — the platform's own answer to "let the user type" is opening the
+system's dedicated input activity and getting a string back.
 `WearInput.kt`'s `rememberTextInputLauncher` wraps `RemoteInputIntentHelper`
 (`androidx.wear:wear-input`) for this — note it needs the **framework**
 `android.app.RemoteInput`, not the AndroidX compat `androidx.core.app.RemoteInput`;
 the compat class doesn't type-match `RemoteInputIntentHelper`'s API and fails
 to compile against it.
+
+watchOS's plain SwiftUI `TextField` *would* have worked with zero extra
+code — tapping it already hands off to the system's own input sheet
+(Scribble, dictation, QWERTY/emoji, picked by the system) — but reads oddly
+sitting in a composer row that's otherwise all icon buttons (mic, send).
+Swapped for `WKApplication.shared().visibleInterfaceController?
+.presentTextInputController(withSuggestions:allowedInputMode:completion:)` —
+the real WatchKit-native equivalent of `RemoteInputIntentHelper`, callable
+from a plain SwiftUI-lifecycle app because the system still wraps the
+SwiftUI root in an interface controller under the hood. Its completion
+handler hands back `[Any]?` (element 0 the picked/dictated string), fed into
+the same `input` state a `TextField` would have driven, so `sendTyped()` and
+the Send button's disabled-when-empty state needed no changes. Its own
+system UI already shows a confirmation screen before returning a result, so
+no separate in-app review step was needed either — matches the mic button's
+own already-established "stop recording -> send immediately" shape in the
+same file, just for typed/dictated text instead of a voice clip.
 
 **Swift 6 strict concurrency caught a real bug in both bridges before it
 could ship as a crash.** `WCSessionDelegate` methods are called on an
