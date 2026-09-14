@@ -212,7 +212,13 @@ struct ChatView: View {
         let toolEntries = model.tools
             .filter { $0.kind == "server" && $0.status == "ready" }
             .map { ($0.name, $0.description) }
-        return (SLASH_COMMANDS + toolEntries).filter { $0.0.range(of: q, options: .caseInsensitive) != nil }
+        let all = SLASH_COMMANDS + toolEntries
+        // `"x".range(of: "")` returns nil (Foundation can't locate a
+        // zero-length substring) — without this guard, a bare "/" filtered
+        // every single entry out instead of showing the full list, unlike
+        // Kotlin's `"x".contains("")`, which is true for every string.
+        guard !q.isEmpty else { return all }
+        return all.filter { $0.0.range(of: q, options: .caseInsensitive) != nil }
     }
 
     @ViewBuilder

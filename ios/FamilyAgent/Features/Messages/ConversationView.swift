@@ -115,6 +115,10 @@ struct ConversationView: View {
     private var atQuery: String? {
         guard !mentionPill, input.hasPrefix("@"), !input.dropFirst().contains(" ") else { return nil }
         let q = String(input.dropFirst())
+        // `"agent".range(of: "")` returns nil (Foundation can't locate a
+        // zero-length substring) — without this guard, a bare "@" hid the
+        // "@agent" suggestion instead of showing it.
+        guard !q.isEmpty else { return q }
         return "agent".range(of: q, options: .caseInsensitive) != nil ? q : nil
     }
 

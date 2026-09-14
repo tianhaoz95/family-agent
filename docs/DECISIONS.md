@@ -4136,3 +4136,25 @@ watch was even paired, or to turn the relay off.
   string, so the watch's composer explains itself instead of spinning
   forever — turning the phone's relay off shouldn't look like a network
   failure the user might spend time retrying.
+
+## iOS: bare "/" and "@" showed no autocomplete at all
+
+Reported with a screenshot: typing a lone `/` in Chat showed "No matching
+commands or tools." instead of the full command list — the same list a
+partial match (`/bu`) correctly narrows down from. Messages had the mirror
+bug for `@`: typing a lone `@` showed no "@agent" suggestion either.
+
+Root cause: `"build".range(of: "", options: .caseInsensitive)` returns `nil`
+in Swift/Foundation — a zero-length substring can't be "located" — confirmed
+directly (`xcrun swift`) rather than assumed. Both filters were written as
+`entries.filter { $0.name.range(of: query) != nil }`, so a bare `/` or `@`
+(query `""`) filtered *everything* out instead of matching everything.
+Android's equivalent (`name.contains(slashQuery, ignoreCase = true)`) never
+had this bug — Kotlin's `String.contains("")` is `true` for every string, the
+behavior both autocompletes actually want.
+
+Fixed by special-casing the empty query in both places (`ChatView.slashMatches`,
+`ConversationView.atQuery`) to return the unfiltered list rather than filtering
+by it. No Android/desktop change needed — this was iOS-only, and the two
+platforms' filters were never sharing code to begin with (per this codebase's
+usual hand-mirrored-per-client convention).
