@@ -20,6 +20,10 @@ private val AUTO_READ_KEY = booleanPreferencesKey("auto_read_replies")
 private val MIC_ON_LEFT_KEY = booleanPreferencesKey("mic_button_on_left")
 private val NOTIFY_ON_REPLY_KEY = booleanPreferencesKey("notify_on_reply")
 private val USE_LOCATION_KEY = booleanPreferencesKey("use_location")
+// Which chat session the Wear OS companion currently has open — read/written
+// by PhoneWearListenerService, which has no Activity/ViewModel around to hold
+// this as a plain field between separate wake-ups. See wear/WearProtocol.kt.
+private val WEAR_SESSION_ID_KEY = stringPreferencesKey("wear_session_id")
 // "Remember me" on the login screen — keyed by server URL (below the plain
 // "current session" keys above) so switching servers doesn't leak one home's
 // saved login into another's fields. Plaintext at rest, same as AUTH_TOKEN_KEY
@@ -62,6 +66,15 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setServerUrl(url: String) {
         context.dataStore.edit { it[SERVER_URL_KEY] = url.trimEnd('/') }
+    }
+
+    /** null = the watch's composer is a fresh, not-yet-started chat. */
+    val wearSessionId = context.dataStore.data.map { it[WEAR_SESSION_ID_KEY] }
+
+    suspend fun setWearSessionId(id: String?) {
+        context.dataStore.edit {
+            if (id == null) it.remove(WEAR_SESSION_ID_KEY) else it[WEAR_SESSION_ID_KEY] = id
+        }
     }
 
     /** Which Tasks view to show: list | day | 3day | week | month. Survives sign-out. */

@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		AF5428753050A03500CED2C6 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000011 /* MarkdownUI */; };
 		BB0000000000000000000009 /* FamilyAgentWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000001 /* FamilyAgentWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		CC0000000000000000000009 /* FamilyAgentWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = CC0000000000000000000001 /* FamilyAgentWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -18,6 +19,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = BB0000000000000000000003;
 			remoteInfo = FamilyAgentWidgetExtension;
+		};
+		CC0000000000000000000007 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CC0000000000000000000003;
+			remoteInfo = FamilyAgentWatch;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -33,11 +41,23 @@
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CC000000000000000000000A /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				CC0000000000000000000009 /* FamilyAgentWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		AA0000000000000000000006 /* FamilyAgent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FamilyAgent.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB0000000000000000000001 /* FamilyAgentWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FamilyAgentWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		CC0000000000000000000001 /* FamilyAgentWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FamilyAgentWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -49,6 +69,11 @@
 		BB0000000000000000000002 /* FamilyAgentWidget */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = FamilyAgentWidget;
+			sourceTree = "<group>";
+		};
+		CC0000000000000000000002 /* FamilyAgentWatch */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = FamilyAgentWatch;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -69,6 +94,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CC0000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -77,6 +109,7 @@
 			children = (
 				AA0000000000000000000004 /* FamilyAgent */,
 				BB0000000000000000000002 /* FamilyAgentWidget */,
+				CC0000000000000000000002 /* FamilyAgentWatch */,
 				AA0000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -86,6 +119,7 @@
 			children = (
 				AA0000000000000000000006 /* FamilyAgent.app */,
 				BB0000000000000000000001 /* FamilyAgentWidgetExtension.appex */,
+				CC0000000000000000000001 /* FamilyAgentWatch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -101,11 +135,13 @@
 				AA0000000000000000000008 /* Frameworks */,
 				AA0000000000000000000009 /* Resources */,
 				BB000000000000000000000A /* Embed Foundation Extensions */,
+				CC000000000000000000000A /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				BB0000000000000000000008 /* PBXTargetDependency */,
+				CC0000000000000000000008 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				AA0000000000000000000004 /* FamilyAgent */,
@@ -138,6 +174,26 @@
 			productReference = BB0000000000000000000001 /* FamilyAgentWidgetExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		CC0000000000000000000003 /* FamilyAgentWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CC000000000000000000000D /* Build configuration list for PBXNativeTarget "FamilyAgentWatch" */;
+			buildPhases = (
+				CC0000000000000000000004 /* Sources */,
+				CC0000000000000000000005 /* Frameworks */,
+				CC0000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				CC0000000000000000000002 /* FamilyAgentWatch */,
+			);
+			name = FamilyAgentWatch;
+			productName = FamilyAgentWatch;
+			productReference = CC0000000000000000000001 /* FamilyAgentWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -152,6 +208,9 @@
 						CreatedOnToolsVersion = 26.0;
 					};
 					BB0000000000000000000003 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					CC0000000000000000000003 = {
 						CreatedOnToolsVersion = 26.0;
 					};
 				};
@@ -175,6 +234,7 @@
 			targets = (
 				AA0000000000000000000005 /* FamilyAgent */,
 				BB0000000000000000000003 /* FamilyAgentWidgetExtension */,
+				CC0000000000000000000003 /* FamilyAgentWatch */,
 			);
 		};
 /* End PBXProject section */
@@ -188,6 +248,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BB0000000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CC0000000000000000000006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -211,6 +278,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CC0000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -218,6 +292,11 @@
 			isa = PBXTargetDependency;
 			target = BB0000000000000000000003 /* FamilyAgentWidgetExtension */;
 			targetProxy = BB0000000000000000000007 /* PBXContainerItemProxy */;
+		};
+		CC0000000000000000000008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CC0000000000000000000003 /* FamilyAgentWatch */;
+			targetProxy = CC0000000000000000000007 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -290,7 +369,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/FamilyAgent.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = 68CTFST8W2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -300,7 +379,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1.37;
+				MARKETING_VERSION = 1.1.38;
 				PRODUCT_BUNDLE_IDENTIFIER = app.familyagent.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -317,7 +396,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/FamilyAgent.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = 68CTFST8W2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -327,7 +406,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1.37;
+				MARKETING_VERSION = 1.1.38;
 				PRODUCT_BUNDLE_IDENTIFIER = app.familyagent.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -341,16 +420,16 @@
 				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = 68CTFST8W2;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = Config/FamilyAgentWidgetExtension-Info.plist;
+				INFOPLIST_FILE = "Config/FamilyAgentWidgetExtension-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.1.37;
+				MARKETING_VERSION = 1.1.38;
 				PRODUCT_BUNDLE_IDENTIFIER = app.familyagent.ios.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -365,21 +444,77 @@
 				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = 68CTFST8W2;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = Config/FamilyAgentWidgetExtension-Info.plist;
+				INFOPLIST_FILE = "Config/FamilyAgentWidgetExtension-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.1.37;
+				MARKETING_VERSION = 1.1.38;
 				PRODUCT_BUNDLE_IDENTIFIER = app.familyagent.ios.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		CC000000000000000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 25;
+				DEVELOPMENT_TEAM = 68CTFST8W2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/FamilyAgentWatch-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.1.38;
+				PRODUCT_BUNDLE_IDENTIFIER = app.familyagent.ios.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchsimulator watchos";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Debug;
+		};
+		CC000000000000000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 25;
+				DEVELOPMENT_TEAM = 68CTFST8W2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/FamilyAgentWatch-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.1.38;
+				PRODUCT_BUNDLE_IDENTIFIER = app.familyagent.ios.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchsimulator watchos";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
 			};
 			name = Release;
 		};
@@ -409,6 +544,15 @@
 			buildConfigurations = (
 				BB000000000000000000000B /* Debug */,
 				BB000000000000000000000C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CC000000000000000000000D /* Build configuration list for PBXNativeTarget "FamilyAgentWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CC000000000000000000000B /* Debug */,
+				CC000000000000000000000C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

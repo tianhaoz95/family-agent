@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "family-agent-android"
 include(":app")
+include(":wear")

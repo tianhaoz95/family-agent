@@ -3738,3 +3738,156 @@ confirmed earlier when first placing it), re-added a fresh instance from
 `FamilyAgentWidgetReceiver`'s app-drawer shortcut, and confirmed the field
 text now renders in full on one line with the row visibly filling more of
 the card.
+
+## Watch companion app (Wear OS + watchOS)
+
+A companion app for the wrist, scoped narrowly to one thing: pick a chat
+session, see its history, send a message (text field + voice button + send
+button, same shape as the phone composer). No tasks, documents, board, or
+anything else — that's a possible later expansion, not this one.
+
+**Relay through the paired phone, not an independent LAN client.** Asked
+explicitly rather than assumed, because it forks the whole feature's shape:
+either the watch does its own server discovery + login (mDNS/probe +
+username/password, like the phone), or it leans entirely on an already
+signed-in phone nearby. Chose relay. Two reasons: (1) there's no reasonable
+way to type a server address and password on a watch screen — the phone
+apps already lean on "remembered login" and QR pairing specifically because
+typing credentials on a *phone* keyboard is annoying enough; a watch has no
+keyboard at all. (2) it matches how virtually every real watch companion app
+for a private/local backend actually works (Wear OS's Data Layer and
+WatchConnectivity are both explicitly designed around "the watch is an
+accessory to the phone," not a peer). The cost: the watch is meaningless
+without a reachable paired phone, and both apps have to show that state
+honestly rather than pretending to be a full client.
+
+**Same wire shape on both platforms, hand-duplicated per the existing
+no-shared-code discipline.** Four types travel the relay in both directions:
+a chat session summary, a chat message, a "sessions list" payload, and a
+"current session" payload (messages + a `sending` flag + an optional error
+string, so the watch can show its own optimistic/error states without
+re-deriving them). Android: `WearProtocol.kt`, canonical in `android/wear/`,
+mirrored into `android/app/` for the phone-side listener — same relationship
+as every other pair of hand-mirrored client files in this codebase (`DTOs.swift`
+vs. `ApiModels.kt`, etc.), just one Gradle module pair instead of two
+repos. iOS: `WatchProtocol.swift`, canonical in the new `FamilyAgentWatch`
+target, mirrored into `FamilyAgent/App/` for the phone-side bridge — same
+relationship, one Xcode project with two targets instead of two Gradle
+modules.
+
+**The phone side has to work even if its own UI was never opened this
+boot.** A watch message can arrive at any time; the phone's job is to read
+whatever session is already signed in and make one API call, the same thing
+the app's own UI would do, but with no Activity/ViewModel (Android) or
+`@Observable` view (iOS) anywhere on the path to depend on.
+- Android: `PhoneWearListenerService`, a plain `WearableListenerService` —
+  the manifest declares it for `MESSAGE_RECEIVED`/`CHANNEL_EVENT`, and Play
+  Services wakes it on demand regardless of whether `MainActivity` has ever
+  run. It builds its own `FamilyAgentApi` straight from `SettingsStore`'s
+  persisted session.
+- iOS: `PhoneWatchBridge`, a standalone `WCSessionDelegate` singleton
+  activated as early as possible in `FamilyAgentApp.init` (a message that
+  arrives before `WCSession.activate()` completes is dropped, not queued —
+  there's no equivalent of Android's on-demand wake for an unstarted iOS
+  app, so activating early is the whole mitigation). It builds its own
+  `FamilyAgentAPI` from `SettingsStore().session`, independent of `AppModel`.
+
+**Different transports, matched to what each platform actually offers.**
+Wear OS's Data Layer splits into three purpose-built clients — `MessageClient`
+(watch→phone one-shot commands), `DataClient` (phone→watch state,
+`PutDataMapRequest`, "last write wins," durable across a reconnect — a fresh
+watch process reads `dataClient.dataItems` once to catch up, then listens
+live), `ChannelClient` (used only for the voice clip, a streaming transport
+for the one payload big enough to want it). WatchConnectivity has no such
+split: `sendMessage` (watch→phone, fire-and-forget here — no reply handler
+is awaited, since a chat turn can run far longer than a message's own
+delivery window) covers every watch→phone call including the voice clip
+(small enough as raw `Data` in the dictionary not to need `WCSessionFile`/
+`ChannelClient`-equivalent streaming), and `updateApplicationContext`
+(phone→watch state) is the direct analog of `DataClient` — "last write
+wins," durable, read once on activation (`session.receivedApplicationContext`)
+then via `didReceiveApplicationContext` live. `PhoneWatchBridge` merges a
+partial update onto the existing context dictionary before calling
+`updateApplicationContext` (which replaces the whole dictionary) so pushing
+"current session" doesn't blow away the last-pushed "sessions list", or vice
+versa.
+
+**Both platforms' watch-side listening is foreground-only, deliberately.** A
+plain `DisposableEffect`-registered `DataClient.OnDataChangedListener`
+(Android) / a plain `@Observable` `WCSessionDelegate` object read by the
+active view (iOS) — no background service on the watch side, on either
+platform. This v1 scope doesn't need the watch to receive a chat update
+while its own screen isn't the one open, so the simpler thing was correct.
+
+**The text field needs no special handling on either platform, for the
+opposite reason on each.** watchOS: a plain SwiftUI `TextField` already
+delegates to the system's own input sheet (Scribble, dictation, the QWERTY/
+emoji keyboard — whichever the OS decides), so "leave it to the OS" is just
+"don't do anything special." Wear OS has no editable-`TextField` equivalent
+in Compose at all — the platform's own answer to "let the user type" is
+opening the system's dedicated input activity and getting a string back.
+`WearInput.kt`'s `rememberTextInputLauncher` wraps `RemoteInputIntentHelper`
+(`androidx.wear:wear-input`) for this — note it needs the **framework**
+`android.app.RemoteInput`, not the AndroidX compat `androidx.core.app.RemoteInput`;
+the compat class doesn't type-match `RemoteInputIntentHelper`'s API and fails
+to compile against it.
+
+**Swift 6 strict concurrency caught a real bug in both bridges before it
+could ship as a crash.** `WCSessionDelegate` methods are called on an
+arbitrary queue and so are `nonisolated`; the natural way to handle one is
+`Task { @MainActor in ... }` closing over the delegate call's own
+parameters. That fails to compile ("sending 'x' risks causing data races")
+for both the `WCSession` parameter and a `[String: Any]` dictionary —
+neither is safely `Sendable` (the dictionary's `Any` values could be
+anything, including something actually unsafe to share across the hop). The
+fix in both `WatchBridge.swift` and `PhoneWatchBridge.swift`: pull out only
+the plain, provably-`Sendable` fields actually needed (a `Bool`, a couple of
+`Data?`/`String?`) *before* opening the `Task`, and never let the session or
+the raw dictionary itself cross the actor boundary. This is a real category
+of bug this compiler diagnostic exists to catch, not a false-positive worked
+around blindly — worth remembering for the next delegate-callback-shaped
+bridge in this codebase.
+
+**Verification.** Android: builds clean (`:wear:assembleDebug`,
+`:app:assembleDebug`, `:app:testDebugUnitTest`), the watch app's own UI
+correctly renders the disconnected ("Phone not reachable") state, but true
+phone↔watch Data Layer traffic could not be interactively exercised — Android
+emulator-to-emulator Wear pairing has no documented CLI path: the standalone
+`adb -s <phone> forward tcp:5601 tcp:5601` shortcut alone did not establish
+connectivity, the Play Store companion app isn't preinstalled on a bare
+emulator image, and the Wear emulator's own Bluetooth "Pair new device" scan
+found nothing even with Bluetooth manually enabled on the phone side. This
+specific pairing dance appears to need Android Studio's GUI Device Manager
+wizard (which sets up a shared virtual Bluetooth controller between the two
+emulator *processes* at launch, something a CLI-only session can't
+replicate) — the same class of sandbox limitation as the iOS Simulator's
+blocked synthetic input, documented rather than silently worked around.
+
+iOS fared better: `xcrun simctl pair <watchUDID> <phoneUDID>` (or reusing an
+existing `simctl list pairs` entry) **does** establish a real paired-simulator
+relationship from the CLI alone — confirmed by booting both, watching the
+pair's status move from `disconnected` to `connected`, then installing each
+target's own build (`FamilyAgent.app` on the phone, and the
+`FamilyAgent.app/Watch/FamilyAgentWatch.app` bundle the "Embed Watch Content"
+build phase produces, straight onto the watch simulator by UDID — installing
+the phone app does not, by itself, propagate the embedded watch app to a
+simulator the way a real device's pairing would) and launching both with
+`simctl launch`. Both processes stayed up with no crash report generated.
+The full round-trip through an actual typed message is still unverified —
+Simulator input injection is blocked the same way it was for the widget
+feature (`CGEventPost`/System Events UI scripting both refused, error
+-25204), so nothing can tap the composer or type into the `TextField` — but
+this confirms the build, the target wiring, and both processes' baseline
+health considerably more thoroughly than the widget verification could.
+
+**New Xcode target, hand-edited into `project.pbxproj` the same way the
+widget extension was**: `FamilyAgentWatch`, `SDKROOT = watchos`,
+`TARGETED_DEVICE_FAMILY = 4`, `WATCHOS_DEPLOYMENT_TARGET = 11.0`, bundle id
+`app.familyagent.ios.watchkitapp`, embedded via a **new** "Embed Watch
+Content" copy-files phase (`dstSubfolderSpec = 16`, `dstPath =
+"$(CONTENTS_FOLDER_PATH)/Watch"`) on the `FamilyAgent` target — distinct from
+the widget's "Embed Foundation Extensions" phase (`dstSubfolderSpec = 13`),
+since a watch app and an app extension embed into different subfolders of
+the host bundle. One more thing to remember on the next version bump: there
+are now **three** `CURRENT_PROJECT_VERSION`/`MARKETING_VERSION` pairs in
+`project.pbxproj` (main app, widget extension, watch app) instead of two.

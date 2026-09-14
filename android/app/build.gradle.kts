@@ -13,8 +13,8 @@ android {
         applicationId = "app.familyagent.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 21
-        versionName = "0.1.20"
+        versionCode = 22
+        versionName = "0.1.21"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -61,6 +61,12 @@ dependencies {
     // Home screen widget (Chat launcher): Glance renders Compose-ish UI into
     // RemoteViews under the hood, so no XML layouts are needed.
     implementation("androidx.glance:glance-appwidget:1.1.1")
+
+    // Wear OS companion relay (PhoneWearListenerService / wear/*.kt):
+    // MessageClient/DataClient/ChannelClient, the same Wearable Data Layer
+    // the :wear module talks to from the watch end.
+    implementation("com.google.android.gms:play-services-wearable:19.0.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
 
     // Renders the planner model's Markdown replies in the chat (pure Compose).
     implementation("com.mikepenz:multiplatform-markdown-renderer-android:0.27.0")

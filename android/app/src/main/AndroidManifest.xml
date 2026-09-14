@@ -73,5 +73,18 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/family_agent_widget_info" />
         </receiver>
+
+        <!-- Wear OS companion relay — see wear/PhoneWearListenerService.kt.
+             A plain WearableListenerService, not something MainActivity
+             starts: Play Services wakes it on demand for a message/channel
+             from the watch, whether or not this app is already running. -->
+        <service
+            android:name=".wear.PhoneWearListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <action android:name="com.google.android.gms.wearable.CHANNEL_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

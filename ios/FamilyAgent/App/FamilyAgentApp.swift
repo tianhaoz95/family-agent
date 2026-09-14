@@ -15,6 +15,11 @@ struct FamilyAgentApp: App {
                 .preferredColorScheme(.light)
                 .task { await model.restoreSession() }
                 .task { ReplyNotifications.requestPermissionIfNeeded() }
+                // Watch companion relay (see PhoneWatchBridge.swift) — must
+                // be activated as early as possible, same reasoning as
+                // WCSession's own docs: a message that arrives before
+                // activation completes is dropped, not queued.
+                .task { PhoneWatchBridge.shared.activate() }
                 // AppDelegate can't reach `model` directly (it's constructed
                 // before the environment exists), so a tapped notification's
                 // target is relayed here instead.
