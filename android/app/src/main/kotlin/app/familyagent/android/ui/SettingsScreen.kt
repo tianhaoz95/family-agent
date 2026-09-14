@@ -223,7 +223,7 @@ fun SettingsScreen(
                 mode = serverSettings.chatRetentionMode,
                 value = serverSettings.chatRetentionValue,
                 unitWord = "sessions",
-                onSave = { mode, value -> onSetChatRetention(mode, value, {}, {}) },
+                onSave = { mode, value, onDone, onError -> onSetChatRetention(mode, value, onDone, onError) },
             )
             Spacer(Modifier.height(14.dp))
             RetentionRow(
@@ -231,7 +231,7 @@ fun SettingsScreen(
                 mode = serverSettings.activityRetentionMode,
                 value = serverSettings.activityRetentionValue,
                 unitWord = "entries",
-                onSave = { mode, value -> onSetActivityRetention(mode, value, {}, {}) },
+                onSave = { mode, value, onDone, onError -> onSetActivityRetention(mode, value, onDone, onError) },
             )
 
             Spacer(Modifier.height(18.dp))
@@ -595,7 +595,7 @@ private fun RetentionRow(
     mode: String,
     value: Int?,
     unitWord: String,
-    onSave: (mode: String, value: Int?) -> Unit,
+    onSave: (mode: String, value: Int?, onDone: () -> Unit, onError: (String) -> Unit) -> Unit,
 ) {
     var draftMode by remember(mode) { mutableStateOf(mode) }
     var draftValue by remember(value) { mutableStateOf(value?.toString() ?: "") }
@@ -606,6 +606,15 @@ private fun RetentionRow(
     // InternetAccessSection's `hasLoaded`.
     var hasLoaded by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { hasLoaded = true }
+
+    // `status` shows "Saving…" until `onSave`'s completion actually fires —
+    // previously nothing ever cleared it, so a successful save left the row
+    // stuck reading "Saving…" forever (see docs/DECISIONS.md → "Chat/
+    // activity retention limits" → "Follow-up: 'Saving…' never cleared").
+    fun performSave(mode: String, value: Int?) {
+        status = "Saving…"
+        onSave(mode, value, { status = null }, { message -> status = "Couldn't save: $message" })
+    }
 
     Text(label, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
     Spacer(Modifier.height(6.dp))
@@ -627,11 +636,11 @@ private fun RetentionRow(
                         menuOpen = false
                         val n = draftValue.toIntOrNull()
                         when {
-                            v == "off" -> { status = "Saving…"; onSave("off", null) }
+                            v == "off" -> performSave("off", null)
                             // Switching count<->days with a number already
                             // typed saves right away; switching off "off"
                             // with nothing typed yet waits for the field below.
-                            n != null && n > 0 -> { status = "Saving…"; onSave(v, n) }
+                            n != null && n > 0 -> performSave(v, n)
                         }
                     },
                 )
@@ -655,8 +664,7 @@ private fun RetentionRow(
             val n = draftValue.toIntOrNull() ?: return@LaunchedEffect
             if (n <= 0) return@LaunchedEffect
             delay(700)
-            status = "Saving…"
-            onSave(draftMode, n)
+            performSave(draftMode, n)
         }
     }
 

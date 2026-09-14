@@ -392,18 +392,28 @@ extension AppModel {
     }
 
     /// Self-service — works for any signed-in user, not just an admin.
-    func setChatRetention(mode: String, value: Int?) {
+    /// `onDone`/`onError` let the Settings row show real save-completed /
+    /// save-failed feedback instead of a "Saving…" label with nothing ever
+    /// clearing it (see docs/DECISIONS.md → "Chat/activity retention
+    /// limits" → "Follow-up: 'Saving…' never cleared").
+    func setChatRetention(mode: String, value: Int?, onDone: @escaping () -> Void = {}, onError: @escaping (String) -> Void = { _ in }) {
         Task {
             if let s = await perform({ try await api.setChatRetention(mode: mode, value: value) }) {
                 serverSettings = s
+                onDone()
+            } else {
+                onError(lastError ?? "Couldn't save")
             }
         }
     }
     /// Same as `setChatRetention`, for the activity log.
-    func setActivityRetention(mode: String, value: Int?) {
+    func setActivityRetention(mode: String, value: Int?, onDone: @escaping () -> Void = {}, onError: @escaping (String) -> Void = { _ in }) {
         Task {
             if let s = await perform({ try await api.setActivityRetention(mode: mode, value: value) }) {
                 serverSettings = s
+                onDone()
+            } else {
+                onError(lastError ?? "Couldn't save")
             }
         }
     }

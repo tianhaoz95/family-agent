@@ -3324,7 +3324,37 @@ retention fields), `data/FamilyAgentApi.kt` (`setChatRetention`/
 `App/AppModel+Data.swift`, `Features/Settings/SettingsView.swift`
 (`RetentionRow`).
 
-## Chat attachments: camera, photo library, files (iOS)
+### Follow-up: "Saving…" never cleared
+
+Reported (with a screenshot): both retention rows on iOS got stuck reading
+"Saving…" forever, even though the save had actually gone through — a
+refetch of Settings showed the new value persisted. Not a network/logic bug
+in the sense of the write failing; the **UI's own completion signal was
+wired to nothing**.
+
+Root cause, present on both platforms: `RetentionRow`'s `onSave` closure was
+originally a bare `(mode, value) -> Void` — fire-and-forget, no way for the
+row to learn the request finished. On iOS, `AppModel.setChatRetention`/
+`setActivityRetention` didn't even take completion parameters yet. On
+Android it was subtler: `AppViewModel.setChatRetention`/`setActivityRetention`
+already had working `onDone`/`onError` parameters (mirroring the pattern
+used elsewhere, e.g. `setWebAccess`) — the bug was purely that
+`SettingsScreen.kt`'s two `RetentionRow(...)` call sites passed `{}, {}` for
+them, silently discarding the very signal that would have cleared `status`.
+Either way, `status = "Saving…"` had no path back to `nil` (or an error
+message) once the write actually resolved, on success *or* failure.
+
+Fixed by threading a real completion signal end-to-end on both platforms:
+`RetentionRow.onSave` is now `(mode, value, onDone, onError) -> Void`; iOS's
+`AppModel` methods gained matching `onDone`/`onError` parameters (`perform`
+already distinguishes success from failure internally — this just exposes
+that instead of swallowing it); Android's call sites now forward the
+view model's own `onDone`/`onError` instead of discarding them. Each row's
+own `performSave()` helper sets `status = "Saving…"` before calling `onSave`
+and clears it to `nil` (success — the row's `hint` text then recomputes from
+the now-updated `mode`/`value` props) or a `"Couldn't save: …"` message
+(failure) in the completion callback, so the label always reflects a real
+outcome instead of an assumption.
 
 iOS Chat could only attach a photo (`PhotosPicker`, images only) — desktop's
 composer has long been able to attach a real document (PDF, scan, `.txt`/

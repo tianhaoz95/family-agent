@@ -120,13 +120,17 @@ struct SettingsView: View {
                     RetentionRow(
                         label: "Chat sessions", unitWord: "sessions",
                         mode: s.chatRetentionMode, value: s.chatRetentionValue,
-                        onSave: { mode, value in model.setChatRetention(mode: mode, value: value) }
+                        onSave: { mode, value, onDone, onError in
+                            model.setChatRetention(mode: mode, value: value, onDone: onDone, onError: onError)
+                        }
                     )
                     Spacer().frame(height: 14)
                     RetentionRow(
                         label: "Activity log", unitWord: "entries",
                         mode: s.activityRetentionMode, value: s.activityRetentionValue,
-                        onSave: { mode, value in model.setActivityRetention(mode: mode, value: value) }
+                        onSave: { mode, value, onDone, onError in
+                            model.setActivityRetention(mode: mode, value: value, onDone: onDone, onError: onError)
+                        }
                     )
 
                     section("Assistant")
@@ -353,7 +357,9 @@ private struct RetentionRow: View {
     let unitWord: String
     let mode: String
     let value: Int?
-    let onSave: (String, Int?) -> Void
+    /// (mode, value, onDone, onError) — the row shows "Saving…" until one of
+    /// the two fires, rather than a label nothing ever clears.
+    let onSave: (String, Int?, @escaping () -> Void, @escaping (String) -> Void) -> Void
 
     private static let modes: [(String, String)] = [
         ("off", "Keep everything"),
@@ -382,14 +388,12 @@ private struct RetentionRow: View {
                 guard hasLoaded else { return }
                 let n = Int(draftValue)
                 if newValue == "off" {
-                    status = "Saving\u{2026}"
-                    onSave("off", nil)
+                    performSave(mode: "off", value: nil)
                 } else if let n, n > 0 {
                     // Switching count<->days with a number already typed
                     // saves right away; switching off "off" with nothing
                     // typed yet waits for the field below.
-                    status = "Saving\u{2026}"
-                    onSave(newValue, n)
+                    performSave(mode: newValue, value: n)
                 }
             }
 
@@ -420,9 +424,21 @@ private struct RetentionRow: View {
             try? await Task.sleep(for: .seconds(0.7))
             guard !Task.isCancelled else { return }
             guard let n = Int(draftValue), n > 0 else { return }
-            status = "Saving\u{2026}"
-            onSave(draftMode, n)
+            performSave(mode: draftMode, value: n)
         }
+    }
+
+    /// `status` shows "Saving…" until `onSave`'s completion actually fires —
+    /// previously nothing ever cleared it, so a successful save left the
+    /// row stuck reading "Saving…" forever (see docs/DECISIONS.md → "Chat/
+    /// activity retention limits" → "Follow-up: 'Saving…' never cleared").
+    private func performSave(mode: String, value: Int?) {
+        status = "Saving\u{2026}"
+        onSave(mode, value, {
+            status = nil
+        }, { message in
+            status = "Couldn't save: \(message)"
+        })
     }
 
     private var hint: String {
