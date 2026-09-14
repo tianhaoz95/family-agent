@@ -16,6 +16,7 @@ import {
   type SettingsPatch,
   type RetentionMode,
   type Tool,
+  type ToolRevision,
   type ToolDbColumn,
   type ToolOperation,
   type ArtifactSummary,
@@ -3591,6 +3592,14 @@ function renderTools(tools: Tool[]) {
       inspectBtn.addEventListener("click", () => void openDbInspector(tool));
       footer.appendChild(inspectBtn);
 
+      const historyBtn = document.createElement("button");
+      historyBtn.className = "doc-preview";
+      historyBtn.type = "button";
+      historyBtn.textContent = "History";
+      historyBtn.title = "What's changed, and when";
+      historyBtn.addEventListener("click", () => void toggleToolHistory(tool, li, historyBtn));
+      footer.appendChild(historyBtn);
+
       if (revising) {
         const b = document.createElement("span");
         b.className = "document-pending";
@@ -3705,6 +3714,81 @@ function makeImproveButton(tool: Tool, label: string): HTMLButtonElement {
     });
   });
   return btn;
+}
+
+// "History": an inline timeline of every build/improve/revert attempt for
+// one tool, newest first — the "release message" is the instruction that
+// produced it (a build/revert has none, just a plain label). Toggled open
+// per row rather than a separate view, matching the "Improve" inline form
+// right next to it.
+function toolRevisionLabel(r: ToolRevision): string {
+  if (r.kind === "build") return r.ok ? "Created" : "Build failed";
+  if (r.kind === "revert") return "Reverted";
+  return r.ok ? "Improved" : "Improve failed";
+}
+function renderToolHistory(container: HTMLElement, revisions: ToolRevision[]): void {
+  container.innerHTML = "";
+  if (revisions.length === 0) {
+    container.innerHTML = `<p class="tool-history-empty">No history yet.</p>`;
+    return;
+  }
+  const list = document.createElement("ol");
+  list.className = "tool-history-list";
+  for (const r of revisions) {
+    const item = document.createElement("li");
+    item.className = "tool-history-item" + (r.ok ? "" : " is-failed");
+    const dot = document.createElement("span");
+    dot.className = "tool-history-dot";
+    item.appendChild(dot);
+
+    const body = document.createElement("div");
+    body.className = "tool-history-body";
+    const head = document.createElement("div");
+    head.className = "tool-history-head";
+    const label = document.createElement("span");
+    label.className = "tool-history-label";
+    label.textContent = toolRevisionLabel(r);
+    const time = document.createElement("span");
+    time.className = "tool-history-time";
+    time.textContent = relativeTime(r.createdAt);
+    head.append(label, time);
+    body.appendChild(head);
+    if (r.instruction) {
+      const msg = document.createElement("p");
+      msg.className = "tool-history-instruction";
+      msg.textContent = `“${r.instruction}”`;
+      body.appendChild(msg);
+    }
+    if (r.message) {
+      const note = document.createElement("p");
+      note.className = "tool-history-note";
+      note.textContent = r.message;
+      body.appendChild(note);
+    }
+    item.appendChild(body);
+    list.appendChild(item);
+  }
+  container.appendChild(list);
+}
+async function toggleToolHistory(tool: Tool, li: HTMLElement, btn: HTMLButtonElement): Promise<void> {
+  const existing = li.querySelector<HTMLElement>(`[data-history-for="${tool.id}"]`);
+  if (existing) {
+    existing.remove();
+    btn.textContent = "History";
+    return;
+  }
+  btn.textContent = "Hide history";
+  const wrap = document.createElement("div");
+  wrap.className = "tool-history";
+  wrap.dataset.historyFor = tool.id;
+  wrap.textContent = "Loading…";
+  li.appendChild(wrap);
+  try {
+    const { revisions } = await api.toolRevisions(tool.id);
+    renderToolHistory(wrap, revisions);
+  } catch (err) {
+    wrap.textContent = `Couldn't load history: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 async function refreshTools(): Promise<Tool[]> {

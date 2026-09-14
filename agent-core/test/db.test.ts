@@ -167,6 +167,32 @@ describe("Store (scoped to one user)", () => {
     expect(store.getTool(tool.id)).toBeUndefined();
     expect(store.listActivity().some((a) => a.action === "tool.deleted")).toBe(true);
   });
+
+  it("keeps a release-notes timeline of build/improve/revert attempts", () => {
+    const tool = store.createTool({ name: "Chore Tracker", description: "track chores", prompt: "make a chore tracker", kind: "static" });
+    store.setToolStatus(tool.id, "ready");
+    store.recordToolRevision(tool.id, { revision: 0, kind: "build", ok: true, message: 'Built "Chore Tracker".' });
+
+    // finishToolRevision itself records the entry — a caller never has to
+    // remember to do it separately, same "can't drift" principle as activity.
+    store.beginToolRevision(tool.id);
+    store.finishToolRevision(tool.id, { ok: true }, "add a due date to each chore");
+    expect(store.getTool(tool.id)?.revisionCount).toBe(1);
+
+    store.beginToolRevision(tool.id);
+    store.finishToolRevision(tool.id, { ok: false, error: "the change wouldn't run" }, "sync with the calendar");
+
+    const timeline = store.listToolRevisions(tool.id);
+    expect(timeline).toHaveLength(3);
+    // Newest first.
+    expect(timeline[0]).toMatchObject({ kind: "improve", instruction: "sync with the calendar", ok: false });
+    expect(timeline[1]).toMatchObject({ kind: "improve", instruction: "add a due date to each chore", ok: true, revision: 1 });
+    expect(timeline[2]).toMatchObject({ kind: "build", instruction: null, ok: true, revision: 0 });
+
+    // Deleting the tool cleans up its timeline too — nothing orphaned.
+    store.deleteTool(tool.id);
+    expect(store.listToolRevisions(tool.id)).toHaveLength(0);
+  });
 });
 
 describe("ScopedStore — chat sessions", () => {

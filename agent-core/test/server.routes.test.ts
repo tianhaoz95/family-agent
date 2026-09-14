@@ -1087,6 +1087,23 @@ describe("HTTP API", () => {
     expect((await inject({ method: "GET", url: "/tools/NOPE/operations" })).statusCode).toBe(404);
   });
 
+  it("GET /tools/:id/revisions returns the release-notes timeline, newest first", async () => {
+    const t = admin.scoped.createTool({ name: "Chore Tracker", description: "track chores", prompt: "x", kind: "static" });
+    admin.scoped.setToolStatus(t.id, "ready");
+    admin.scoped.recordToolRevision(t.id, { revision: 0, kind: "build", ok: true, message: "Built." });
+    admin.scoped.beginToolRevision(t.id);
+    admin.scoped.finishToolRevision(t.id, { ok: true }, "add a due date");
+
+    const res = await inject({ method: "GET", url: `/tools/${t.id}/revisions` });
+    expect(res.statusCode).toBe(200);
+    const revisions = res.json().revisions;
+    expect(revisions).toHaveLength(2);
+    expect(revisions[0]).toMatchObject({ kind: "improve", instruction: "add a due date", ok: true });
+    expect(revisions[1]).toMatchObject({ kind: "build", instruction: null, ok: true });
+
+    expect((await inject({ method: "GET", url: "/tools/NOPE/revisions" })).statusCode).toBe(404);
+  });
+
   // ---- tool database inspector ----
   // Stands in for what tools/harness.ts writes at runtime: a server tool with
   // its own SQLite db under <dataDir>/tools/<id>/data/tool.db.

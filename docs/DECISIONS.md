@@ -1358,8 +1358,11 @@ in place.
   bounce to it. `tools-agent` logs a `tool.error` activity line whenever an
   operation call fails, so a recurring bug is visible.
 - **Not done** (from the brainstorm): direct code editing in the UI (the user
-  ruled it out — non-technical family members), full version history, spec-first
-  tools, a richer initial build form.
+  ruled it out — non-technical family members), spec-first
+  tools, a richer initial build form. Full version history landed as a
+  release-notes timeline (see the follow-up below) — one step further than the
+  one-level revert this section started with, short of the actual multi-step
+  undo the "full version history" phrase originally meant.
 - Tests: `test/toolBuilder.test.ts` (a fake model drives build / improve /
   revert / self-repair / broken-improve-keeps-working / failed-tool-rebuild /
   **migration-bug-caught-and-repaired** / **unfixable-migration-keeps-data** /
@@ -1369,6 +1372,55 @@ in place.
   end-to-end verified by hand (build a borrow log / item tracker, improve to add
   a field via chat, the model wrote guarded ALTERs in every op, data preserved,
   revert).
+
+### Follow-up: a release-notes timeline, not just a revision counter
+
+`tools.revision_count` / `revision_state` only ever told you "improved 3
+times" and, if the last one failed, why — nothing about what any of those
+three attempts actually changed, or that one of them was reverted. A family
+member watching a tool evolve over weeks had no way to answer "what did I ask
+for last time?" without remembering it themselves.
+
+- **New table, not a repurposed one.** `tool_revisions` (`agent-core/src/db.ts`)
+  is an **append-only log** alongside the existing counters — `tools` still
+  tracks only current state (what the UI's status branches need), this tracks
+  history (what the timeline needs). Each row: `revision` (the count at that
+  point), `kind` (`build` | `improve` | `revert`), `instruction` (the ask that
+  produced it — the "release message"; null for a build or a revert, neither
+  of which is instruction-driven), `ok`, and `message` (a short human summary
+  of what happened). A **failed** improve attempt is still recorded, not
+  discarded — the timeline shows what was tried, not just what stuck, so
+  "I asked for a split-expense feature and it didn't work" stays visible
+  instead of silently vanishing back to the prior revision.
+- **One choke point writes it, not every call site.** `finishToolRevision`
+  (the method `iterateTool`'s working-tool branch already called to update
+  `tools.revision_state`) now also writes the `tool_revisions` row itself, in
+  both its success and failure branches — the same "a store method records its
+  own side effects" pattern activity logging already uses everywhere in this
+  codebase. `buildTool` and `revertTool` each add their own single
+  `recordToolRevision` call (a build has no prior "working" state to route
+  through `finishToolRevision`, and a revert isn't an iterate at all), and
+  `iterateTool`'s failed-tool-rebuild branch does the same at both of its own
+  outcomes. `deleteTool` cleans up a tool's revisions along with everything
+  else scoped to it.
+- **Read side:** `GET /tools/:id/revisions` → `{ revisions }`, newest first,
+  capped at 50 (`listToolRevisions`, mirrors `listRoutineRuns`'s per-user
+  history-table shape exactly — table + insert + `list*(id, limit=50)` capped
+  `Math.min(Math.max(limit,1),100)`, `ORDER BY created_at DESC`).
+- **All three clients render the same shape**: a dot-and-connecting-line
+  timeline (green/blue dot = success, red = failed), each entry showing a
+  bold action label ("Created" / "Improved" / "Improve failed" / "Reverted"),
+  a relative timestamp, the quoted instruction in italics when there is one,
+  and the plain-text summary underneath. A "History" button next to "Inspect
+  data" toggles it open, fetched lazily on first open (not prefetched with the
+  tool list — a family with a dozen tools shouldn't pay for a dozen history
+  queries just to render the list). Desktop: `.tool-history-*` in
+  `style.css`, `toggleToolHistory`/`renderToolHistory` in `main.ts`. Android:
+  `ToolHistoryTimeline` in `ToolsScreen.kt`. iOS: `ToolHistoryTimeline` in
+  `ToolsView.swift`.
+- Tests: `db.test.ts` (records build/improve/revert entries, including a
+  failed one, in the right order), `server.routes.test.ts`
+  (`GET /tools/:id/revisions` returns them newest-first).
 
 ## Scheduled routines ("cron for the family agent")
 

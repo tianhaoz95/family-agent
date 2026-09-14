@@ -4533,6 +4533,89 @@ input[type="file"]::file-selector-button:hover {
   line-height: 1.5;
 }
 
+/* ---- tool "History": a vertical timeline of build/improve/revert attempts,
+   newest first — each entry's "release message" is the instruction that
+   produced it (or a plain label for a build/revert, which have none). ---- */
+.tool-history {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.tool-history-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+}
+.tool-history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+.tool-history-item {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  padding-bottom: 14px;
+}
+.tool-history-item:last-child {
+  padding-bottom: 0;
+}
+/* The connecting line runs through the dot column, behind it. */
+.tool-history-item:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 14px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--border-strong);
+}
+.tool-history-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.tool-history-item.is-failed .tool-history-dot {
+  background: var(--danger);
+}
+.tool-history-body {
+  flex: 1;
+  min-width: 0;
+}
+.tool-history-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.tool-history-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.tool-history-item.is-failed .tool-history-label {
+  color: var(--danger);
+}
+.tool-history-time {
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}
+.tool-history-instruction {
+  margin: 3px 0 0;
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--text-body);
+}
+.tool-history-note {
+  margin: 2px 0 0;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+}
+
 /* ---------- Routines ------------------------------------------------ */
 .routine-list {
   list-style: none;

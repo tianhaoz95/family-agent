@@ -551,6 +551,10 @@ class FamilyAgentApi(
     suspend fun toolOperations(id: String): List<ToolOperation> =
         json.decodeFromString<ToolOperationsResponse>(get("/tools/${id.encodeQuery()}/operations")).operations
 
+    /** A tool's release-notes timeline — build/improve/revert attempts, newest first. */
+    suspend fun toolRevisions(id: String): List<ToolRevision> =
+        json.decodeFromString<ToolRevisionsResponse>(get("/tools/${id.encodeQuery()}/revisions")).revisions
+
     // ---- tool database inspector (read-only) ----
 
     suspend fun toolDb(id: String): ToolDbOverview = json.decodeFromString(get("/tools/${id.encodeQuery()}/db"))

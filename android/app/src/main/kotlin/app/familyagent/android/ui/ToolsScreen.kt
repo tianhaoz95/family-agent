@@ -1,5 +1,6 @@
 package app.familyagent.android.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,6 +19,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.familyagent.android.data.Tool
 import app.familyagent.android.data.ToolOperation
+import app.familyagent.android.data.ToolRevision
 import app.familyagent.android.ui.theme.AppAccents
 
 @Composable
@@ -32,6 +34,7 @@ fun ToolsScreen(
     onRevert: (id: String) -> Unit = {},
     onInspectData: (id: String) -> Unit = {},
     onLoadOperations: suspend (id: String) -> List<ToolOperation> = { emptyList() },
+    onLoadRevisions: suspend (id: String) -> List<ToolRevision> = { emptyList() },
 ) {
     var prompt by remember { mutableStateOf("") }
 
@@ -81,7 +84,7 @@ fun ToolsScreen(
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(tools, key = { it.id }) { tool ->
-                    ToolCard(tool, toolsBaseUrl, onOpen, onDelete, onIterate, onRevert, onInspectData, onLoadOperations)
+                    ToolCard(tool, toolsBaseUrl, onOpen, onDelete, onIterate, onRevert, onInspectData, onLoadOperations, onLoadRevisions)
                 }
             }
         }
@@ -98,12 +101,26 @@ private fun ToolCard(
     onRevert: (id: String) -> Unit,
     onInspectData: (id: String) -> Unit,
     onLoadOperations: suspend (id: String) -> List<ToolOperation>,
+    onLoadRevisions: suspend (id: String) -> List<ToolRevision>,
 ) {
     // Which of "Fix it" / "Improve" is expanded into its inline instruction
     // field, if either — collapsed by default, one at a time (there's only
     // ever one visible per card anyway, but this also resets across recomposition).
     var improving by remember(tool.id) { mutableStateOf(false) }
     val revising = tool.revisionState == "revising"
+
+    // The release-notes timeline — collapsed by default, fetched lazily the
+    // first time it's opened (mirrors desktop's toggleToolHistory).
+    var historyOpen by remember(tool.id) { mutableStateOf(false) }
+    var historyLoading by remember(tool.id) { mutableStateOf(false) }
+    var revisions by remember(tool.id) { mutableStateOf<List<ToolRevision>>(emptyList()) }
+    LaunchedEffect(tool.id, historyOpen) {
+        if (historyOpen && revisions.isEmpty()) {
+            historyLoading = true
+            revisions = runCatching { onLoadRevisions(tool.id) }.getOrDefault(emptyList())
+            historyLoading = false
+        }
+    }
 
     // What the chat assistant can actually do with this tool — fetched once
     // per ready tool (its operations don't change without an improve, which
@@ -199,6 +216,13 @@ private fun ToolCard(
                         Spacer(Modifier.width(6.dp))
                         Text(if (tool.kind == "server") "Inspect data" else "View saved data")
                     }
+                    OutlinedButton(
+                        onClick = { historyOpen = !historyOpen },
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    ) {
+                        Text(if (historyOpen) "Hide history" else "History")
+                    }
                 }
                 Spacer(Modifier.height(8.dp))
                 if (revising) {
@@ -258,9 +282,116 @@ private fun ToolCard(
                         }
                     }
                 }
+                // "What was asked for, on the way there" — the release-notes
+                // timeline, not just the "improved N times" counter above.
+                if (historyOpen) {
+                    Spacer(Modifier.height(10.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(Modifier.height(10.dp))
+                    when {
+                        historyLoading -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Loading…", style = MaterialTheme.typography.bodySmall, color = AppAccents.textSecondary)
+                        }
+                        revisions.isEmpty() -> Text(
+                            "No history yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppAccents.textSecondary,
+                        )
+                        else -> ToolHistoryTimeline(revisions)
+                    }
+                }
             }
         }
     }
+}
+
+/** One dot-and-line entry per build/improve/revert attempt, newest first —
+ *  mirrors desktop's .tool-history-* timeline exactly (see style.css). */
+@Composable
+private fun ToolHistoryTimeline(revisions: List<ToolRevision>) {
+    Column {
+        revisions.forEachIndexed { index, r ->
+            Row {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(20.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .size(8.dp)
+                            .background(
+                                if (r.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                shape = androidx.compose.foundation.shape.CircleShape,
+                            ),
+                    )
+                    if (index < revisions.lastIndex) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .width(1.dp)
+                                .background(MaterialTheme.colorScheme.outlineVariant),
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.padding(bottom = 14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            toolRevisionLabel(r),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (r.ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+                        )
+                        Text(
+                            relativeTime(r.createdAt),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AppAccents.textSecondary,
+                        )
+                    }
+                    if (r.instruction != null) {
+                        Text(
+                            "“${r.instruction}”",
+                            style = MaterialTheme.typography.bodySmall.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (r.message != null) {
+                        Text(
+                            r.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppAccents.textSecondary,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** "Just now" / "Yesterday" / "Wednesday" / "Sep 5" — mirrors desktop's
+ *  relativeTime() in format.ts. */
+private fun relativeTime(iso: String): String = runCatching {
+    val instant = java.time.Instant.parse(iso)
+    val zdt = instant.atZone(java.time.ZoneId.systemDefault())
+    val now = java.time.ZonedDateTime.now()
+    val secs = java.time.Duration.between(instant, java.time.Instant.now()).seconds
+    val today = now.toLocalDate()
+    val days = java.time.temporal.ChronoUnit.DAYS.between(zdt.toLocalDate(), today)
+    when {
+        secs < 45 -> "just now"
+        secs < 90 -> "a minute ago"
+        secs < 3600 -> "${secs / 60} min ago"
+        days == 0L -> zdt.format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))
+        days == 1L -> "Yesterday"
+        days < 7 -> zdt.format(java.time.format.DateTimeFormatter.ofPattern("EEEE"))
+        else -> zdt.format(java.time.format.DateTimeFormatter.ofPattern("MMM d"))
+    }
+}.getOrDefault("")
+
+private fun toolRevisionLabel(r: ToolRevision): String = when (r.kind) {
+    "build" -> if (r.ok) "Created" else "Build failed"
+    "revert" -> "Reverted"
+    else -> if (r.ok) "Improved" else "Improve failed"
 }
 
 // Turn a tool operation into a plain imperative phrase a family member can

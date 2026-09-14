@@ -750,6 +750,12 @@ export async function revertTool(
     }
   }
   store.logActivity("user", "tool.reverted", `Reverted "${name}" to its previous version${dataNote}`);
+  store.recordToolRevision(toolId, {
+    revision: store.getTool(toolId)!.revisionCount,
+    kind: "revert",
+    ok: true,
+    message: `Reverted "${name}" to its previous version.${dataNote}`,
+  });
   return { ok: true, note: `Reverted "${name}" to its previous version.${dataNote}`, name, description };
 }
 
@@ -888,10 +894,12 @@ export async function buildTool(
     );
     store.setToolStatus(tool.id, "ready");
     const done = store.getTool(tool.id)!;
+    store.recordToolRevision(tool.id, { revision: 0, kind: "build", ok: true, message: `Built "${done.name}".${note}` });
     return { tool: done, ok: true, note: `Built "${done.name}".${note}` };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     store.setToolStatus(tool.id, "failed", msg);
+    store.recordToolRevision(tool.id, { revision: 0, kind: "build", ok: false, message: msg });
     return { tool: store.getTool(tool.id)!, ok: false, note: `Could not build "${tool.name}": ${msg}` };
   }
 }
@@ -934,10 +942,13 @@ export async function iterateTool(
         "improve"
       );
       store.setToolStatus(toolId, "ready");
-      return { tool: store.getTool(toolId)!, ok: true, note: `Rebuilt "${store.getTool(toolId)!.name}".${note}` };
+      const done = store.getTool(toolId)!;
+      store.recordToolRevision(toolId, { revision: done.revisionCount, kind: "improve", instruction, ok: true, message: `Rebuilt "${done.name}".${note}` });
+      return { tool: done, ok: true, note: `Rebuilt "${done.name}".${note}` };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       store.setToolStatus(toolId, "failed", msg);
+      store.recordToolRevision(toolId, { revision: tool.revisionCount, kind: "improve", instruction, ok: false, message: msg });
       return { tool: store.getTool(toolId)!, ok: false, note: `Still couldn't build it: ${msg}` };
     }
   }
@@ -985,7 +996,7 @@ export async function iterateTool(
       note = "";
     }
 
-    store.finishToolRevision(toolId, { ok: true });
+    store.finishToolRevision(toolId, { ok: true }, instruction);
     const done = store.getTool(toolId)!;
     return { tool: done, ok: true, note: `Updated "${done.name}".${note}` };
   } catch (e) {
@@ -994,7 +1005,7 @@ export async function iterateTool(
     // backend back up, and report.
     await rm(join(dir, STAGE), { recursive: true, force: true }).catch(() => {});
     if (targetKind === "server" && tool.kind === "server") void supervisor.portFor(toolId).catch(() => {});
-    store.finishToolRevision(toolId, { ok: false, error: msg });
+    store.finishToolRevision(toolId, { ok: false, error: msg }, instruction);
     return { tool: store.getTool(toolId)!, ok: false, note: `Couldn't make that change: ${msg}. The tool still works as before.` };
   }
 }

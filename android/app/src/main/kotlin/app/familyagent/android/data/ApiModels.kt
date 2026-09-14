@@ -193,6 +193,22 @@ data class ToolOperation(
 @Serializable
 data class ToolOperationsResponse(val operations: List<ToolOperation> = emptyList())
 
+/** "build" | "improve" | "revert" — one entry in a tool's release-notes timeline. */
+@Serializable
+data class ToolRevision(
+    val id: String,
+    val revision: Int,
+    val kind: String,
+    /** The ask that produced this entry — the "release message". Null for build/revert. */
+    val instruction: String? = null,
+    val ok: Boolean,
+    val message: String? = null,
+    val createdAt: String,
+)
+
+@Serializable
+data class ToolRevisionsResponse(val revisions: List<ToolRevision> = emptyList())
+
 // ---- tool database inspector (server-kind tools only; static tools show
 // their /__state blobs through the same overview instead) ----
 

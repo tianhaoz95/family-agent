@@ -256,6 +256,19 @@ export interface ToolRecord {
   revisionState: string | null;
 }
 
+export type ToolRevisionKind = "build" | "improve" | "revert";
+
+/** One entry in a tool's "release notes" timeline — see `tool_revisions`. */
+export interface ToolRevisionRecord {
+  id: string;
+  revision: number;
+  kind: ToolRevisionKind;
+  instruction: string | null;
+  ok: boolean;
+  message: string | null;
+  createdAt: string;
+}
+
 // ---- AI-generated artifacts (render_artifact) ----
 
 export interface ArtifactRecord {
@@ -690,6 +703,27 @@ CREATE TABLE IF NOT EXISTS tools (
   -- reason the last improve failed (shown as a warning, tool still works).
   revision_state TEXT
 );
+
+-- One row per build/improve/revert attempt on a tool — the "release notes"
+-- timeline the Tools screen's "History" view reads. tools.revision_count /
+-- revision_state only ever remember the *current* state; this is what
+-- lets a family member see *what was asked for* on the way there, not just
+-- "improved 3 times". Deliberately keeps a row for a *failed* attempt too
+-- (ok = 0) — the whole point is showing what was tried, not just what stuck.
+CREATE TABLE IF NOT EXISTS tool_revisions (
+  id TEXT PRIMARY KEY,
+  tool_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  kind TEXT NOT NULL, -- 'build' | 'improve' | 'revert'
+  -- The instruction that produced this entry — null for a fresh build (the
+  -- original prompt is on tools.prompt already) and for a revert.
+  instruction TEXT,
+  ok INTEGER NOT NULL,
+  message TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_revisions_tool ON tool_revisions(tool_id, created_at);
 
 -- AI-generated full-page artifacts (render_artifact). Per-user, browsable in
 -- the Artifacts tab. We store only the raw <body> fragment the model wrote and
@@ -2867,10 +2901,14 @@ export class ScopedStore {
   }
 
   /** Finish an improve — success bumps the revision count and clears the flag;
-   *  failure records the reason (shown as a warning; the tool still works). */
+   *  failure records the reason (shown as a warning; the tool still works).
+   *  `instruction` is the ask that produced this attempt — recorded either
+   *  way, in `tool_revisions`, so the "History" timeline shows what was
+   *  tried even when it didn't stick. */
   finishToolRevision(
     id: string,
-    outcome: { ok: true } | { ok: false; error: string }
+    outcome: { ok: true } | { ok: false; error: string },
+    instruction?: string
   ): ToolRecord | undefined {
     if (outcome.ok) {
       this.db
@@ -2879,14 +2917,32 @@ export class ScopedStore {
         )
         .run(new Date().toISOString(), id, this.userId);
       const tool = this.getTool(id);
-      if (tool) this.logActivity("builder-agent", "tool.revised", `Improved tool "${tool.name}"`);
+      if (tool) {
+        this.logActivity("builder-agent", "tool.revised", `Improved tool "${tool.name}"`);
+        this.recordToolRevision(id, {
+          revision: tool.revisionCount,
+          kind: "improve",
+          instruction: instruction ?? null,
+          ok: true,
+          message: `Improved "${tool.name}".`,
+        });
+      }
       return tool;
     }
     this.db
       .prepare("UPDATE tools SET revision_state = ? WHERE id = ? AND user_id = ?")
       .run(outcome.error.slice(0, 300), id, this.userId);
     const tool = this.getTool(id);
-    if (tool) this.logActivity("builder-agent", "tool.revise_failed", `Could not improve "${tool.name}": ${outcome.error}`);
+    if (tool) {
+      this.logActivity("builder-agent", "tool.revise_failed", `Could not improve "${tool.name}": ${outcome.error}`);
+      this.recordToolRevision(id, {
+        revision: tool.revisionCount,
+        kind: "improve",
+        instruction: instruction ?? null,
+        ok: false,
+        message: outcome.error,
+      });
+    }
     return tool;
   }
 
@@ -2895,6 +2951,38 @@ export class ScopedStore {
     this.db
       .prepare("UPDATE tools SET revision_state = NULL WHERE id = ? AND user_id = ?")
       .run(id, this.userId);
+  }
+
+  /** Append one entry to a tool's "release notes" timeline. Called at every
+   *  build/improve/revert attempt, success or failure — see docs/DECISIONS.md
+   *  → "Tool improvement history: a timeline, not just a counter". */
+  recordToolRevision(
+    toolId: string,
+    entry: { revision: number; kind: ToolRevisionKind; instruction?: string | null; ok: boolean; message?: string | null }
+  ): void {
+    this.db
+      .prepare(
+        "INSERT INTO tool_revisions (id, tool_id, user_id, revision, kind, instruction, ok, message, created_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run(
+        shortId(),
+        toolId,
+        this.userId,
+        entry.revision,
+        entry.kind,
+        entry.instruction ?? null,
+        entry.ok ? 1 : 0,
+        entry.message ?? null,
+        new Date().toISOString()
+      );
+  }
+
+  listToolRevisions(toolId: string, limit = 50): ToolRevisionRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM tool_revisions WHERE tool_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?")
+      .all(toolId, this.userId, Math.min(Math.max(limit, 1), 100)) as any[];
+    return rows.map(rowToToolRevision);
   }
 
   getTool(id: string): ToolRecord | undefined {
@@ -2912,6 +3000,7 @@ export class ScopedStore {
   deleteTool(id: string): ToolRecord | undefined {
     const tool = this.getTool(id);
     if (!tool) return undefined;
+    this.db.prepare("DELETE FROM tool_revisions WHERE tool_id = ? AND user_id = ?").run(id, this.userId);
     this.db.prepare("DELETE FROM tools WHERE id = ? AND user_id = ?").run(id, this.userId);
     this.logActivity("user", "tool.deleted", `Deleted tool "${tool.name}"`);
     return tool;
@@ -4134,6 +4223,18 @@ function rowToRoutineRun(r: any): RoutineRunRecord {
     trigger: (r.trigger_kind as RoutineRunTrigger) ?? "schedule",
     output: r.output ?? null,
     error: r.error ?? null,
+  };
+}
+
+function rowToToolRevision(r: any): ToolRevisionRecord {
+  return {
+    id: r.id,
+    revision: Number(r.revision),
+    kind: r.kind as ToolRevisionKind,
+    instruction: r.instruction ?? null,
+    ok: !!r.ok,
+    message: r.message ?? null,
+    createdAt: r.created_at,
   };
 }
 

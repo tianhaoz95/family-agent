@@ -2635,6 +2635,15 @@ export function buildServer(
     };
   });
 
+  // The "release notes" timeline behind the Tools screen's "History" —
+  // every build/improve/revert attempt, success or failure, newest first.
+  app.get("/tools/:id/revisions", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const tool = req.userStore.getTool(id);
+    if (!tool) return reply.code(404).send({ error: "tool not found" });
+    return { revisions: req.userStore.listToolRevisions(id) };
+  });
+
   const BuildToolBody = z.object({ prompt: z.string().min(3).max(600) });
   app.post("/tools", async (req, reply) => {
     if (!config.toolsEnabled) return reply.code(403).send({ error: "Tool building is disabled." });

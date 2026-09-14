@@ -429,6 +429,10 @@ struct FamilyAgentAPI: Sendable {
     func toolOperations(_ id: String) async throws -> [ToolOperation] {
         try await get("/tools/\(id)/operations", as: ToolOperationsResponse.self).operations
     }
+    /// A tool's release-notes timeline — build/improve/revert attempts, newest first.
+    func toolRevisions(_ id: String) async throws -> [ToolRevision] {
+        try await get("/tools/\(id)/revisions", as: ToolRevisionsResponse.self).revisions
+    }
 
     // MARK: - Tool database inspector (read-only)
 

@@ -532,6 +532,10 @@ class AppViewModel(
     suspend fun loadToolOperations(id: String): List<app.familyagent.android.data.ToolOperation> =
         apiCall { api.toolOperations(id) }.getOrDefault(emptyList())
 
+    /** A tool's release-notes timeline — build/improve/revert attempts, newest first. */
+    suspend fun loadToolRevisions(id: String): List<app.familyagent.android.data.ToolRevision> =
+        apiCall { api.toolRevisions(id) }.getOrDefault(emptyList())
+
     // ---- artifacts (render_artifact) ----
 
     fun refreshArtifacts() {

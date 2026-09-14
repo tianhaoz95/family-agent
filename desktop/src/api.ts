@@ -440,6 +440,19 @@ export interface Tool {
   path: string | null;
 }
 
+/** One entry in a tool's "release notes" timeline (GET /tools/:id/revisions) —
+ *  every build/improve/revert attempt, success or failure, newest first. */
+export interface ToolRevision {
+  id: string;
+  revision: number;
+  kind: "build" | "improve" | "revert";
+  /** The ask that produced this attempt — null for a fresh build or a revert. */
+  instruction: string | null;
+  ok: boolean;
+  message: string | null;
+  createdAt: string;
+}
+
 // ---- tool database inspector (server-kind tools only) ----
 export interface ToolDbColumn {
   name: string;
@@ -1162,6 +1175,7 @@ export const api = {
     }),
   revertTool: (id: string) => request<{ tool: Tool; note: string }>(`/tools/${id}/revert`, { method: "POST" }),
   deleteTool: (id: string) => request<{ deleted: true }>(`/tools/${id}`, { method: "DELETE" }),
+  toolRevisions: (id: string) => request<{ revisions: ToolRevision[] }>(`/tools/${id}/revisions`),
   getTool: (id: string) => request<{ tool: Tool }>(`/tools/${id}`),
 
   // ---- artifacts (render_artifact) ----

@@ -61,6 +61,11 @@ private struct ToolCard: View {
     // per ready tool (its operations don't change without an improve, which
     // already re-keys this `.task(id:)` via revisionCount below).
     @State private var operationPhrases: [String] = []
+    // The release-notes timeline — collapsed by default, fetched lazily the
+    // first time it's opened (mirrors desktop's toggleToolHistory).
+    @State private var historyOpen = false
+    @State private var historyLoading = false
+    @State private var revisions: [ToolRevision] = []
 
     private var revising: Bool { tool.revisionState == "revising" }
 
@@ -111,6 +116,10 @@ private struct ToolCard: View {
                         Label(tool.kind == "server" ? "Inspect data" : "View saved data", systemImage: "cylinder.split.1x2")
                     }
                     .buttonStyle(.soft)
+                    Button { historyOpen.toggle() } label: {
+                        Label(historyOpen ? "Hide history" : "History", systemImage: "clock.arrow.circlepath")
+                    }
+                    .buttonStyle(.soft)
                 }
                 Spacer().frame(height: 8)
                 if revising {
@@ -151,13 +160,93 @@ private struct ToolCard: View {
                         }
                     }
                 }
+                // "What was asked for, on the way there" — the release-notes
+                // timeline, not just the "improved N times" counter above.
+                if historyOpen {
+                    Spacer().frame(height: 10)
+                    Divider()
+                    Spacer().frame(height: 10)
+                    if historyLoading {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.mini)
+                            Text("Loading\u{2026}").appBodySmall().foregroundStyle(Theme.textMuted)
+                        }
+                    } else if revisions.isEmpty {
+                        Text("No history yet.").appBodySmall().foregroundStyle(Theme.textMuted)
+                    } else {
+                        ToolHistoryTimeline(revisions: revisions)
+                    }
+                }
             }
         }
         .task(id: "\(tool.id)-\(tool.status)-\(tool.revisionCount)") {
             guard tool.status == "ready" else { operationPhrases = []; return }
             operationPhrases = await model.loadToolOperations(tool.id).map(humanizeOperation).filter { !$0.isEmpty }
         }
+        .task(id: "\(tool.id)-\(historyOpen)") {
+            guard historyOpen, revisions.isEmpty else { return }
+            historyLoading = true
+            revisions = await model.loadToolRevisions(tool.id)
+            historyLoading = false
+        }
     }
+}
+
+/// One dot-and-line entry per build/improve/revert attempt, newest first —
+/// mirrors desktop's .tool-history-* timeline exactly (see style.css).
+private struct ToolHistoryTimeline: View {
+    let revisions: [ToolRevision]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(revisions.enumerated()), id: \.element.id) { index, r in
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(spacing: 0) {
+                        Circle()
+                            .fill(r.ok ? Theme.accent : Theme.danger)
+                            .frame(width: 8, height: 8)
+                            .padding(.top, 4)
+                        if index < revisions.count - 1 {
+                            Rectangle().fill(Theme.border).frame(width: 1).frame(maxHeight: .infinity)
+                        }
+                    }
+                    .frame(width: 8)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(toolRevisionLabel(r)).appLabelSmall().fontWeight(.bold)
+                                .foregroundStyle(r.ok ? Theme.text : Theme.danger)
+                            Text(relativeTime(r.createdAt)).appLabelSmall().foregroundStyle(Theme.textMuted)
+                        }
+                        if let instruction = r.instruction {
+                            Text("\u{201C}\(instruction)\u{201D}").appBodySmall().italic().foregroundStyle(Theme.textMuted)
+                        }
+                        if let message = r.message {
+                            Text(message).appBodySmall().foregroundStyle(Theme.textMuted)
+                        }
+                    }
+                    .padding(.bottom, 14)
+                }
+            }
+        }
+    }
+}
+
+private func toolRevisionLabel(_ r: ToolRevision) -> String {
+    switch r.kind {
+    case "build": return r.ok ? "Created" : "Build failed"
+    case "revert": return "Reverted"
+    default: return r.ok ? "Improved" : "Improve failed"
+    }
+}
+
+private func relativeTime(_ iso: String) -> String {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let date = f.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+    guard let date else { return "" }
+    let rel = RelativeDateTimeFormatter()
+    rel.unitsStyle = .abbreviated
+    return rel.localizedString(for: date, relativeTo: .now)
 }
 
 /// Turn a tool operation into a plain imperative phrase a family member can

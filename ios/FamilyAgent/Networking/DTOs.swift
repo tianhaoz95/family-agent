@@ -296,6 +296,19 @@ struct ToolOperation: Codable, Sendable {
 }
 struct ToolOperationsResponse: Codable, Sendable { var operations: [ToolOperation] = [] }
 
+/// "build" | "improve" | "revert" — one entry in a tool's release-notes timeline.
+struct ToolRevision: Codable, Sendable, Identifiable, Hashable {
+    let id: String
+    let revision: Int
+    let kind: String
+    /// The ask that produced this entry — the "release message". Nil for build/revert.
+    var instruction: String?
+    let ok: Bool
+    var message: String?
+    let createdAt: String
+}
+struct ToolRevisionsResponse: Codable, Sendable { var revisions: [ToolRevision] = [] }
+
 // MARK: - Tool database inspector (server-kind tools only; static tools show
 // their /__state blobs through the same overview instead)
 

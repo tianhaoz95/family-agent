@@ -189,6 +189,11 @@ extension AppModel {
         (try? await api.toolOperations(id)) ?? []
     }
 
+    /// A tool's release-notes timeline — build/improve/revert attempts, newest first.
+    func loadToolRevisions(_ id: String) async -> [ToolRevision] {
+        (try? await api.toolRevisions(id)) ?? []
+    }
+
     // MARK: Artifacts (render_artifact)
 
     func refreshArtifacts() async {
