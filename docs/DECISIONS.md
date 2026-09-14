@@ -4186,3 +4186,29 @@ Fixed by special-casing the empty query in both places (`ChatView.slashMatches`,
 by it. No Android/desktop change needed — this was iOS-only, and the two
 platforms' filters were never sharing code to begin with (per this codebase's
 usual hand-mirrored-per-client convention).
+
+## Chat's "/" tool list went stale within a session
+
+Reported: a tool built via "build me a…" in Chat itself never showed up in
+the `/` autocomplete afterward, on either platform — even though it existed
+and was ready. `ChatScreen`/`ChatView` only ever fetched `tools` **once**,
+in a `LaunchedEffect(Unit)`/`.task` that runs when the screen first appears.
+Building a tool *during* that same Chat session (the obvious way anyone
+would actually try a freshly-built one) never re-ran that fetch — the list
+only refreshed on the next full app relaunch or a trip through the Tools tab
+and back.
+
+Fixed identically on both platforms: re-run the tool fetch right as "/" mode
+*starts*, not just once at screen mount — Android via
+`LaunchedEffect(slashQuery != null)` (re-fires exactly on the not-slash →
+slash transition), iOS via `.onChange(of: input)` checking the same
+transition (`newValue.hasPrefix("/") && !oldValue.hasPrefix("/")`). Cheap
+(one extra `GET /tools` per time the user starts typing a command, not per
+keystroke) and guarantees freshness at exactly the moment it matters.
+
+Verified on Android against the real dev server: with Chat already open (no
+navigation, no relaunch), inserted a new ready "server" tool directly into
+the throwaway database, then typed `/` in the already-mounted composer — the
+new tool appeared in the list immediately, which it did not before this fix.
+iOS applies the identical logic; not independently re-verified interactively
+(documented Simulator input limitation).

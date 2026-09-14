@@ -119,6 +119,16 @@ struct ChatView: View {
             }
             #endif
         }
+        // Re-fetch right as "/" mode starts, not just once when this view
+        // first appeared — a tool built earlier in the *same* chat session
+        // (e.g. "build me a…" then immediately typing "/" to use it) would
+        // otherwise be missing from `model.tools` until the app is relaunched
+        // or the user navigates away from Chat and back.
+        .onChange(of: input) { oldValue, newValue in
+            if newValue.hasPrefix("/"), !oldValue.hasPrefix("/") {
+                Task { await model.refreshTools() }
+            }
+        }
         .sheet(isPresented: $showHistory) { ChatSessionsView { showHistory = false } }
         .sheet(isPresented: $showSlashHelp) { SlashHelpSheet(tools: model.tools) }
         // The home screen widget's field/camera buttons. `initial: true`

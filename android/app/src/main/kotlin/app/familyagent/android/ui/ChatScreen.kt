@@ -282,6 +282,13 @@ fun ChatScreen(
         // Only ready, server-kind tools are offered — a static (display-only)
         // tool has no operations to call via the tools API at all.
         val slashQuery = input.text.takeIf { it.startsWith("/") && !it.drop(1).contains(" ") }?.drop(1)
+        // Re-fetch right as "/" mode starts, not just once when this screen
+        // first appeared — a tool built earlier in the *same* chat session
+        // (e.g. "build me a…" then immediately typing "/" to use it) would
+        // otherwise be missing from `tools` until the screen is reopened.
+        LaunchedEffect(slashQuery != null) {
+            if (slashQuery != null) onRefreshTools()
+        }
         if (slashQuery != null) {
             val toolEntries = tools
                 .filter { it.kind == "server" && it.status == "ready" }
