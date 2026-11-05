@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // The egress chokepoint rule: nothing in agent-core makes an outbound request
 // to a non-localhost host EXCEPT the modules under src/web/ and src/mcp/.
@@ -10,7 +11,8 @@ import { join } from "node:path";
 // only ever fetches an admin-configured server URL (never a hard-coded host),
 // so it is excluded here as well.
 
-const SRC = new URL("../src/", import.meta.url).pathname;
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SRC = join(__dirname, "..", "src");
 
 function walk(dir: string): string[] {
   const out: string[] = [];

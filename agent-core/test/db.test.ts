@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Store, type ScopedStore, LEGACY_USER_ID, toFtsMatchQuery } from "../src/db.js";
 
 describe("Store (scoped to one user)", () => {
@@ -403,7 +405,7 @@ describe("Store — users, sessions, isolation", () => {
 
 describe("Store — migration from a single-user database", () => {
   it("adds user_id, backfills to the legacy sentinel, and reassigns on setup", () => {
-    const path = `/tmp/family-agent-legacy-${Date.now()}.db`;
+    const path = join(tmpdir(), `family-agent-legacy-${Date.now()}.db`);
     const legacy = new DatabaseSync(path);
     legacy.exec(`
       CREATE TABLE tasks (
